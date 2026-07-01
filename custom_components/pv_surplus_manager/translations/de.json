@@ -1,0 +1,58 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "PV Surplus Manager einrichten",
+        "description": "Wähle die Sensoren deines PV-Systems und Speichers.",
+        "data": {
+          "solar_sensor": "Solar-Leistung Sensor (kW)",
+          "load_sensor": "Hausverbrauch Sensor (kW)",
+          "soc_sensor": "Akku SOC Sensor (%)",
+          "batt_sensor": "Akku Lade-/Entladeleistung Sensor (kW)",
+          "battery_capacity_kwh": "Akku-Kapazität (kWh)",
+          "min_soc": "Mindest-SOC (%)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PV Surplus Manager",
+        "menu_options": {
+          "add_device": "Gerät hinzufügen",
+          "global_settings": "Systemeinstellungen",
+          "finish": "Fertig"
+        }
+      },
+      "add_device": {
+        "title": "Neues Gerät hinzufügen",
+        "description": "Aktuell {count} Gerät(e) konfiguriert. Neues Gerät wird mit nächster Priorität hinzugefügt.",
+        "data": {
+          "name": "Name",
+          "switch_entity": "Switch-Entität",
+          "power_sensor": "Leistungssensor (optional, für automatische Messung)",
+          "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen",
+          "is_wallbox": "Ist Wallbox (wird nicht geschaltet, Leistung wird von Last abgezogen)"
+        }
+      },
+      "remove_device": {
+        "title": "Gerät entfernen",
+        "data": {
+          "device": "Zu entfernendes Gerät"
+        }
+      },
+      "global_settings": {
+        "title": "Systemeinstellungen",
+        "data": {
+          "solar_sensor": "Solar-Leistung Sensor",
+          "load_sensor": "Hausverbrauch Sensor",
+          "soc_sensor": "Akku SOC Sensor",
+          "batt_sensor": "Akku Lade-/Entladeleistung Sensor",
+          "battery_capacity_kwh": "Akku-Kapazität (kWh)",
+          "min_soc": "Mindest-SOC (%)"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up PV Surplus Manager",
+        "description": "Select sensors for your PV system and battery storage.",
+        "data": {
+          "solar_sensor": "Solar power sensor (kW)",
+          "load_sensor": "House load sensor (kW)",
+          "soc_sensor": "Battery SOC sensor (%)",
+          "batt_sensor": "Battery charge/discharge power sensor (kW)",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "min_soc": "Minimum SOC (%)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PV Surplus Manager",
+        "menu_options": {
+          "add_device": "Add device",
+          "global_settings": "System settings",
+          "finish": "Finish"
+        }
+      },
+      "add_device": {
+        "title": "Add new device",
+        "description": "Currently {count} device(s) configured. New device will be added with next priority.",
+        "data": {
+          "name": "Name",
+          "switch_entity": "Switch entity",
+          "power_sensor": "Power sensor (optional, enables automatic measurement)",
+          "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
+          "is_wallbox": "Is wallbox (not switched, power subtracted from load)"
+        }
+      },
+      "remove_device": {
+        "title": "Remove device",
+        "data": {
+          "device": "Device to remove"
+        }
+      },
+      "global_settings": {
+        "title": "System settings",
+        "data": {
+          "solar_sensor": "Solar power sensor",
+          "load_sensor": "House load sensor",
+          "soc_sensor": "Battery SOC sensor",
+          "batt_sensor": "Battery charge/discharge power sensor",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "min_soc": "Minimum SOC (%)"
+        }
+      }
+    }
+  }
+}
