@@ -1,0 +1,41 @@
+<svg width="660" height="256" viewBox="0 0 660 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sun" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFD54F"/>
+      <stop offset="100%" stop-color="#FB8C00"/>
+    </linearGradient>
+    <linearGradient id="bar1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFB300"/>
+      <stop offset="100%" stop-color="#FF8F00"/>
+    </linearGradient>
+    <linearGradient id="bar2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4FC3F7"/>
+      <stop offset="100%" stop-color="#0288D1"/>
+    </linearGradient>
+    <linearGradient id="bar3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4DB6AC"/>
+      <stop offset="100%" stop-color="#00796B"/>
+    </linearGradient>
+  </defs>
+
+  <!-- icon mark, no background badge for the logo lockup -->
+  <g transform="translate(0,0)">
+    <circle cx="128" cy="92" r="34" fill="url(#sun)"/>
+    <g stroke="#FFB300" stroke-width="7" stroke-linecap="round">
+      <line x1="128" y1="30" x2="128" y2="14"/>
+      <line x1="176" y1="52" x2="187" y2="41"/>
+      <line x1="80" y1="52" x2="69" y2="41"/>
+      <line x1="192" y1="92" x2="208" y2="92"/>
+      <line x1="64" y1="92" x2="48" y2="92"/>
+    </g>
+    <rect x="46" y="158" width="164" height="20" rx="10" fill="url(#bar1)"/>
+    <rect x="46" y="188" width="120" height="20" rx="10" fill="url(#bar2)"/>
+    <rect x="46" y="218" width="78"  height="20" rx="10" fill="url(#bar3)"/>
+  </g>
+
+  <!-- wordmark -->
+  <g font-family="Helvetica, Arial, sans-serif">
+    <text x="248" y="128" font-size="64" font-weight="700" fill="#F5F5F5">PV Surplus</text>
+    <text x="248" y="190" font-size="64" font-weight="700" fill="#FB8C00">Manager</text>
+  </g>
+</svg>

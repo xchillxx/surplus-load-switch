@@ -1,4 +1,4 @@
-# PV Surplus Manager
+<img src="branding/logo.png" alt="PV Surplus Manager" width="420">
 
 Home Assistant custom integration that switches devices on and off based on
 your solar surplus — with a priority cascade for multiple devices and
