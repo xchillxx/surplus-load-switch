@@ -16,32 +16,38 @@
       "device_intro": {
         "title": "Add your first device?",
         "menu_options": {
-          "add_device": "Add a device now",
+          "add_normal_device": "Add a switchable device (e.g. miner)",
+          "add_wallbox": "Add a wallbox (power subtracted only, never switched)",
           "finish_setup": "Add later (finish setup)"
         }
       },
-      "add_device": {
-        "title": "Add new device",
+      "add_normal_device": {
+        "title": "Add switchable device",
         "description": "Currently {count} device(s) configured. Priority 1 = served first.",
         "data": {
           "name": "Name",
-          "switch_entity": "Switch entity (leave empty for wallbox)",
+          "switch_entity": "Switch entity",
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor (optional, enables automatic measurement)",
-          "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
-          "is_wallbox": "Is wallbox (not switched, power subtracted from load)"
+          "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists"
+        }
+      },
+      "add_wallbox": {
+        "title": "Add wallbox",
+        "description": "Wallboxes with their own PV-surplus charging logic are never switched by PV Surplus Manager — only their power is subtracted from the house load so they don't distort the surplus calculation for other devices.",
+        "data": {
+          "name": "Name",
+          "power_sensor": "Power sensor (required)"
         }
       },
       "add_another": {
         "title": "Add another device?",
         "menu_options": {
-          "add_device": "Add another device",
+          "add_normal_device": "Add another switchable device",
+          "add_wallbox": "Add another wallbox",
           "finish_setup": "Finish"
         }
       }
-    },
-    "error": {
-      "switch_required": "Switch entity is required unless this is a wallbox."
     }
   },
   "options": {
@@ -49,36 +55,43 @@
       "init": {
         "title": "PV Surplus Manager",
         "menu_options": {
-          "add_device": "Add device",
+          "add_normal_device": "Add switchable device",
+          "add_wallbox": "Add wallbox",
           "edit_device": "Edit device (e.g. change priority)",
           "remove_device": "Remove device",
           "global_settings": "System settings",
           "finish": "Finish"
         }
       },
-      "add_device": {
-        "title": "Add new device",
+      "add_normal_device": {
+        "title": "Add switchable device",
         "description": "Currently {count} device(s) configured. Priority 1 = served first.",
         "data": {
           "name": "Name",
-          "switch_entity": "Switch entity (leave empty for wallbox)",
+          "switch_entity": "Switch entity",
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor (optional, enables automatic measurement)",
-          "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
-          "is_wallbox": "Is wallbox (not switched, power subtracted from load)"
+          "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists"
+        }
+      },
+      "add_wallbox": {
+        "title": "Add wallbox",
+        "description": "Wallboxes with their own PV-surplus charging logic are never switched by PV Surplus Manager — only their power is subtracted from the house load so they don't distort the surplus calculation for other devices.",
+        "data": {
+          "name": "Name",
+          "power_sensor": "Power sensor (required)"
         }
       },
       "edit_device": {
         "title": "Edit device",
-        "description": "Pick a device, or change its values (e.g. priority).",
+        "description": "Change the selected device's values (e.g. priority).",
         "data": {
           "device": "Device to edit",
           "name": "Name",
-          "switch_entity": "Switch entity (leave empty for wallbox)",
+          "switch_entity": "Switch entity",
           "priority": "Priority (1 = highest)",
-          "power_sensor": "Power sensor (optional, enables automatic measurement)",
-          "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
-          "is_wallbox": "Is wallbox (not switched, power subtracted from load)"
+          "power_sensor": "Power sensor",
+          "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists"
         }
       },
       "remove_device": {
@@ -98,9 +111,6 @@
           "min_soc": "Minimum SOC (%)"
         }
       }
-    },
-    "error": {
-      "switch_required": "Switch entity is required unless this is a wallbox."
     }
   }
 }

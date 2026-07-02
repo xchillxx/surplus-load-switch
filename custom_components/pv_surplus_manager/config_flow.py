@@ -51,17 +51,12 @@ def _global_settings_schema(defaults: dict | None = None) -> vol.Schema:
     })
 
 
-def _device_schema(defaults: dict | None = None, next_priority: int = 1) -> vol.Schema:
-    """Schema for add/edit device. `defaults` pre-fills values when editing.
-
-    switch_entity is Optional here even though non-wallbox devices need one —
-    a wallbox controlled by its own inverter logic usually has no HA switch at
-    all. The step handler enforces "required unless wallbox" manually.
-    """
+def _normal_device_schema(defaults: dict | None = None, next_priority: int = 1) -> vol.Schema:
+    """Schema for a switchable device — always has a switch entity."""
     d = defaults or {}
     return vol.Schema({
         vol.Required(CONF_DEVICE_NAME, default=d.get(CONF_DEVICE_NAME)): str,
-        vol.Optional(CONF_DEVICE_SWITCH, default=d.get(CONF_DEVICE_SWITCH)): selector.EntitySelector(
+        vol.Required(CONF_DEVICE_SWITCH, default=d.get(CONF_DEVICE_SWITCH)): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
         vol.Required(CONF_DEVICE_PRIORITY, default=d.get(CONF_DEVICE_PRIORITY, next_priority)): selector.NumberSelector(
@@ -73,17 +68,32 @@ def _device_schema(defaults: dict | None = None, next_priority: int = 1) -> vol.
         vol.Required(CONF_DEVICE_POWER_KW, default=d.get(CONF_DEVICE_POWER_KW, 0.15)): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0.05, max=22.0, step=0.05, unit_of_measurement="kW")
         ),
-        vol.Optional(CONF_DEVICE_IS_WALLBOX, default=d.get(CONF_DEVICE_IS_WALLBOX, False)): bool,
     })
 
 
-def _validate_device_input(user_input: dict) -> dict[str, str]:
-    """Returns an errors dict (empty if valid). A switch is required unless
-    the device is a wallbox (those are only ever read, never switched)."""
-    errors: dict[str, str] = {}
-    if not user_input.get(CONF_DEVICE_IS_WALLBOX) and not user_input.get(CONF_DEVICE_SWITCH):
-        errors[CONF_DEVICE_SWITCH] = "switch_required"
-    return errors
+def _wallbox_schema(defaults: dict | None = None) -> vol.Schema:
+    """Schema for a wallbox — never switched, only its power is read and
+    subtracted from the house load. No switch entity, no priority."""
+    d = defaults or {}
+    return vol.Schema({
+        vol.Required(CONF_DEVICE_NAME, default=d.get(CONF_DEVICE_NAME, "Wallbox")): str,
+        vol.Required(CONF_DEVICE_POWER_SENSOR, default=d.get(CONF_DEVICE_POWER_SENSOR)): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="power")
+        ),
+    })
+
+
+def _finalize_normal_device(user_input: dict) -> dict:
+    return {**user_input, CONF_DEVICE_IS_WALLBOX: False}
+
+
+def _finalize_wallbox_device(user_input: dict) -> dict:
+    return {
+        CONF_DEVICE_NAME: user_input[CONF_DEVICE_NAME],
+        CONF_DEVICE_POWER_SENSOR: user_input[CONF_DEVICE_POWER_SENSOR],
+        CONF_DEVICE_IS_WALLBOX: True,
+        CONF_DEVICE_PRIORITY: 0,
+    }
 
 
 def _next_priority(devices: list[dict]) -> int:
@@ -115,28 +125,35 @@ class PVSurplusConfigFlow(ConfigFlow, domain=DOMAIN):
         """First chance to add a device right after the base setup."""
         return self.async_show_menu(
             step_id="device_intro",
-            menu_options=["add_device", "finish_setup"],
+            menu_options=["add_normal_device", "add_wallbox", "finish_setup"],
         )
 
-    async def async_step_add_device(self, user_input: dict | None = None):
-        errors: dict[str, str] = {}
+    async def async_step_add_normal_device(self, user_input: dict | None = None):
         if user_input is not None:
-            errors = _validate_device_input(user_input)
-            if not errors:
-                self._devices.append({**user_input, "_id": str(uuid.uuid4())})
-                return await self.async_step_add_another()
+            self._devices.append({**_finalize_normal_device(user_input), "_id": str(uuid.uuid4())})
+            return await self.async_step_add_another()
 
         return self.async_show_form(
-            step_id="add_device",
-            data_schema=_device_schema(next_priority=_next_priority(self._devices)),
-            errors=errors,
+            step_id="add_normal_device",
+            data_schema=_normal_device_schema(next_priority=_next_priority(self._devices)),
+            description_placeholders={"count": str(len(self._devices))},
+        )
+
+    async def async_step_add_wallbox(self, user_input: dict | None = None):
+        if user_input is not None:
+            self._devices.append({**_finalize_wallbox_device(user_input), "_id": str(uuid.uuid4())})
+            return await self.async_step_add_another()
+
+        return self.async_show_form(
+            step_id="add_wallbox",
+            data_schema=_wallbox_schema(),
             description_placeholders={"count": str(len(self._devices))},
         )
 
     async def async_step_add_another(self, user_input: dict | None = None):
         return self.async_show_menu(
             step_id="add_another",
-            menu_options=["add_device", "finish_setup"],
+            menu_options=["add_normal_device", "add_wallbox", "finish_setup"],
         )
 
     async def async_step_finish_setup(self, user_input: dict | None = None):
@@ -165,11 +182,12 @@ class PVSurplusOptionsFlow(OptionsFlow):
 
     @staticmethod
     def _device_label(d: dict) -> str:
-        kind = " (Wallbox)" if d.get(CONF_DEVICE_IS_WALLBOX) else ""
-        return f"{d.get(CONF_DEVICE_NAME)} (Prio {d.get(CONF_DEVICE_PRIORITY)}){kind}"
+        if d.get(CONF_DEVICE_IS_WALLBOX):
+            return f"{d.get(CONF_DEVICE_NAME)} (Wallbox)"
+        return f"{d.get(CONF_DEVICE_NAME)} (Prio {d.get(CONF_DEVICE_PRIORITY)})"
 
     async def async_step_init(self, user_input: dict | None = None):
-        menu_options = ["add_device"]
+        menu_options = ["add_normal_device", "add_wallbox"]
         if self._devices:
             menu_options += ["edit_device", "remove_device"]
         menu_options += ["global_settings", "finish"]
@@ -186,19 +204,27 @@ class PVSurplusOptionsFlow(OptionsFlow):
             data_schema=_global_settings_schema(self._config_entry.data),
         )
 
-    async def async_step_add_device(self, user_input: dict | None = None):
-        errors: dict[str, str] = {}
+    async def async_step_add_normal_device(self, user_input: dict | None = None):
         if user_input is not None:
-            errors = _validate_device_input(user_input)
-            if not errors:
-                self._devices.append({**user_input, "_id": str(uuid.uuid4())})
-                self._save_devices()
-                return await self.async_step_init()
+            self._devices.append({**_finalize_normal_device(user_input), "_id": str(uuid.uuid4())})
+            self._save_devices()
+            return await self.async_step_init()
 
         return self.async_show_form(
-            step_id="add_device",
-            data_schema=_device_schema(next_priority=_next_priority(self._devices)),
-            errors=errors,
+            step_id="add_normal_device",
+            data_schema=_normal_device_schema(next_priority=_next_priority(self._devices)),
+            description_placeholders={"count": str(len(self._devices))},
+        )
+
+    async def async_step_add_wallbox(self, user_input: dict | None = None):
+        if user_input is not None:
+            self._devices.append({**_finalize_wallbox_device(user_input), "_id": str(uuid.uuid4())})
+            self._save_devices()
+            return await self.async_step_init()
+
+        return self.async_show_form(
+            step_id="add_wallbox",
+            data_schema=_wallbox_schema(),
             description_placeholders={"count": str(len(self._devices))},
         )
 
@@ -222,23 +248,23 @@ class PVSurplusOptionsFlow(OptionsFlow):
             self._edit_target = None
             return await self.async_step_init()
 
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            errors = _validate_device_input(user_input)
-            if not errors:
-                target_id = self._edit_target
-                self._devices = [
-                    {**user_input, "_id": target_id} if d.get("_id") == target_id else d
-                    for d in self._devices
-                ]
-                self._edit_target = None
-                self._save_devices()
-                return await self.async_step_init()
+        is_wallbox = current.get(CONF_DEVICE_IS_WALLBOX, False)
 
+        if user_input is not None:
+            target_id = self._edit_target
+            finalized = _finalize_wallbox_device(user_input) if is_wallbox else _finalize_normal_device(user_input)
+            self._devices = [
+                {**finalized, "_id": target_id} if d.get("_id") == target_id else d
+                for d in self._devices
+            ]
+            self._edit_target = None
+            self._save_devices()
+            return await self.async_step_init()
+
+        schema = _wallbox_schema(defaults=current) if is_wallbox else _normal_device_schema(defaults=current)
         return self.async_show_form(
             step_id="edit_device",
-            data_schema=_device_schema(defaults=current),
-            errors=errors,
+            data_schema=schema,
             description_placeholders={"count": str(len(self._devices))},
         )
 

@@ -16,32 +16,38 @@
       "device_intro": {
         "title": "Erstes Gerät hinzufügen?",
         "menu_options": {
-          "add_device": "Gerät jetzt hinzufügen",
+          "add_normal_device": "Schaltbares Gerät hinzufügen (z.B. Miner)",
+          "add_wallbox": "Wallbox hinzufügen (nur Leistungsabzug, keine Schaltung)",
           "finish_setup": "Später hinzufügen (Setup abschließen)"
         }
       },
-      "add_device": {
-        "title": "Neues Gerät hinzufügen",
+      "add_normal_device": {
+        "title": "Schaltbares Gerät hinzufügen",
         "description": "Aktuell {count} Gerät(e) konfiguriert. Priorität 1 = wird zuerst bedient.",
         "data": {
           "name": "Name",
-          "switch_entity": "Switch-Entität (leer lassen bei Wallbox)",
+          "switch_entity": "Switch-Entität",
           "priority": "Priorität (1 = höchste)",
           "power_sensor": "Leistungssensor (optional, für automatische Messung)",
-          "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen",
-          "is_wallbox": "Ist Wallbox (wird nicht geschaltet, Leistung wird von Last abgezogen)"
+          "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen"
+        }
+      },
+      "add_wallbox": {
+        "title": "Wallbox hinzufügen",
+        "description": "Wallboxen mit eigener PV-Überschusssteuerung werden von PV Surplus Manager nicht geschaltet — nur ihre Leistung wird von der Hauslast abgezogen, damit sie den Überschuss für andere Geräte nicht verfälscht.",
+        "data": {
+          "name": "Name",
+          "power_sensor": "Leistungssensor (Pflicht)"
         }
       },
       "add_another": {
         "title": "Weiteres Gerät?",
         "menu_options": {
-          "add_device": "Weiteres Gerät hinzufügen",
+          "add_normal_device": "Weiteres schaltbares Gerät",
+          "add_wallbox": "Weitere Wallbox",
           "finish_setup": "Fertig"
         }
       }
-    },
-    "error": {
-      "switch_required": "Switch-Entität ist erforderlich, außer bei Wallbox-Geräten."
     }
   },
   "options": {
@@ -49,36 +55,43 @@
       "init": {
         "title": "PV Surplus Manager",
         "menu_options": {
-          "add_device": "Gerät hinzufügen",
+          "add_normal_device": "Schaltbares Gerät hinzufügen",
+          "add_wallbox": "Wallbox hinzufügen",
           "edit_device": "Gerät bearbeiten (z.B. Priorität ändern)",
           "remove_device": "Gerät entfernen",
           "global_settings": "Systemeinstellungen",
           "finish": "Fertig"
         }
       },
-      "add_device": {
-        "title": "Neues Gerät hinzufügen",
+      "add_normal_device": {
+        "title": "Schaltbares Gerät hinzufügen",
         "description": "Aktuell {count} Gerät(e) konfiguriert. Priorität 1 = wird zuerst bedient.",
         "data": {
           "name": "Name",
-          "switch_entity": "Switch-Entität (leer lassen bei Wallbox)",
+          "switch_entity": "Switch-Entität",
           "priority": "Priorität (1 = höchste)",
           "power_sensor": "Leistungssensor (optional, für automatische Messung)",
-          "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen",
-          "is_wallbox": "Ist Wallbox (wird nicht geschaltet, Leistung wird von Last abgezogen)"
+          "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen"
+        }
+      },
+      "add_wallbox": {
+        "title": "Wallbox hinzufügen",
+        "description": "Wallboxen mit eigener PV-Überschusssteuerung werden von PV Surplus Manager nicht geschaltet — nur ihre Leistung wird von der Hauslast abgezogen, damit sie den Überschuss für andere Geräte nicht verfälscht.",
+        "data": {
+          "name": "Name",
+          "power_sensor": "Leistungssensor (Pflicht)"
         }
       },
       "edit_device": {
         "title": "Gerät bearbeiten",
-        "description": "Wähle ein Gerät bzw. ändere seine Werte (z.B. Priorität).",
+        "description": "Werte des gewählten Geräts ändern (z.B. Priorität).",
         "data": {
           "device": "Zu bearbeitendes Gerät",
           "name": "Name",
-          "switch_entity": "Switch-Entität (leer lassen bei Wallbox)",
+          "switch_entity": "Switch-Entität",
           "priority": "Priorität (1 = höchste)",
-          "power_sensor": "Leistungssensor (optional, für automatische Messung)",
-          "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen",
-          "is_wallbox": "Ist Wallbox (wird nicht geschaltet, Leistung wird von Last abgezogen)"
+          "power_sensor": "Leistungssensor",
+          "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen"
         }
       },
       "remove_device": {
@@ -98,9 +111,6 @@
           "min_soc": "Mindest-SOC (%)"
         }
       }
-    },
-    "error": {
-      "switch_required": "Switch-Entität ist erforderlich, außer bei Wallbox-Geräten."
     }
   }
 }
