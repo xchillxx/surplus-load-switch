@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_DEVICES, CONF_DEVICE_NAME, CONF_DEVICE_PRIORITY, CONF_DEVICE_SWITCH, DOMAIN
+from .const import CONF_DEVICES, CONF_DEVICE_IS_WALLBOX, CONF_DEVICE_NAME, CONF_DEVICE_PRIORITY, DOMAIN
 from .coordinator import PVSurplusCoordinator
 
 
@@ -23,8 +23,12 @@ async def async_setup_entry(
         PVModeSensor(coordinator, entry),
         PVSocSensor(coordinator, entry),
     ]
+    # Wallbox devices aren't evaluated in the cascade, so there's no
+    # predicted-power diagnostics for them — their own power_sensor already
+    # shows live power directly.
     for dev in entry.data.get(CONF_DEVICES, []):
-        entities.append(PVDevicePowerSensor(coordinator, entry, dev))
+        if not dev.get(CONF_DEVICE_IS_WALLBOX, False):
+            entities.append(PVDevicePowerSensor(coordinator, entry, dev))
     async_add_entities(entities)
 
 
@@ -156,13 +160,13 @@ class PVDevicePowerSensor(_PVSensorBase):
 
     def __init__(self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict) -> None:
         super().__init__(coordinator, entry)
-        self._switch_id = device[CONF_DEVICE_SWITCH]
-        name = device.get(CONF_DEVICE_NAME, self._switch_id)
+        self._device_id = device["_id"]
+        name = device.get(CONF_DEVICE_NAME, self._device_id)
         self._attr_name = f"{name} — Ø Leistung"
 
     @property
     def unique_id(self):
-        return f"{self._entry.entry_id}_{self._switch_id}_power"
+        return f"{self._entry.entry_id}_{self._device_id}_power"
 
     @property
     def native_value(self):
@@ -186,4 +190,4 @@ class PVDevicePowerSensor(_PVSensorBase):
     def _diagnostics(self):
         if not self.coordinator.data:
             return None
-        return self.coordinator.data.device_diagnostics.get(self._switch_id)
+        return self.coordinator.data.device_diagnostics.get(self._device_id)

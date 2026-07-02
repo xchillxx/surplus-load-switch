@@ -102,8 +102,8 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._power_trackers: dict[str, DevicePowerTracker] = {}
         self._discharge_samples: deque[float] = deque(maxlen=DISCHARGE_SMOOTHING_SAMPLES)
         for dev in config.get(CONF_DEVICES, []):
-            switch_id = dev[CONF_DEVICE_SWITCH]
-            self._device_trackers[switch_id] = DeviceState(device_id=switch_id)
+            device_id = dev["_id"]
+            self._device_trackers[device_id] = DeviceState(device_id=device_id)
 
     async def async_setup_power_trackers(self) -> None:
         """Load persisted power samples for every device that has a power sensor."""
@@ -111,10 +111,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             sensor_id = dev.get(CONF_DEVICE_POWER_SENSOR)
             if not sensor_id:
                 continue
-            switch_id = dev[CONF_DEVICE_SWITCH]
-            tracker = DevicePowerTracker(self.hass, self._entry_id, switch_id)
+            device_id = dev["_id"]
+            tracker = DevicePowerTracker(self.hass, self._entry_id, device_id)
             await tracker.async_load()
-            self._power_trackers[switch_id] = tracker
+            self._power_trackers[device_id] = tracker
 
     @property
     def devices(self) -> list[dict]:
@@ -149,8 +149,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
     def _predicted_power_kw(self, dev: dict) -> tuple[float, DeviceDiagnostics]:
         """Return (predicted_power_kw, diagnostics) — measured average if enough
         samples exist, otherwise the configured estimate."""
-        switch_id = dev[CONF_DEVICE_SWITCH]
-        tracker = self._power_trackers.get(switch_id)
+        tracker = self._power_trackers.get(dev["_id"])
         configured = dev.get(CONF_DEVICE_POWER_KW, 0.15)
 
         diag = DeviceDiagnostics()
@@ -255,10 +254,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         device_is_on: dict[str, bool] = {}
         managed_power_kw = 0.0
         for dev in candidate_devices:
-            switch_id = dev[CONF_DEVICE_SWITCH]
-            sw_state = self.hass.states.get(switch_id)
+            device_id = dev["_id"]
+            switch_id = dev.get(CONF_DEVICE_SWITCH)
+            sw_state = self.hass.states.get(switch_id) if switch_id else None
             is_on = sw_state is not None and sw_state.state == "on"
-            device_is_on[switch_id] = is_on
+            device_is_on[device_id] = is_on
             if is_on:
                 sensor_id = dev.get(CONF_DEVICE_POWER_SENSOR)
                 managed_power_kw += (
@@ -276,20 +276,26 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         cumulative_committed = 0.0
 
         for dev in candidate_devices:
-            switch_id = dev[CONF_DEVICE_SWITCH]
-            is_on = device_is_on[switch_id]
-            device_states[switch_id] = is_on
+            device_id = dev["_id"]
+            switch_id = dev.get(CONF_DEVICE_SWITCH)
+            is_on = device_is_on[device_id]
+            device_states[device_id] = is_on
 
             # Feed the rolling average while the device is actually drawing power
             sensor_id = dev.get(CONF_DEVICE_POWER_SENSOR)
             if is_on and sensor_id:
-                tracker = self._power_trackers.get(switch_id)
+                tracker = self._power_trackers.get(device_id)
                 if tracker is not None:
                     tracker.add_sample(self._get_power_kw(sensor_id))
 
             predicted_power, diag = self._predicted_power_kw(dev)
             diag.is_on = is_on
-            device_diagnostics[switch_id] = diag
+            device_diagnostics[device_id] = diag
+
+            if not switch_id:
+                # No switch configured (shouldn't happen for non-wallbox
+                # devices — validated at config time), nothing to actuate.
+                continue
 
             remaining_surplus = available_surplus - cumulative_committed
             should_on = (remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD) or data.batt_ok
@@ -303,7 +309,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 cumulative_committed += predicted_power
 
             tracker = self._device_trackers.setdefault(
-                switch_id, DeviceState(device_id=switch_id)
+                device_id, DeviceState(device_id=device_id)
             )
 
             if should_on and not is_on:

@@ -25,7 +25,7 @@
         "description": "Currently {count} device(s) configured. Priority 1 = served first.",
         "data": {
           "name": "Name",
-          "switch_entity": "Switch entity",
+          "switch_entity": "Switch entity (leave empty for wallbox)",
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor (optional, enables automatic measurement)",
           "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
@@ -39,6 +39,9 @@
           "finish_setup": "Finish"
         }
       }
+    },
+    "error": {
+      "switch_required": "Switch entity is required unless this is a wallbox."
     }
   },
   "options": {
@@ -58,7 +61,7 @@
         "description": "Currently {count} device(s) configured. Priority 1 = served first.",
         "data": {
           "name": "Name",
-          "switch_entity": "Switch entity",
+          "switch_entity": "Switch entity (leave empty for wallbox)",
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor (optional, enables automatic measurement)",
           "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
@@ -71,7 +74,7 @@
         "data": {
           "device": "Device to edit",
           "name": "Name",
-          "switch_entity": "Switch entity",
+          "switch_entity": "Switch entity (leave empty for wallbox)",
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor (optional, enables automatic measurement)",
           "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
@@ -95,6 +98,9 @@
           "min_soc": "Minimum SOC (%)"
         }
       }
+    },
+    "error": {
+      "switch_required": "Switch entity is required unless this is a wallbox."
     }
   }
 }

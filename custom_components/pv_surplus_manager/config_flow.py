@@ -52,11 +52,16 @@ def _global_settings_schema(defaults: dict | None = None) -> vol.Schema:
 
 
 def _device_schema(defaults: dict | None = None, next_priority: int = 1) -> vol.Schema:
-    """Schema for add/edit device. `defaults` pre-fills values when editing."""
+    """Schema for add/edit device. `defaults` pre-fills values when editing.
+
+    switch_entity is Optional here even though non-wallbox devices need one —
+    a wallbox controlled by its own inverter logic usually has no HA switch at
+    all. The step handler enforces "required unless wallbox" manually.
+    """
     d = defaults or {}
     return vol.Schema({
         vol.Required(CONF_DEVICE_NAME, default=d.get(CONF_DEVICE_NAME)): str,
-        vol.Required(CONF_DEVICE_SWITCH, default=d.get(CONF_DEVICE_SWITCH)): selector.EntitySelector(
+        vol.Optional(CONF_DEVICE_SWITCH, default=d.get(CONF_DEVICE_SWITCH)): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
         vol.Required(CONF_DEVICE_PRIORITY, default=d.get(CONF_DEVICE_PRIORITY, next_priority)): selector.NumberSelector(
@@ -70,6 +75,15 @@ def _device_schema(defaults: dict | None = None, next_priority: int = 1) -> vol.
         ),
         vol.Optional(CONF_DEVICE_IS_WALLBOX, default=d.get(CONF_DEVICE_IS_WALLBOX, False)): bool,
     })
+
+
+def _validate_device_input(user_input: dict) -> dict[str, str]:
+    """Returns an errors dict (empty if valid). A switch is required unless
+    the device is a wallbox (those are only ever read, never switched)."""
+    errors: dict[str, str] = {}
+    if not user_input.get(CONF_DEVICE_IS_WALLBOX) and not user_input.get(CONF_DEVICE_SWITCH):
+        errors[CONF_DEVICE_SWITCH] = "switch_required"
+    return errors
 
 
 def _next_priority(devices: list[dict]) -> int:
@@ -107,8 +121,10 @@ class PVSurplusConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_add_device(self, user_input: dict | None = None):
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._devices.append({**user_input, "_id": str(uuid.uuid4())})
-            return await self.async_step_add_another()
+            errors = _validate_device_input(user_input)
+            if not errors:
+                self._devices.append({**user_input, "_id": str(uuid.uuid4())})
+                return await self.async_step_add_another()
 
         return self.async_show_form(
             step_id="add_device",
@@ -141,11 +157,16 @@ class PVSurplusOptionsFlow(OptionsFlow):
     def __init__(self, config_entry: ConfigEntry) -> None:
         self._config_entry = config_entry
         self._devices: list[dict] = list(config_entry.data.get(CONF_DEVICES, []))
-        self._edit_target: str | None = None
+        self._edit_target: str | None = None  # holds a device's _id while editing
 
     def _save_devices(self) -> None:
         new_data = {**self._config_entry.data, CONF_DEVICES: self._devices}
         self.hass.config_entries.async_update_entry(self._config_entry, data=new_data)
+
+    @staticmethod
+    def _device_label(d: dict) -> str:
+        kind = " (Wallbox)" if d.get(CONF_DEVICE_IS_WALLBOX) else ""
+        return f"{d.get(CONF_DEVICE_NAME)} (Prio {d.get(CONF_DEVICE_PRIORITY)}){kind}"
 
     async def async_step_init(self, user_input: dict | None = None):
         menu_options = ["add_device"]
@@ -168,9 +189,11 @@ class PVSurplusOptionsFlow(OptionsFlow):
     async def async_step_add_device(self, user_input: dict | None = None):
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._devices.append({**user_input, "_id": str(uuid.uuid4())})
-            self._save_devices()
-            return await self.async_step_init()
+            errors = _validate_device_input(user_input)
+            if not errors:
+                self._devices.append({**user_input, "_id": str(uuid.uuid4())})
+                self._save_devices()
+                return await self.async_step_init()
 
         return self.async_show_form(
             step_id="add_device",
@@ -188,36 +211,34 @@ class PVSurplusOptionsFlow(OptionsFlow):
                 self._edit_target = user_input["device"]
                 return await self.async_step_edit_device()
 
-            options = {
-                d[CONF_DEVICE_SWITCH]: f"{d.get(CONF_DEVICE_NAME)} (Prio {d.get(CONF_DEVICE_PRIORITY)})"
-                for d in self._devices
-            }
+            options = {d["_id"]: self._device_label(d) for d in self._devices}
             return self.async_show_form(
                 step_id="edit_device",
                 data_schema=vol.Schema({vol.Required("device"): vol.In(options)}),
             )
 
-        # A device is selected — show its current values, prefilled, for editing.
-        current = next(
-            (d for d in self._devices if d[CONF_DEVICE_SWITCH] == self._edit_target), None
-        )
+        current = next((d for d in self._devices if d.get("_id") == self._edit_target), None)
         if current is None:
             self._edit_target = None
             return await self.async_step_init()
 
+        errors: dict[str, str] = {}
         if user_input is not None:
-            self._devices = [
-                {**d, **user_input} if d[CONF_DEVICE_SWITCH] == self._edit_target
-                and d.get("_id") == current.get("_id") else d
-                for d in self._devices
-            ]
-            self._edit_target = None
-            self._save_devices()
-            return await self.async_step_init()
+            errors = _validate_device_input(user_input)
+            if not errors:
+                target_id = self._edit_target
+                self._devices = [
+                    {**user_input, "_id": target_id} if d.get("_id") == target_id else d
+                    for d in self._devices
+                ]
+                self._edit_target = None
+                self._save_devices()
+                return await self.async_step_init()
 
         return self.async_show_form(
             step_id="edit_device",
             data_schema=_device_schema(defaults=current),
+            errors=errors,
             description_placeholders={"count": str(len(self._devices))},
         )
 
@@ -227,14 +248,11 @@ class PVSurplusOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             target = user_input["device"]
-            self._devices = [d for d in self._devices if d[CONF_DEVICE_SWITCH] != target]
+            self._devices = [d for d in self._devices if d.get("_id") != target]
             self._save_devices()
             return await self.async_step_init()
 
-        options = {
-            d[CONF_DEVICE_SWITCH]: f"{d.get(CONF_DEVICE_NAME)} (Prio {d.get(CONF_DEVICE_PRIORITY)})"
-            for d in self._devices
-        }
+        options = {d["_id"]: self._device_label(d) for d in self._devices}
         return self.async_show_form(
             step_id="remove_device",
             data_schema=vol.Schema({vol.Required("device"): vol.In(options)}),
