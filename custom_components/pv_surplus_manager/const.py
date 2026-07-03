@@ -37,8 +37,12 @@ STABLE_OFF_CYCLES_MAX = 24  # 24 × 30s = 12 min — used when margin is comfort
 MARGIN_FOR_MAX_PATIENCE_H = 4.0
 
 # h_battery = avail_kwh / discharge_rate amplifies small discharge-rate noise
-# into large hour swings (division). Smooth over this many cycles (30s each).
-DISCHARGE_SMOOTHING_SAMPLES = 5  # 5 × 30s = 2.5 min rolling average
+# into large hour swings (division). A short mean is still dominated by brief
+# spikes (a stove running for 10-15 min looks like "this rate for the rest of
+# the night" otherwise). Using the MEDIAN over a longer window ignores a spike
+# entirely as long as it's under half the window, while still tracking a real,
+# sustained change within roughly half the window's length.
+DISCHARGE_SMOOTHING_SAMPLES = 40  # 40 × 30s = 20 min rolling median
 
 UPDATE_INTERVAL_SECONDS = 30
 

@@ -9,6 +9,7 @@ samples exist, the configured estimate.
 from __future__ import annotations
 
 import logging
+import statistics
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -215,10 +216,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         discharge = max(-batt, 0.0)
         self._discharge_samples.append(discharge)
-        # h_battery is a division by discharge rate, which amplifies normal
-        # sensor noise into large hour swings near the threshold. Smooth over
-        # the last few cycles so a single noisy reading can't flip batt_ok.
-        smoothed_discharge = sum(self._discharge_samples) / len(self._discharge_samples)
+        # h_battery is a division by discharge rate, which would otherwise
+        # project a brief spike (e.g. a stove running for 10-15 min) forward
+        # as if it continued all night. The median over a 20 min window
+        # ignores such a spike almost entirely while still tracking a real,
+        # sustained change in load within roughly half the window's length.
+        smoothed_discharge = statistics.median(self._discharge_samples)
         avail_kwh = max((soc - min_soc) / 100.0 * battery_kwh, 0.0)
         h_battery = avail_kwh / smoothed_discharge if smoothed_discharge > 0.05 else 999.0
 
