@@ -1,4 +1,4 @@
-DOMAIN = "pv_surplus_manager"
+DOMAIN = "surplus_load_switch"
 PLATFORMS = ["sensor", "number", "switch"]
 
 # Config keys — global

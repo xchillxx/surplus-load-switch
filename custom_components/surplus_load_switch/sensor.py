@@ -43,9 +43,9 @@ class _PVSensorBase(CoordinatorEntity[PVSurplusCoordinator], SensorEntity):
     def device_info(self):
         return {
             "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "PV Surplus Manager",
+            "name": "Surplus Load Switch",
             "manufacturer": "Community",
-            "model": "PV Surplus Manager",
+            "model": "Surplus Load Switch",
         }
 
 

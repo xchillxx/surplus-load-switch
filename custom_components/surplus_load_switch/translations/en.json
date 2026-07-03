@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Set up PV Surplus Manager",
+        "title": "Set up Surplus Load Switch",
         "description": "Select sensors for your PV system and battery storage.",
         "data": {
           "solar_sensor": "Solar power sensor (kW)",
@@ -34,7 +34,7 @@
       },
       "add_wallbox": {
         "title": "Add wallbox",
-        "description": "Wallboxes with their own PV-surplus charging logic are never switched by PV Surplus Manager — only their power is subtracted from the house load so they don't distort the surplus calculation for other devices.",
+        "description": "Wallboxes with their own PV-surplus charging logic are never switched by Surplus Load Switch — only their power is subtracted from the house load so they don't distort the surplus calculation for other devices.",
         "data": {
           "name": "Name",
           "power_sensor": "Power sensor (required)"
@@ -53,7 +53,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "PV Surplus Manager",
+        "title": "Surplus Load Switch",
         "menu_options": {
           "add_normal_device": "Add switchable device",
           "add_wallbox": "Add wallbox",
@@ -76,7 +76,7 @@
       },
       "add_wallbox": {
         "title": "Add wallbox",
-        "description": "Wallboxes with their own PV-surplus charging logic are never switched by PV Surplus Manager — only their power is subtracted from the house load so they don't distort the surplus calculation for other devices.",
+        "description": "Wallboxes with their own PV-surplus charging logic are never switched by Surplus Load Switch — only their power is subtracted from the house load so they don't distort the surplus calculation for other devices.",
         "data": {
           "name": "Name",
           "power_sensor": "Power sensor (required)"

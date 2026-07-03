@@ -37,7 +37,7 @@ class PVMinSocNumber(CoordinatorEntity[PVSurplusCoordinator], NumberEntity):
     def device_info(self):
         return {
             "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "PV Surplus Manager",
+            "name": "Surplus Load Switch",
         }
 
     @property

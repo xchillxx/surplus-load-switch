@@ -1,8 +1,10 @@
-<img src="branding/logo.png" alt="PV Surplus Manager" width="420">
+<img src="branding/logo.png" alt="Surplus Load Switch" width="420">
 
 Home Assistant custom integration that switches devices on and off based on
-your solar surplus — with a priority cascade for multiple devices and
-automatic power measurement.
+your solar surplus — with a priority cascade for multiple devices, automatic
+power measurement, and a battery-aware overnight mode. Works with any PV/battery
+system that exposes the right sensors to Home Assistant, not tied to a
+specific inverter brand.
 
 ## Why
 
@@ -10,7 +12,7 @@ Most PV surplus automations only handle a single device with a fixed
 threshold. This integration is built for households with several
 controllable loads (crypto miners, heat pumps, pool pumps, ...) that should
 compete for the same surplus by priority, without oscillating every time a
-cloud passes over.
+cloud passes over or another appliance briefly kicks in.
 
 ## Features
 
@@ -25,11 +27,15 @@ cloud passes over.
   battery has enough charge to last until solar production resumes the next
   morning (based on sunrise + a configurable monthly offset, since raw
   sunrise isn't when solar actually becomes useful).
-- **Wallbox exclusion** — mark a device as a wallbox to exclude it from
-  switching (e.g. if it's already PV-controlled by your inverter/EMS) while
-  still subtracting its power draw from the household load.
-- **Hysteresis + stability counters** — every on/off decision must hold for
-  several consecutive cycles before acting, to avoid rapid toggling.
+- **Spike-resistant** — the battery-margin projection uses a 20-minute
+  rolling median of the discharge rate, so a stove or kettle running for a
+  few minutes doesn't get projected forward as if it continued all night.
+  How long the system waits before switching a device off also scales with
+  how much battery margin is currently available.
+- **Wallbox support** — wallboxes with their own PV-surplus charging logic
+  are added as a separate device type: never switched, only their power is
+  subtracted from the household load so they don't distort the surplus
+  calculation for other devices.
 - Fully configurable through the Home Assistant UI (no YAML required).
 
 ## Requirements
@@ -47,28 +53,27 @@ Your PV/battery system needs to expose, as Home Assistant entities:
 
 1. HACS → Integrations → ⋮ → Custom repositories
 2. Add this repository URL, category "Integration"
-3. Install "PV Surplus Manager"
+3. Install "Surplus Load Switch"
 4. Restart Home Assistant
 
 ### Manual
 
-Copy `custom_components/pv_surplus_manager` into your `config/custom_components/` folder and restart Home Assistant.
+Copy `custom_components/surplus_load_switch` into your `config/custom_components/` folder and restart Home Assistant.
 
 ## Configuration
 
-1. Settings → Devices & Services → Add Integration → "PV Surplus Manager"
+1. Settings → Devices & Services → Add Integration → "Surplus Load Switch"
 2. Select your solar, load, SOC and battery power sensors, battery capacity, and minimum SOC
-3. Open the integration's options to add devices:
-   - Name, switch entity, estimated power (kW)
-   - Optional: a power sensor for automatic measurement
-   - Optional: mark as wallbox (excluded from switching)
+3. Right after setup (or later via the integration's Configure menu), add devices:
+   - **Switchable device** (e.g. a miner): name, switch entity, priority, estimated power, optional power sensor for automatic measurement
+   - **Wallbox**: name and power sensor only — never switched, just subtracted from the load
 
-Devices are prioritized in the order you add them (first added = highest
-priority). Use "Remove device" in the options to delete one.
+Priority determines serving order (1 = highest). Use "Edit device" to change
+priority or other values later, and "Remove device" to delete one.
 
 ## How the decision logic works
 
-Every 30 seconds, for each device (highest priority first):
+Every 30 seconds, for each switchable device (highest priority first):
 
 ```
 remaining_surplus = available_surplus - sum(power already reserved by higher-priority devices)
@@ -77,8 +82,10 @@ should_off = remaining_surplus < device_power - 0.2 kW   AND  battery does NOT c
 ```
 
 `device_power` is the measured 7-day average (once ≥20 samples exist) or the
-configured estimate. A decision must hold for 2 minutes (ON) or 3 minutes
-(OFF) before it's acted on.
+configured estimate. An ON decision must hold for 2 minutes before it's acted
+on. An OFF decision's required hold time scales from 3 minutes (no battery
+margin to spare — react fast) up to 12 minutes (4h+ margin — likely a
+transient spike, safe to wait it out).
 
 ## License
 

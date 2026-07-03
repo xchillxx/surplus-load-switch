@@ -27,7 +27,7 @@ class DevicePowerTracker:
 
     def __init__(self, hass: HomeAssistant, entry_id: str, device_key: str) -> None:
         self._store: Store = Store(
-            hass, STORAGE_VERSION, f"pv_surplus_manager_power_{entry_id}_{device_key}"
+            hass, STORAGE_VERSION, f"surplus_load_switch_power_{entry_id}_{device_key}"
         )
         # Each sample: [iso_timestamp, power_kw]
         self._samples: deque[list] = deque(maxlen=MAX_SAMPLES_PER_DEVICE)

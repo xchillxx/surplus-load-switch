@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "PV Surplus Manager einrichten",
+        "title": "Surplus Load Switch einrichten",
         "description": "Wähle die Sensoren deines PV-Systems und Speichers.",
         "data": {
           "solar_sensor": "Solar-Leistung Sensor (kW)",
@@ -34,7 +34,7 @@
       },
       "add_wallbox": {
         "title": "Wallbox hinzufügen",
-        "description": "Wallboxen mit eigener PV-Überschusssteuerung werden von PV Surplus Manager nicht geschaltet — nur ihre Leistung wird von der Hauslast abgezogen, damit sie den Überschuss für andere Geräte nicht verfälscht.",
+        "description": "Wallboxen mit eigener PV-Überschusssteuerung werden von Surplus Load Switch nicht geschaltet — nur ihre Leistung wird von der Hauslast abgezogen, damit sie den Überschuss für andere Geräte nicht verfälscht.",
         "data": {
           "name": "Name",
           "power_sensor": "Leistungssensor (Pflicht)"
@@ -53,7 +53,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "PV Surplus Manager",
+        "title": "Surplus Load Switch",
         "menu_options": {
           "add_normal_device": "Schaltbares Gerät hinzufügen",
           "add_wallbox": "Wallbox hinzufügen",
@@ -76,7 +76,7 @@
       },
       "add_wallbox": {
         "title": "Wallbox hinzufügen",
-        "description": "Wallboxen mit eigener PV-Überschusssteuerung werden von PV Surplus Manager nicht geschaltet — nur ihre Leistung wird von der Hauslast abgezogen, damit sie den Überschuss für andere Geräte nicht verfälscht.",
+        "description": "Wallboxen mit eigener PV-Überschusssteuerung werden von Surplus Load Switch nicht geschaltet — nur ihre Leistung wird von der Hauslast abgezogen, damit sie den Überschuss für andere Geräte nicht verfälscht.",
         "data": {
           "name": "Name",
           "power_sensor": "Leistungssensor (Pflicht)"

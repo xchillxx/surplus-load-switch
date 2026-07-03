@@ -60,7 +60,7 @@ class PVDeviceSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
     def device_info(self):
         return {
             "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "PV Surplus Manager",
+            "name": "Surplus Load Switch",
         }
 
     @property

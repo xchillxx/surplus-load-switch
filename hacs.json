@@ -1,6 +1,6 @@
 {
-  "name": "PV Surplus Manager",
+  "name": "Surplus Load Switch",
   "content_in_root": false,
   "homeassistant": "2023.12.0",
-  "filename": "pv_surplus_manager.zip"
+  "filename": "surplus_load_switch.zip"
 }

@@ -1,4 +1,4 @@
-<svg width="660" height="256" viewBox="0 0 660 256" xmlns="http://www.w3.org/2000/svg">
+<svg width="780" height="256" viewBox="0 0 780 256" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="sun" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#FFD54F"/>
@@ -35,7 +35,7 @@
 
   <!-- wordmark -->
   <g font-family="Helvetica, Arial, sans-serif">
-    <text x="248" y="128" font-size="64" font-weight="700" fill="#123A4E">PV Surplus</text>
-    <text x="248" y="190" font-size="64" font-weight="700" fill="#FB8C00">Manager</text>
+    <text x="248" y="128" font-size="64" font-weight="700" fill="#123A4E">Surplus Load</text>
+    <text x="248" y="190" font-size="64" font-weight="700" fill="#FB8C00">Switch</text>
   </g>
 </svg>

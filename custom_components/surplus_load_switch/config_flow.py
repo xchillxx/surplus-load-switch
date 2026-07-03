@@ -158,7 +158,7 @@ class PVSurplusConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_finish_setup(self, user_input: dict | None = None):
         return self.async_create_entry(
-            title="PV Surplus Manager",
+            title="Surplus Load Switch",
             data={**self._global_data, CONF_DEVICES: self._devices},
         )
 
