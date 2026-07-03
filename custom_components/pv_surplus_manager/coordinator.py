@@ -37,8 +37,10 @@ from .const import (
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
     DOMAIN,
+    MARGIN_FOR_MAX_PATIENCE_H,
     MIN_SAMPLES_FOR_MEASURED_AVG,
     STABLE_OFF_CYCLES,
+    STABLE_OFF_CYCLES_MAX,
     STABLE_ON_CYCLES,
     SURPLUS_OFF_THRESHOLD,
     SURPLUS_ON_THRESHOLD,
@@ -166,6 +168,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         diag.predicted_power_kw = configured
         return configured, diag
+
+    @staticmethod
+    def _required_off_cycles(data: CoordinatorData) -> int:
+        """More battery margin beyond what's needed until solar resumes ->
+        wait longer before reacting to a deficit, since it's more likely a
+        short-lived spike than a real trend. No margin -> react fast."""
+        margin_h = max(min(data.h_battery, 999.0) - data.h_to_solar, 0.0)
+        fraction = min(margin_h / MARGIN_FOR_MAX_PATIENCE_H, 1.0)
+        extra = (STABLE_OFF_CYCLES_MAX - STABLE_OFF_CYCLES) * fraction
+        return round(STABLE_OFF_CYCLES + extra)
 
     def _get_solar_start(self) -> datetime:
         sun = self.hass.states.get("sun.sun")
@@ -327,10 +339,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             elif should_off and is_on:
                 tracker.off_counter += 1
                 tracker.on_counter = 0
-                if tracker.off_counter >= STABLE_OFF_CYCLES:
+                required_off_cycles = self._required_off_cycles(data)
+                if tracker.off_counter >= required_off_cycles:
                     _LOGGER.info(
-                        "PV Surplus: turning OFF %s (remaining_surplus=%.2f, need=%.2f, batt_ok=%s)",
-                        dev.get(CONF_DEVICE_NAME), remaining_surplus, predicted_power, data.batt_ok,
+                        "PV Surplus: turning OFF %s (remaining_surplus=%.2f, need=%.2f, "
+                        "batt_ok=%s, waited=%d cycles)",
+                        dev.get(CONF_DEVICE_NAME), remaining_surplus, predicted_power,
+                        data.batt_ok, required_off_cycles,
                     )
                     await self.hass.services.async_call(
                         "switch", "turn_off", {"entity_id": switch_id}, blocking=False

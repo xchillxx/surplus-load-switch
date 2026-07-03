@@ -26,7 +26,15 @@ BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
 
 # Stability: how many coordinator cycles (30s each) must condition hold
 STABLE_ON_CYCLES = 4   # 4 × 30s = 2 min before turning ON
-STABLE_OFF_CYCLES = 6  # 6 × 30s = 3 min before turning OFF
+STABLE_OFF_CYCLES = 6   # 6 × 30s = 3 min — used when there's no battery margin to spare
+STABLE_OFF_CYCLES_MAX = 24  # 24 × 30s = 12 min — used when margin is comfortable
+
+# "Margin" = h_battery - h_to_solar, i.e. how many hours of battery buffer
+# exist beyond what's strictly needed until solar resumes. When margin is
+# large, a short deficit is more likely a transient spike (oven, kettle) than
+# a real trend, so we can afford to wait longer before reacting. When margin
+# is at or below zero, the battery genuinely can't spare it — react fast.
+MARGIN_FOR_MAX_PATIENCE_H = 4.0
 
 # h_battery = avail_kwh / discharge_rate amplifies small discharge-rate noise
 # into large hour swings (division). Smooth over this many cycles (30s each).

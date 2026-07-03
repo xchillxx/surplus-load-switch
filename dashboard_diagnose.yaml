@@ -1,0 +1,87 @@
+title: Surplus Load Switch — Diagnose
+cards:
+  # ── Linke Spalte: Status, Miner, Live-Werte ─────────────
+  - type: vertical-stack
+    cards:
+      - type: markdown
+        title: Status
+        content: >-
+          {% set surplus = states('sensor.pv_surplus_manager_uberschuss') | float(0) %}
+          {% set h_bat = states('sensor.pv_surplus_manager_akku_reicht') | float(999) %}
+          {% set h_sol = states('sensor.pv_surplus_manager_bis_solar_start') | float(0) %}
+          {% set modus = states('sensor.pv_surplus_manager_modus') %}
+          {% set miner_on = is_state('switch.shelly_plug_m_gen3_2', 'on') %}
+          {% set batt_ok = h_bat > (h_sol + 0.5) %}
+          {% set should_run = surplus > 0.2 or batt_ok %}
+          {% if miner_on and should_run %}🟢 **Miner läuft korrekt**
+          {% elif not miner_on and not should_run %}🔴 **Miner aus — korrekt**
+          {% else %}⚠️ **Abweichung: Miner ist {{ 'AN' if miner_on else 'AUS' }}, sollte laut Logik {{ 'AN' if should_run else 'AUS' }} sein**
+          {% endif %}
+
+          {{ modus }} · Überschuss **{{ surplus | round(2) }} kW** · Akku reicht **{{ h_bat | round(1) if h_bat < 999 else '∞' }} h** vs. bis Solar **{{ h_sol | round(1) }} h**
+
+      - type: entities
+        title: Miner
+        entities:
+          - entity: switch.shelly_plug_m_gen3_2
+            name: Miner (echter Switch)
+          - entity: switch.technik_abstellraum_pv_surplus_manager_miner_prio_1_2
+            name: Miner (Integration-Ansicht)
+          - entity: sensor.technik_abstellraum_pv_surplus_manager_miner_o_leistung_2
+            name: Ø Leistung (gemessen/geschätzt)
+
+      - type: entities
+        title: Live-Werte
+        entities:
+          - entity: sensor.fsp_ne_195099276_flow_solar_power
+            name: Solar
+          - entity: sensor.fsp_ne_195099276_flow_load_power
+            name: Hausverbrauch (gesamt)
+          - entity: sensor.fsp_ne_195107282_state_of_charge
+            name: Akku SOC
+          - entity: sensor.fsp_ne_195107282_charge_discharge_power
+            name: Akku Lade(+)/Entlade(-)
+          - entity: sensor.fsp_ne_195104398_output_power
+            name: Wallbox Leistung
+          - type: divider
+          - entity: sensor.pv_surplus_manager_uberschuss
+            name: "→ Überschuss (nach Wallbox-Abzug)"
+          - entity: sensor.pv_surplus_manager_akku_reicht
+            name: "→ Akku reicht"
+          - entity: sensor.pv_surplus_manager_bis_solar_start
+            name: "→ Bis Solar-Start"
+          - entity: sensor.pv_surplus_manager_verfugbare_akkukapazitat
+            name: "→ Verfügbare Akkukapazität"
+          - entity: sensor.pv_surplus_manager_modus
+            name: "→ Modus"
+          - entity: number.pv_surplus_manager_mindest_soc
+            name: Mindest-SOC (Einstellung)
+
+  # ── Rechte Spalte: Verläufe + Logbuch ────────────────────
+  - type: vertical-stack
+    cards:
+      - type: history-graph
+        title: SOC + Solar + Miner (24h)
+        hours_to_show: 24
+        entities:
+          - entity: sensor.fsp_ne_195107282_state_of_charge
+            name: SOC %
+          - entity: sensor.fsp_ne_195099276_flow_solar_power
+            name: Solar kW
+          - entity: switch.shelly_plug_m_gen3_2
+            name: Miner
+
+      - type: history-graph
+        title: Überschuss + Wallbox-Leistung (24h)
+        hours_to_show: 24
+        entities:
+          - entity: sensor.pv_surplus_manager_uberschuss
+            name: Überschuss kW
+          - entity: sensor.fsp_ne_195104398_output_power
+            name: Wallbox kW
+
+      - type: logbook
+        title: Miner-Schaltvorgänge (Begründung)
+        hours_to_show: 24
+        entities:
+          - switch.shelly_plug_m_gen3_2

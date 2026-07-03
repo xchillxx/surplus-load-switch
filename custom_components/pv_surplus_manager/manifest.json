@@ -1,7 +1,7 @@
 {
   "domain": "pv_surplus_manager",
   "name": "PV Surplus Manager",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "config_flow": true,
   "documentation": "https://github.com/xchillxx/pv-surplus-manager",
   "issue_tracker": "https://github.com/xchillxx/pv-surplus-manager/issues",
