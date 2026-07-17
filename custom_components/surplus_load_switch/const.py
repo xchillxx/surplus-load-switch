@@ -22,6 +22,7 @@ CONF_DEVICE_OFF_ONLY = "off_only"  # legacy (v1.1.0) — superseded by window fi
 CONF_DEVICE_WINDOW_START = "window_start"
 CONF_DEVICE_WINDOW_END = "window_end"
 CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes priority over window_start/end
+CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
 
 # Logic thresholds
 SURPLUS_ON_THRESHOLD = 0.2    # kW: turn on when surplus > this
@@ -64,3 +65,11 @@ MAX_SAMPLES_PER_DEVICE = 21000
 MIN_SAMPLES_FOR_MEASURED_AVG = 20
 # Delay (seconds) before persisting new samples to disk (debounced writes)
 POWER_STORE_SAVE_DELAY = 60
+
+# --- Minimum daily runtime (catch-up forcing) ---
+RUNTIME_STORE_SAVE_DELAY = 60
+# Forcing a device on to hit its minimum daily runtime only ever kicks in
+# from this local hour onward — never in the morning, so a good-surplus day
+# still gets first chance to reach the target for free before we consider
+# spending grid power on it.
+MIN_RUNTIME_FORCE_AFTER_HOUR = 12

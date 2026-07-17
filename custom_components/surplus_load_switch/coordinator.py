@@ -25,6 +25,7 @@ from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_DEVICES,
     CONF_DEVICE_IS_WALLBOX,
+    CONF_DEVICE_MIN_DAILY_RUNTIME_H,
     CONF_DEVICE_NAME,
     CONF_DEVICE_OFF_ONLY,
     CONF_DEVICE_POWER_KW,
@@ -43,6 +44,7 @@ from .const import (
     DISCHARGE_SMOOTHING_SAMPLES,
     DOMAIN,
     MARGIN_FOR_MAX_PATIENCE_H,
+    MIN_RUNTIME_FORCE_AFTER_HOUR,
     MIN_SAMPLES_FOR_MEASURED_AVG,
     STABLE_OFF_CYCLES,
     STABLE_OFF_CYCLES_MAX,
@@ -52,6 +54,7 @@ from .const import (
     UPDATE_INTERVAL_SECONDS,
 )
 from .power_tracker import DevicePowerTracker
+from .runtime_tracker import DailyRuntimeTracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +76,8 @@ class DeviceDiagnostics:
     is_measured: bool = False
     is_on: bool = False
     off_only: bool = False
+    runtime_hours_today: float = 0.0
+    force_runtime: bool = False
 
 
 @dataclass
@@ -109,21 +114,31 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._entry_id = entry_id
         self._device_trackers: dict[str, DeviceState] = {}
         self._power_trackers: dict[str, DevicePowerTracker] = {}
+        self._runtime_trackers: dict[str, DailyRuntimeTracker] = {}
         self._discharge_samples: deque[float] = deque(maxlen=DISCHARGE_SMOOTHING_SAMPLES)
         for dev in config.get(CONF_DEVICES, []):
             device_id = dev["_id"]
             self._device_trackers[device_id] = DeviceState(device_id=device_id)
 
     async def async_setup_power_trackers(self) -> None:
-        """Load persisted power samples for every device that has a power sensor."""
+        """Load persisted per-device state: power samples (only if a power
+        sensor is configured) and today's accumulated runtime (always, so
+        the minimum daily runtime feature has history even if it's enabled
+        later)."""
         for dev in self._config.get(CONF_DEVICES, []):
-            sensor_id = dev.get(CONF_DEVICE_POWER_SENSOR)
-            if not sensor_id:
+            if dev.get(CONF_DEVICE_IS_WALLBOX, False):
                 continue
             device_id = dev["_id"]
-            tracker = DevicePowerTracker(self.hass, self._entry_id, device_id)
-            await tracker.async_load()
-            self._power_trackers[device_id] = tracker
+
+            sensor_id = dev.get(CONF_DEVICE_POWER_SENSOR)
+            if sensor_id:
+                power_tracker = DevicePowerTracker(self.hass, self._entry_id, device_id)
+                await power_tracker.async_load()
+                self._power_trackers[device_id] = power_tracker
+
+            runtime_tracker = DailyRuntimeTracker(self.hass, self._entry_id, device_id)
+            await runtime_tracker.async_load()
+            self._runtime_trackers[device_id] = runtime_tracker
 
     @property
     def devices(self) -> list[dict]:
@@ -358,11 +373,33 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 if tracker is not None:
                     tracker.add_sample(self._get_power_kw(sensor_id))
 
+            # Feed today's accumulated runtime regardless of whether a
+            # minimum is configured, so history already exists if one is
+            # added later.
+            runtime_tracker = self._runtime_trackers.get(device_id)
+            if runtime_tracker is not None:
+                runtime_tracker.add_cycle(is_on, UPDATE_INTERVAL_SECONDS)
+            runtime_hours_today = runtime_tracker.hours_today if runtime_tracker is not None else 0.0
+
             predicted_power, diag = self._predicted_power_kw(dev)
             diag.is_on = is_on
+            diag.runtime_hours_today = runtime_hours_today
             in_window = self._in_window(dev)
             legacy_off_only = dev.get(CONF_DEVICE_OFF_ONLY, False)
             diag.off_only = legacy_off_only or in_window is not None
+
+            # A minimum daily runtime is only ever *forced* (i.e. may draw
+            # grid power) from the afternoon onward, once it's clear a good
+            # surplus morning alone won't reach the target — a device is
+            # never denied its normal surplus/battery-driven chance to reach
+            # the target for free earlier in the day.
+            min_daily_runtime_h = dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
+            force_runtime = (
+                min_daily_runtime_h is not None
+                and runtime_hours_today < min_daily_runtime_h
+                and dt_util.now().hour >= MIN_RUNTIME_FORCE_AFTER_HOUR
+            )
+            diag.force_runtime = force_runtime
             device_diagnostics[device_id] = diag
 
             if not switch_id:
@@ -418,10 +455,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 and data.soc > data.min_soc
             )
 
-            should_on = (remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD) or battery_would_last
+            should_on = (
+                force_runtime
+                or (remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD)
+                or battery_would_last
+            )
             should_off = (
-                remaining_surplus < predicted_power + SURPLUS_OFF_THRESHOLD
-            ) and not battery_would_last
+                not force_runtime
+                and (remaining_surplus < predicted_power + SURPLUS_OFF_THRESHOLD)
+                and not battery_would_last
+            )
 
             if should_on:
                 # Reserve this device's predicted share so lower-priority
@@ -433,8 +476,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 tracker.off_counter = 0
                 if tracker.on_counter >= STABLE_ON_CYCLES:
                     _LOGGER.info(
-                        "PV Surplus: turning ON %s (remaining_surplus=%.2f, need=%.2f, battery_would_last=%s)",
-                        dev.get(CONF_DEVICE_NAME), remaining_surplus, predicted_power, battery_would_last,
+                        "PV Surplus: turning ON %s (remaining_surplus=%.2f, need=%.2f, "
+                        "battery_would_last=%s, force_runtime=%s)",
+                        dev.get(CONF_DEVICE_NAME), remaining_surplus, predicted_power,
+                        battery_would_last, force_runtime,
                     )
                     await self.hass.services.async_call(
                         "switch", "turn_on", {"entity_id": switch_id}, blocking=False

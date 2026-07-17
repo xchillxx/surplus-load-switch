@@ -14,6 +14,7 @@ from .const import (
     CONF_BATT_SENSOR,
     CONF_DEVICES,
     CONF_DEVICE_IS_WALLBOX,
+    CONF_DEVICE_MIN_DAILY_RUNTIME_H,
     CONF_DEVICE_NAME,
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_POWER_SENSOR,
@@ -90,6 +91,11 @@ def _normal_device_schema(defaults: dict | None = None, next_priority: int = 1) 
         ): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
         vol.Optional(CONF_DEVICE_WINDOW_START, **_default(d, CONF_DEVICE_WINDOW_START)): selector.TimeSelector(),
         vol.Optional(CONF_DEVICE_WINDOW_END, **_default(d, CONF_DEVICE_WINDOW_END)): selector.TimeSelector(),
+        vol.Optional(
+            CONF_DEVICE_MIN_DAILY_RUNTIME_H, **_default(d, CONF_DEVICE_MIN_DAILY_RUNTIME_H)
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0.5, max=24.0, step=0.5, unit_of_measurement="h")
+        ),
     })
 
 

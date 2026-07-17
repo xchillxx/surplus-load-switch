@@ -1,7 +1,7 @@
 {
   "domain": "surplus_load_switch",
   "name": "Surplus Load Switch",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "config_flow": true,
   "documentation": "https://github.com/xchillxx/surplus-load-switch",
   "issue_tracker": "https://github.com/xchillxx/surplus-load-switch/issues",

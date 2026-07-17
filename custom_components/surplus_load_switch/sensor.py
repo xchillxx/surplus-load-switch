@@ -184,6 +184,8 @@ class PVDevicePowerSensor(_PVSensorBase):
             "datenquelle": "gemessen (7 Tage)" if diag.is_measured else "geschätzt (Konfiguration)",
             "messwerte": diag.sample_count,
             "gemessener_durchschnitt_kw": round(diag.measured_avg_kw, 3) if diag.measured_avg_kw else None,
+            "laufzeit_heute_h": round(diag.runtime_hours_today, 2),
+            "mindest_laufzeit_erzwungen": diag.force_runtime,
         }
 
     @property

@@ -50,6 +50,11 @@ cloud passes over or another appliance briefly kicks in.
   device already committed ahead of it, so a lower-priority device drops off
   battery power sooner than a higher-priority one, rather than all of them
   sharing one global yes/no flag.
+- **Minimum daily runtime** — set an optional target (e.g. a pool pump that
+  needs to filter for 4h/day for hygiene). It's never denied its normal
+  chance to reach that for free on surplus/battery power earlier in the day;
+  only from the afternoon onward, if it's still short, does it get forced on
+  (potentially on grid power) to catch up before the day is over.
 - Fully configurable through the Home Assistant UI (no YAML required).
 
 ## Requirements
