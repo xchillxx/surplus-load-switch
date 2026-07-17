@@ -15,11 +15,12 @@ from .const import (
     CONF_DEVICES,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_NAME,
-    CONF_DEVICE_OFF_ONLY,
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_POWER_SENSOR,
     CONF_DEVICE_PRIORITY,
     CONF_DEVICE_SWITCH,
+    CONF_DEVICE_WINDOW_END,
+    CONF_DEVICE_WINDOW_START,
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
     CONF_SOC_SENSOR,
@@ -83,7 +84,8 @@ def _normal_device_schema(defaults: dict | None = None, next_priority: int = 1) 
         vol.Required(CONF_DEVICE_POWER_KW, default=d.get(CONF_DEVICE_POWER_KW, 0.15)): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0.05, max=22.0, step=0.05, unit_of_measurement="kW")
         ),
-        vol.Optional(CONF_DEVICE_OFF_ONLY, default=d.get(CONF_DEVICE_OFF_ONLY, False)): selector.BooleanSelector(),
+        vol.Optional(CONF_DEVICE_WINDOW_START, **_default(d, CONF_DEVICE_WINDOW_START)): selector.TimeSelector(),
+        vol.Optional(CONF_DEVICE_WINDOW_END, **_default(d, CONF_DEVICE_WINDOW_END)): selector.TimeSelector(),
     })
 
 

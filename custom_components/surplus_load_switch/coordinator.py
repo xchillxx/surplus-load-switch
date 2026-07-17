@@ -31,6 +31,8 @@ from .const import (
     CONF_DEVICE_POWER_SENSOR,
     CONF_DEVICE_PRIORITY,
     CONF_DEVICE_SWITCH,
+    CONF_DEVICE_WINDOW_END,
+    CONF_DEVICE_WINDOW_START,
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
     CONF_SOC_SENSOR,
@@ -80,6 +82,7 @@ class CoordinatorData:
     soc: float = 0.0
     batt_kw: float = 0.0
     discharge_kw: float = 0.0
+    smoothed_discharge_kw: float = 0.0
     surplus_kw: float = 0.0
     base_load_kw: float = 0.0
     avail_kwh: float = 0.0
@@ -173,6 +176,26 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         return configured, diag
 
     @staticmethod
+    def _in_window(dev: dict) -> bool | None:
+        """True/False if a time window is configured for this device, else
+        None (no window = always eligible). Supports overnight windows
+        (e.g. 22:00-06:00) where end < start."""
+        start_str = dev.get(CONF_DEVICE_WINDOW_START)
+        end_str = dev.get(CONF_DEVICE_WINDOW_END)
+        if not start_str or not end_str:
+            return None
+
+        now_t = dt_util.now().time()
+        start_t = dt_util.parse_time(start_str)
+        end_t = dt_util.parse_time(end_str)
+        if start_t is None or end_t is None:
+            return None
+
+        if start_t <= end_t:
+            return start_t <= now_t < end_t
+        return now_t >= start_t or now_t < end_t  # wraps past midnight
+
+    @staticmethod
     def _required_off_cycles(data: CoordinatorData) -> int:
         """More battery margin beyond what's needed until solar resumes ->
         wait longer before reacting to a deficit, since it's more likely a
@@ -239,6 +262,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             soc=soc,
             batt_kw=batt,
             discharge_kw=discharge,
+            smoothed_discharge_kw=smoothed_discharge,
             avail_kwh=avail_kwh,
             h_battery=h_battery,
             h_to_solar=h_to_solar,
@@ -288,6 +312,19 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         data.base_load_kw = base_load
         data.surplus_kw = available_surplus
 
+        # Battery discharge currently attributable to managed devices already
+        # running is whatever part of their draw a *positive* surplus doesn't
+        # cover — a negative surplus (base load alone exceeding solar) isn't
+        # their doing and must not be clamped away here, or a negative
+        # available_surplus with zero managed devices running would wrongly
+        # attribute the base-load deficit to "managed devices". Subtracting
+        # their real contribution from the measured discharge leaves the
+        # "unavoidable" base discharge — what the battery would still be
+        # losing even with every managed device off. This is the foundation
+        # for a per-device, forward-looking battery projection below.
+        managed_discharge_kw = max(managed_power_kw - max(available_surplus, 0.0), 0.0)
+        base_discharge_kw = max(data.smoothed_discharge_kw - managed_discharge_kw, 0.0)
+
         device_states: dict[str, bool] = {}
         device_diagnostics: dict[str, DeviceDiagnostics] = {}
         cumulative_committed = 0.0
@@ -307,8 +344,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
             predicted_power, diag = self._predicted_power_kw(dev)
             diag.is_on = is_on
-            off_only = dev.get(CONF_DEVICE_OFF_ONLY, False)
-            diag.off_only = off_only
+            in_window = self._in_window(dev)
+            legacy_off_only = dev.get(CONF_DEVICE_OFF_ONLY, False)
+            diag.off_only = legacy_off_only or in_window is not None
             device_diagnostics[device_id] = diag
 
             if not switch_id:
@@ -316,38 +354,71 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 # devices — validated at config time), nothing to actuate.
                 continue
 
-            remaining_surplus = available_surplus - cumulative_committed
-            # off_only devices (e.g. a pool pump on its own time schedule)
-            # are only ever switched off by us, never on — an external
-            # schedule decides when it may run, we just protect it from
-            # running on grid power when there's no surplus for it.
-            should_on = (not off_only) and (
-                (remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD) or data.batt_ok
-            )
-            should_off = (
-                remaining_surplus < predicted_power + SURPLUS_OFF_THRESHOLD
-            ) and not data.batt_ok
-
-            if should_on:
-                # Reserve this device's predicted share so lower-priority
-                # devices only see what's genuinely left over. off_only
-                # devices never reach here (should_on is always False), so
-                # they never claim a reservation for power we won't turn on
-                # — their actual draw (if the schedule has them running) is
-                # already accounted for via managed_power_kw/base_load above.
-                cumulative_committed += predicted_power
-
             tracker = self._device_trackers.setdefault(
                 device_id, DeviceState(device_id=device_id)
             )
+
+            # A configured time window is a hard boundary: outside it, the
+            # device may only ever be off, enforced immediately (no
+            # hysteresis) — this isn't a surplus/battery judgement call,
+            # it's "not allowed to run right now at all". A device with the
+            # legacy off_only flag and no window behaves like a window
+            # that's always closed, for backward compatibility.
+            if in_window is False or (in_window is None and legacy_off_only):
+                tracker.on_counter = 0
+                tracker.off_counter = 0
+                if is_on:
+                    _LOGGER.info(
+                        "PV Surplus: turning OFF %s (outside its configured time window)",
+                        dev.get(CONF_DEVICE_NAME),
+                    )
+                    await self.hass.services.async_call(
+                        "switch", "turn_off", {"entity_id": switch_id}, blocking=False
+                    )
+                continue
+
+            remaining_surplus = available_surplus - cumulative_committed
+
+            # Forward-looking battery check: would the battery still last
+            # until solar start if THIS device — on top of every
+            # higher-priority device already committed above — draws its
+            # predicted power, with whatever isn't covered by surplus
+            # coming from the battery? This replaces a single global
+            # "is the battery currently discharging" flag, which caused two
+            # problems: (1) a device could turn ON because the battery
+            # *happened* not to be discharging yet, then immediately start
+            # draining it once the load actually kicked in, flipping the
+            # decision back and forth every few minutes; (2) every device
+            # shared the same flag, so when it flipped, all of them turned
+            # off together instead of shedding lowest-priority load first.
+            projected_committed = cumulative_committed + predicted_power
+            uncovered_by_surplus = max(projected_committed - available_surplus, 0.0)
+            projected_discharge = base_discharge_kw + uncovered_by_surplus
+            projected_h_battery = (
+                data.avail_kwh / projected_discharge if projected_discharge > 0.05 else 999.0
+            )
+            battery_would_last = (
+                projected_h_battery > (data.h_to_solar + BATT_OK_BUFFER_H)
+                and data.soc > data.min_soc
+            )
+
+            should_on = (remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD) or battery_would_last
+            should_off = (
+                remaining_surplus < predicted_power + SURPLUS_OFF_THRESHOLD
+            ) and not battery_would_last
+
+            if should_on:
+                # Reserve this device's predicted share so lower-priority
+                # devices only see what's genuinely left over.
+                cumulative_committed += predicted_power
 
             if should_on and not is_on:
                 tracker.on_counter += 1
                 tracker.off_counter = 0
                 if tracker.on_counter >= STABLE_ON_CYCLES:
                     _LOGGER.info(
-                        "PV Surplus: turning ON %s (remaining_surplus=%.2f, need=%.2f, batt_ok=%s)",
-                        dev.get(CONF_DEVICE_NAME), remaining_surplus, predicted_power, data.batt_ok,
+                        "PV Surplus: turning ON %s (remaining_surplus=%.2f, need=%.2f, battery_would_last=%s)",
+                        dev.get(CONF_DEVICE_NAME), remaining_surplus, predicted_power, battery_would_last,
                     )
                     await self.hass.services.async_call(
                         "switch", "turn_on", {"entity_id": switch_id}, blocking=False
@@ -360,9 +431,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 if tracker.off_counter >= required_off_cycles:
                     _LOGGER.info(
                         "PV Surplus: turning OFF %s (remaining_surplus=%.2f, need=%.2f, "
-                        "batt_ok=%s, waited=%d cycles)",
+                        "battery_would_last=%s, waited=%d cycles)",
                         dev.get(CONF_DEVICE_NAME), remaining_surplus, predicted_power,
-                        data.batt_ok, required_off_cycles,
+                        battery_would_last, required_off_cycles,
                     )
                     await self.hass.services.async_call(
                         "switch", "turn_off", {"entity_id": switch_id}, blocking=False

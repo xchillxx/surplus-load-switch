@@ -30,7 +30,8 @@
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor (optional, enables automatic measurement)",
           "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
-          "off_only": "Off only — never turn on (e.g. for a device on its own external time schedule; we'll still turn it off if there's no surplus for it)"
+          "window_start": "Time window start (optional — leave empty for no restriction)",
+          "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule"
         }
       },
       "add_wallbox": {
@@ -73,7 +74,8 @@
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor (optional, enables automatic measurement)",
           "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
-          "off_only": "Off only — never turn on (e.g. for a device on its own external time schedule; we'll still turn it off if there's no surplus for it)"
+          "window_start": "Time window start (optional — leave empty for no restriction)",
+          "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule"
         }
       },
       "add_wallbox": {
@@ -94,7 +96,8 @@
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor",
           "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
-          "off_only": "Off only — never turn on (e.g. for a device on its own external time schedule; we'll still turn it off if there's no surplus for it)"
+          "window_start": "Time window start (optional — leave empty for no restriction)",
+          "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule"
         }
       },
       "remove_device": {

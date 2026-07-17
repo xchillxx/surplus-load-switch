@@ -36,10 +36,19 @@ cloud passes over or another appliance briefly kicks in.
   are added as a separate device type: never switched, only their power is
   subtracted from the household load so they don't distort the surplus
   calculation for other devices.
-- **Off-only devices** — for a device already controlled by its own external
-  time schedule (e.g. a pool pump), tick "Off only" and this integration will
-  never turn it on itself, but will still turn it off when there's no surplus
-  to cover it while the schedule has it running.
+- **Time-windowed devices** — give a device an optional start/end time (e.g.
+  a pool pump, 08:00–20:00) and it's only ever eligible to run inside that
+  window; outside it, it's forced off immediately. Inside the window it's
+  a normal cascade device — still only switched on when there's surplus (or
+  battery margin) to cover it, so it won't cycle on/off just because the
+  window is open.
+- **Priority-graduated shedding** — when there isn't enough surplus or
+  battery margin for everything, the lowest-priority device is shed first
+  instead of every device switching off together. Each device's own
+  "would the battery still last?" check accounts for every higher-priority
+  device already committed ahead of it, so a lower-priority device drops off
+  battery power sooner than a higher-priority one, rather than all of them
+  sharing one global yes/no flag.
 - Fully configurable through the Home Assistant UI (no YAML required).
 
 ## Requirements
@@ -81,8 +90,12 @@ Every 30 seconds, for each switchable device (highest priority first):
 
 ```
 remaining_surplus = available_surplus - sum(power already reserved by higher-priority devices)
-should_on  = remaining_surplus > device_power + 0.2 kW   OR   battery covers until next solar start
-should_off = remaining_surplus < device_power - 0.2 kW   AND  battery does NOT cover until next solar start
+battery_would_last = would the battery still cover the time until next solar start
+                      if this device — plus every higher-priority device already
+                      committed — draws its predicted power, with whatever isn't
+                      covered by surplus coming from the battery?
+should_on  = remaining_surplus > device_power + 0.2 kW   OR   battery_would_last
+should_off = remaining_surplus < device_power - 0.2 kW   AND  NOT battery_would_last
 ```
 
 `device_power` is the measured 7-day average (once ≥20 samples exist) or the
@@ -90,6 +103,13 @@ configured estimate. An ON decision must hold for 2 minutes before it's acted
 on. An OFF decision's required hold time scales from 3 minutes (no battery
 margin to spare — react fast) up to 12 minutes (4h+ margin — likely a
 transient spike, safe to wait it out).
+
+`battery_would_last` is evaluated per device, projecting forward instead of
+reading the *current* discharge trend — turning a device on doesn't make it
+appear to break its own battery budget a few minutes later once it actually
+starts drawing power, and a lower-priority device sheds before a
+higher-priority one when there isn't enough margin for both, rather than
+every device sharing one global "is the battery discharging right now" flag.
 
 ## License
 

@@ -30,7 +30,8 @@
           "priority": "Priorität (1 = höchste)",
           "power_sensor": "Leistungssensor (optional, für automatische Messung)",
           "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen",
-          "off_only": "Nur ausschalten — nie selbst einschalten (z.B. bei externer Zeitschaltuhr; wir schalten trotzdem ab, wenn kein Überschuss dafür da ist)"
+          "window_start": "Zeitfenster Start (optional — leer lassen für keine Einschränkung)",
+          "window_end": "Zeitfenster Ende — außerhalb dieses Fensters wird das Gerät nur ausgeschaltet, z.B. für eine Poolpumpe mit eigenem Tageszeitplan"
         }
       },
       "add_wallbox": {
@@ -73,7 +74,8 @@
           "priority": "Priorität (1 = höchste)",
           "power_sensor": "Leistungssensor (optional, für automatische Messung)",
           "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen",
-          "off_only": "Nur ausschalten — nie selbst einschalten (z.B. bei externer Zeitschaltuhr; wir schalten trotzdem ab, wenn kein Überschuss dafür da ist)"
+          "window_start": "Zeitfenster Start (optional — leer lassen für keine Einschränkung)",
+          "window_end": "Zeitfenster Ende — außerhalb dieses Fensters wird das Gerät nur ausgeschaltet, z.B. für eine Poolpumpe mit eigenem Tageszeitplan"
         }
       },
       "add_wallbox": {
@@ -94,7 +96,8 @@
           "priority": "Priorität (1 = höchste)",
           "power_sensor": "Leistungssensor",
           "avg_power_kw": "Geschätzte Leistung (kW) — wird durch Messung ersetzt sobald genug Daten vorliegen",
-          "off_only": "Nur ausschalten — nie selbst einschalten (z.B. bei externer Zeitschaltuhr; wir schalten trotzdem ab, wenn kein Überschuss dafür da ist)"
+          "window_start": "Zeitfenster Start (optional — leer lassen für keine Einschränkung)",
+          "window_end": "Zeitfenster Ende — außerhalb dieses Fensters wird das Gerät nur ausgeschaltet, z.B. für eine Poolpumpe mit eigenem Tageszeitplan"
         }
       },
       "remove_device": {

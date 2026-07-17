@@ -18,7 +18,9 @@ CONF_DEVICE_POWER_KW = "avg_power_kw"
 CONF_DEVICE_PRIORITY = "priority"
 CONF_DEVICE_IS_WALLBOX = "is_wallbox"
 CONF_DEVICE_POWER_SENSOR = "power_sensor"
-CONF_DEVICE_OFF_ONLY = "off_only"
+CONF_DEVICE_OFF_ONLY = "off_only"  # legacy (v1.1.0) — superseded by window fields below
+CONF_DEVICE_WINDOW_START = "window_start"
+CONF_DEVICE_WINDOW_END = "window_end"
 
 # Logic thresholds
 SURPLUS_ON_THRESHOLD = 0.2    # kW: turn on when surplus > this
