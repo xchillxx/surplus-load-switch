@@ -30,6 +30,7 @@ from .const import (
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_POWER_SENSOR,
     CONF_DEVICE_PRIORITY,
+    CONF_DEVICE_SCHEDULE_ENTITY,
     CONF_DEVICE_SWITCH,
     CONF_DEVICE_WINDOW_END,
     CONF_DEVICE_WINDOW_START,
@@ -175,11 +176,26 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         diag.predicted_power_kw = configured
         return configured, diag
 
-    @staticmethod
-    def _in_window(dev: dict) -> bool | None:
-        """True/False if a time window is configured for this device, else
-        None (no window = always eligible). Supports overnight windows
-        (e.g. 22:00-06:00) where end < start."""
+    def _in_window(self, dev: dict) -> bool | None:
+        """True/False if this device is restricted to a schedule, else None
+        (no restriction = always eligible).
+
+        A schedule.* helper entity takes priority when configured — Home
+        Assistant's own schedule helper natively supports multiple blocks
+        per day and per-weekday configuration, which a single start/end
+        pair can't represent. Falls back to a simple daily start/end window
+        (supports wrapping past midnight, e.g. 22:00-06:00) if no helper is
+        set.
+        """
+        schedule_entity = dev.get(CONF_DEVICE_SCHEDULE_ENTITY)
+        if schedule_entity:
+            state = self.hass.states.get(schedule_entity)
+            if state is None or state.state in ("unavailable", "unknown"):
+                # Helper broken/not yet loaded — fail open rather than
+                # force the device off on every restart.
+                return None
+            return state.state == "on"
+
         start_str = dev.get(CONF_DEVICE_WINDOW_START)
         end_str = dev.get(CONF_DEVICE_WINDOW_END)
         if not start_str or not end_str:

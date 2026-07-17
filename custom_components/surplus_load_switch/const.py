@@ -21,6 +21,7 @@ CONF_DEVICE_POWER_SENSOR = "power_sensor"
 CONF_DEVICE_OFF_ONLY = "off_only"  # legacy (v1.1.0) — superseded by window fields below
 CONF_DEVICE_WINDOW_START = "window_start"
 CONF_DEVICE_WINDOW_END = "window_end"
+CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes priority over window_start/end
 
 # Logic thresholds
 SURPLUS_ON_THRESHOLD = 0.2    # kW: turn on when surplus > this

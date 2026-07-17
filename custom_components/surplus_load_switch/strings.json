@@ -30,7 +30,8 @@
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor (optional, enables automatic measurement)",
           "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
-          "window_start": "Time window start (optional — leave empty for no restriction)",
+          "schedule_entity": "Time window helper (optional — a schedule.* entity; if set, takes priority over the fields below and supports multiple daily blocks / weekdays)",
+          "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule"
         }
       },
@@ -74,7 +75,8 @@
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor (optional, enables automatic measurement)",
           "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
-          "window_start": "Time window start (optional — leave empty for no restriction)",
+          "schedule_entity": "Time window helper (optional — a schedule.* entity; if set, takes priority over the fields below and supports multiple daily blocks / weekdays)",
+          "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule"
         }
       },
@@ -96,7 +98,8 @@
           "priority": "Priority (1 = highest)",
           "power_sensor": "Power sensor",
           "avg_power_kw": "Estimated power (kW) — replaced by measurement once enough data exists",
-          "window_start": "Time window start (optional — leave empty for no restriction)",
+          "schedule_entity": "Time window helper (optional — a schedule.* entity; if set, takes priority over the fields below and supports multiple daily blocks / weekdays)",
+          "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule"
         }
       },

@@ -18,6 +18,7 @@ from .const import (
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_POWER_SENSOR,
     CONF_DEVICE_PRIORITY,
+    CONF_DEVICE_SCHEDULE_ENTITY,
     CONF_DEVICE_SWITCH,
     CONF_DEVICE_WINDOW_END,
     CONF_DEVICE_WINDOW_START,
@@ -84,6 +85,9 @@ def _normal_device_schema(defaults: dict | None = None, next_priority: int = 1) 
         vol.Required(CONF_DEVICE_POWER_KW, default=d.get(CONF_DEVICE_POWER_KW, 0.15)): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0.05, max=22.0, step=0.05, unit_of_measurement="kW")
         ),
+        vol.Optional(
+            CONF_DEVICE_SCHEDULE_ENTITY, **_default(d, CONF_DEVICE_SCHEDULE_ENTITY)
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
         vol.Optional(CONF_DEVICE_WINDOW_START, **_default(d, CONF_DEVICE_WINDOW_START)): selector.TimeSelector(),
         vol.Optional(CONF_DEVICE_WINDOW_END, **_default(d, CONF_DEVICE_WINDOW_END)): selector.TimeSelector(),
     })

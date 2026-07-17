@@ -36,12 +36,13 @@ cloud passes over or another appliance briefly kicks in.
   are added as a separate device type: never switched, only their power is
   subtracted from the household load so they don't distort the surplus
   calculation for other devices.
-- **Time-windowed devices** — give a device an optional start/end time (e.g.
-  a pool pump, 08:00–20:00) and it's only ever eligible to run inside that
-  window; outside it, it's forced off immediately. Inside the window it's
-  a normal cascade device — still only switched on when there's surplus (or
-  battery margin) to cover it, so it won't cycle on/off just because the
-  window is open.
+- **Time-windowed devices** — restrict a device to a daily window (e.g. a
+  pool pump); outside it, it's forced off immediately. Inside the window
+  it's a normal cascade device — still only switched on when there's
+  surplus (or battery margin) to cover it, so it won't cycle on/off just
+  because the window is open. Point it at an existing `schedule.*` helper
+  entity for multiple blocks per day / per-weekday schedules, or set a
+  simple start/end time directly if you don't need that.
 - **Priority-graduated shedding** — when there isn't enough surplus or
   battery margin for everything, the lowest-priority device is shed first
   instead of every device switching off together. Each device's own
