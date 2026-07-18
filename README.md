@@ -6,6 +6,12 @@ power measurement, and a battery-aware overnight mode. Works with any PV/battery
 system that exposes the right sensors to Home Assistant, not tied to a
 specific inverter brand.
 
+<img src="screenshots/dashboard.png" alt="Example diagnostics dashboard with three cascaded devices" width="900">
+
+*Example dashboard (anonymized demo data) showing three devices sharing one
+solar surplus by priority, their status, and their switching history — built
+with standard Lovelace cards on top of the integration's sensors.*
+
 ## Why
 
 Most PV surplus automations only handle a single device with a fixed
