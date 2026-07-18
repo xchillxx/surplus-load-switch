@@ -15,6 +15,7 @@ from .const import (
     CONF_DEVICES,
     CONF_DEVICE_CLIMATE_ENTITY,
     CONF_DEVICE_CLIMATE_ON_MODE,
+    CONF_DEVICE_DEPENDS_ON,
     CONF_DEVICE_IS_CLIMATE,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
@@ -74,10 +75,35 @@ def _global_settings_schema(defaults: dict | None = None) -> vol.Schema:
     })
 
 
-def _common_device_fields(d: dict, next_priority: int) -> dict:
+def _dependency_field(d: dict, devices: list[dict] | None, exclude_id: str | None) -> dict:
+    """Optional field: another device that must already be ON before this
+    one may be turned on (e.g. a heat pump with a flow switch that only
+    does anything while its circulation pump is running). Only offered once
+    at least one other switchable/climate device exists."""
+    candidates = [
+        dev for dev in (devices or [])
+        if not dev.get(CONF_DEVICE_IS_WALLBOX, False) and dev.get("_id") != exclude_id
+    ]
+    if not candidates:
+        return {}
+    options = [
+        {"value": dev["_id"], "label": dev.get(CONF_DEVICE_NAME, dev["_id"])} for dev in candidates
+    ]
+    return {
+        vol.Optional(
+            CONF_DEVICE_DEPENDS_ON, **_default(d, CONF_DEVICE_DEPENDS_ON)
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(options=options, mode=selector.SelectSelectorMode.DROPDOWN)
+        )
+    }
+
+
+def _common_device_fields(
+    d: dict, next_priority: int, devices: list[dict] | None = None, exclude_id: str | None = None
+) -> dict:
     """Fields shared by every switchable device type (normal switch or
     climate-controlled), regardless of how it's actually actuated."""
-    return {
+    fields = {
         vol.Required(CONF_DEVICE_PRIORITY, default=d.get(CONF_DEVICE_PRIORITY, next_priority)): selector.NumberSelector(
             selector.NumberSelectorConfig(min=1, max=99, step=1)
         ),
@@ -98,9 +124,16 @@ def _common_device_fields(d: dict, next_priority: int) -> dict:
             selector.NumberSelectorConfig(min=0.5, max=24.0, step=0.5, unit_of_measurement="h")
         ),
     }
+    fields.update(_dependency_field(d, devices, exclude_id))
+    return fields
 
 
-def _normal_device_schema(defaults: dict | None = None, next_priority: int = 1) -> vol.Schema:
+def _normal_device_schema(
+    defaults: dict | None = None,
+    next_priority: int = 1,
+    devices: list[dict] | None = None,
+    exclude_id: str | None = None,
+) -> vol.Schema:
     """Schema for a switchable device controlled via a switch entity."""
     d = defaults or {}
     schema = {
@@ -109,11 +142,16 @@ def _normal_device_schema(defaults: dict | None = None, next_priority: int = 1) 
             selector.EntitySelectorConfig(domain="switch")
         ),
     }
-    schema.update(_common_device_fields(d, next_priority))
+    schema.update(_common_device_fields(d, next_priority, devices, exclude_id))
     return vol.Schema(schema)
 
 
-def _climate_device_schema(defaults: dict | None = None, next_priority: int = 1) -> vol.Schema:
+def _climate_device_schema(
+    defaults: dict | None = None,
+    next_priority: int = 1,
+    devices: list[dict] | None = None,
+    exclude_id: str | None = None,
+) -> vol.Schema:
     """Schema for a device with no on/off switch, only a climate entity
     (e.g. a pool heat pump with just heat/cool/auto/off modes). "On" means
     setting the configured hvac_mode; "off" means hvac_mode "off"."""
@@ -129,7 +167,7 @@ def _climate_device_schema(defaults: dict | None = None, next_priority: int = 1)
             selector.SelectSelectorConfig(options=CLIMATE_HVAC_MODE_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN)
         ),
     }
-    schema.update(_common_device_fields(d, next_priority))
+    schema.update(_common_device_fields(d, next_priority, devices, exclude_id))
     return vol.Schema(schema)
 
 
@@ -202,7 +240,7 @@ class PVSurplusConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="add_normal_device",
-            data_schema=_normal_device_schema(next_priority=_next_priority(self._devices)),
+            data_schema=_normal_device_schema(next_priority=_next_priority(self._devices), devices=self._devices),
             description_placeholders={"count": str(len(self._devices))},
         )
 
@@ -213,7 +251,7 @@ class PVSurplusConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="add_climate_device",
-            data_schema=_climate_device_schema(next_priority=_next_priority(self._devices)),
+            data_schema=_climate_device_schema(next_priority=_next_priority(self._devices), devices=self._devices),
             description_placeholders={"count": str(len(self._devices))},
         )
 
@@ -292,7 +330,7 @@ class PVSurplusOptionsFlow(OptionsFlow):
 
         return self.async_show_form(
             step_id="add_normal_device",
-            data_schema=_normal_device_schema(next_priority=_next_priority(self._devices)),
+            data_schema=_normal_device_schema(next_priority=_next_priority(self._devices), devices=self._devices),
             description_placeholders={"count": str(len(self._devices))},
         )
 
@@ -304,7 +342,7 @@ class PVSurplusOptionsFlow(OptionsFlow):
 
         return self.async_show_form(
             step_id="add_climate_device",
-            data_schema=_climate_device_schema(next_priority=_next_priority(self._devices)),
+            data_schema=_climate_device_schema(next_priority=_next_priority(self._devices), devices=self._devices),
             description_placeholders={"count": str(len(self._devices))},
         )
 
@@ -362,9 +400,9 @@ class PVSurplusOptionsFlow(OptionsFlow):
         if is_wallbox:
             schema = _wallbox_schema(defaults=current)
         elif is_climate:
-            schema = _climate_device_schema(defaults=current)
+            schema = _climate_device_schema(defaults=current, devices=self._devices, exclude_id=self._edit_target)
         else:
-            schema = _normal_device_schema(defaults=current)
+            schema = _normal_device_schema(defaults=current, devices=self._devices, exclude_id=self._edit_target)
         return self.async_show_form(
             step_id="edit_device",
             data_schema=schema,

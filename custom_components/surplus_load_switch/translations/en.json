@@ -34,7 +34,8 @@
           "schedule_entity": "Time window helper (optional — a schedule.* entity; if set, takes priority over the fields below and supports multiple daily blocks / weekdays)",
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
-          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today"
+          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
+          "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       },
       "add_wallbox": {
@@ -67,7 +68,8 @@
           "schedule_entity": "Time window helper (optional — a schedule.* entity; if set, takes priority over the fields below and supports multiple daily blocks / weekdays)",
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
-          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today"
+          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
+          "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       }
     }
@@ -98,7 +100,8 @@
           "schedule_entity": "Time window helper (optional — a schedule.* entity; if set, takes priority over the fields below and supports multiple daily blocks / weekdays)",
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
-          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today"
+          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
+          "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       },
       "add_wallbox": {
@@ -124,7 +127,8 @@
           "schedule_entity": "Time window helper (optional — a schedule.* entity; if set, takes priority over the fields below and supports multiple daily blocks / weekdays)",
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
-          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today"
+          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
+          "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       },
       "remove_device": {
@@ -157,7 +161,8 @@
           "schedule_entity": "Time window helper (optional — a schedule.* entity; if set, takes priority over the fields below and supports multiple daily blocks / weekdays)",
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
-          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today"
+          "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
+          "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       }
     }

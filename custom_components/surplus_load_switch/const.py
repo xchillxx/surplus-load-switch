@@ -26,6 +26,7 @@ CONF_DEVICE_WINDOW_START = "window_start"
 CONF_DEVICE_WINDOW_END = "window_end"
 CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes priority over window_start/end
 CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
+CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that must be ON first
 
 # Logic thresholds
 SURPLUS_ON_THRESHOLD = 0.2    # kW: turn on when surplus > this

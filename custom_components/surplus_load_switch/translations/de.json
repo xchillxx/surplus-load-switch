@@ -34,7 +34,8 @@
           "schedule_entity": "Zeitfenster-Helfer (optional — ein schedule.*-Entity; falls gesetzt, hat Vorrang vor den Feldern unten und unterstützt mehrere Blöcke/Wochentage)",
           "window_start": "Zeitfenster Start — nur genutzt, wenn oben kein Helfer gesetzt ist (leer lassen für keine Einschränkung)",
           "window_end": "Zeitfenster Ende — außerhalb dieses Fensters wird das Gerät nur ausgeschaltet, z.B. für eine Poolpumpe mit eigenem Tageszeitplan",
-          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde"
+          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde",
+          "depends_on_device_id": "Abhängig von Gerät (optional) — dieses Gerät wird nur eingeschaltet, solange das ausgewählte ebenfalls läuft (z.B. eine Wärmepumpe, die zuerst die Umwälzpumpe braucht)"
         }
       },
       "add_wallbox": {
@@ -67,7 +68,8 @@
           "schedule_entity": "Zeitfenster-Helfer (optional — ein schedule.*-Entity; falls gesetzt, hat Vorrang vor den Feldern unten und unterstützt mehrere Blöcke/Wochentage)",
           "window_start": "Zeitfenster Start — nur genutzt, wenn oben kein Helfer gesetzt ist (leer lassen für keine Einschränkung)",
           "window_end": "Zeitfenster Ende — außerhalb dieses Fensters wird das Gerät nur ausgeschaltet, z.B. für eine Poolpumpe mit eigenem Tageszeitplan",
-          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde"
+          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde",
+          "depends_on_device_id": "Abhängig von Gerät (optional) — dieses Gerät wird nur eingeschaltet, solange das ausgewählte ebenfalls läuft (z.B. eine Wärmepumpe, die zuerst die Umwälzpumpe braucht)"
         }
       }
     }
@@ -98,7 +100,8 @@
           "schedule_entity": "Zeitfenster-Helfer (optional — ein schedule.*-Entity; falls gesetzt, hat Vorrang vor den Feldern unten und unterstützt mehrere Blöcke/Wochentage)",
           "window_start": "Zeitfenster Start — nur genutzt, wenn oben kein Helfer gesetzt ist (leer lassen für keine Einschränkung)",
           "window_end": "Zeitfenster Ende — außerhalb dieses Fensters wird das Gerät nur ausgeschaltet, z.B. für eine Poolpumpe mit eigenem Tageszeitplan",
-          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde"
+          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde",
+          "depends_on_device_id": "Abhängig von Gerät (optional) — dieses Gerät wird nur eingeschaltet, solange das ausgewählte ebenfalls läuft (z.B. eine Wärmepumpe, die zuerst die Umwälzpumpe braucht)"
         }
       },
       "add_wallbox": {
@@ -124,7 +127,8 @@
           "schedule_entity": "Zeitfenster-Helfer (optional — ein schedule.*-Entity; falls gesetzt, hat Vorrang vor den Feldern unten und unterstützt mehrere Blöcke/Wochentage)",
           "window_start": "Zeitfenster Start — nur genutzt, wenn oben kein Helfer gesetzt ist (leer lassen für keine Einschränkung)",
           "window_end": "Zeitfenster Ende — außerhalb dieses Fensters wird das Gerät nur ausgeschaltet, z.B. für eine Poolpumpe mit eigenem Tageszeitplan",
-          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde"
+          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde",
+          "depends_on_device_id": "Abhängig von Gerät (optional) — dieses Gerät wird nur eingeschaltet, solange das ausgewählte ebenfalls läuft (z.B. eine Wärmepumpe, die zuerst die Umwälzpumpe braucht)"
         }
       },
       "remove_device": {
@@ -157,7 +161,8 @@
           "schedule_entity": "Zeitfenster-Helfer (optional — ein schedule.*-Entity; falls gesetzt, hat Vorrang vor den Feldern unten und unterstützt mehrere Blöcke/Wochentage)",
           "window_start": "Zeitfenster Start — nur genutzt, wenn oben kein Helfer gesetzt ist (leer lassen für keine Einschränkung)",
           "window_end": "Zeitfenster Ende — außerhalb dieses Fensters wird das Gerät nur ausgeschaltet, z.B. für eine Poolpumpe mit eigenem Tageszeitplan",
-          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde"
+          "min_daily_runtime_h": "Mindest-Laufzeit pro Tag (h, optional) — ab dem Nachmittag wird das Gerät notfalls auch ohne Überschuss eingeschaltet, falls diese Zeit heute noch nicht erreicht wurde",
+          "depends_on_device_id": "Abhängig von Gerät (optional) — dieses Gerät wird nur eingeschaltet, solange das ausgewählte ebenfalls läuft (z.B. eine Wärmepumpe, die zuerst die Umwälzpumpe braucht)"
         }
       }
     }

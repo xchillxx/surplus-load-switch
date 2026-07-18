@@ -61,6 +61,12 @@ cloud passes over or another appliance briefly kicks in.
   `climate.*` entity and which mode counts as "on" (e.g. `heat`) — the
   cascade otherwise treats it exactly like a switch-controlled device
   (priority, power measurement, time windows, minimum runtime all apply).
+- **Device dependencies** — some devices physically can't do anything unless
+  another one is already running (e.g. a heat pump with a flow switch that
+  only lets the compressor start while its pool pump is circulating water).
+  Mark a device as depending on another; it's only ever turned on while the
+  prerequisite is also on, so it never wastes a cascade reservation or
+  dilutes its own power measurement with idle-but-"on" time.
 - Fully configurable through the Home Assistant UI (no YAML required).
 
 ## Requirements

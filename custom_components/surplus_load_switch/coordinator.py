@@ -24,6 +24,7 @@ from .const import (
     CONF_BATT_SENSOR,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_DEVICES,
+    CONF_DEVICE_DEPENDS_ON,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
     CONF_DEVICE_NAME,
@@ -76,6 +77,7 @@ class DeviceDiagnostics:
     is_measured: bool = False
     is_on: bool = False
     off_only: bool = False
+    dependency_met: bool = True
     runtime_hours_today: float = 0.0
     force_runtime: bool = False
 
@@ -401,6 +403,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 and dt_util.now().hour >= MIN_RUNTIME_FORCE_AFTER_HOUR
             )
             diag.force_runtime = force_runtime
+
+            # Some devices physically can't do anything unless another
+            # device is already running — e.g. a heat pump with a flow
+            # switch that only lets the compressor start while its
+            # circulation pump has water moving. Without this, we could
+            # command such a device "on" for nothing (wasting its reserved
+            # cascade budget) and its power samples would be diluted by long
+            # idle-but-"on" stretches, dragging down the measured average.
+            depends_on_id = dev.get(CONF_DEVICE_DEPENDS_ON)
+            dependency_met = depends_on_id is None or device_is_on.get(depends_on_id, False)
+            diag.dependency_met = dependency_met
             device_diagnostics[device_id] = diag
 
             if not control_id:
@@ -413,19 +426,23 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 device_id, DeviceState(device_id=device_id)
             )
 
-            # A configured time window is a hard boundary: outside it, the
-            # device may only ever be off, enforced immediately (no
-            # hysteresis) — this isn't a surplus/battery judgement call,
-            # it's "not allowed to run right now at all". A device with the
-            # legacy off_only flag and no window behaves like a window
-            # that's always closed, for backward compatibility.
-            if in_window is False or (in_window is None and legacy_off_only):
+            # A configured time window, or an unmet prerequisite device, is
+            # a hard boundary: the device may only ever be off, enforced
+            # immediately (no hysteresis) — neither is a surplus/battery
+            # judgement call, both mean "not allowed to run right now at
+            # all". A device with the legacy off_only flag and no window
+            # behaves like a window that's always closed, for backward
+            # compatibility.
+            if in_window is False or (in_window is None and legacy_off_only) or not dependency_met:
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 if is_on:
+                    reason = (
+                        "its prerequisite device is off" if not dependency_met
+                        else "outside its configured time window"
+                    )
                     _LOGGER.info(
-                        "PV Surplus: turning OFF %s (outside its configured time window)",
-                        dev.get(CONF_DEVICE_NAME),
+                        "PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), reason,
                     )
                     await async_turn_off(self.hass, dev)
                 continue
