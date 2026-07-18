@@ -37,6 +37,10 @@ cloud passes over or another appliance briefly kicks in.
   (offset changes gradually across the year) or falls back to a sane
   default, so coverage improves progressively over a year of real
   operation instead of requiring a full year before it helps at all.
+  "Aktiver Solar-Offset" is a plain numeric sensor with a history showing
+  the value actually in effect each day, and "Solar-Start Kalibrierung"
+  is a diagnostic sensor showing how many months are calibrated and each
+  month's value, sample size, and source (measured / borrowed / default).
 - **Spike-resistant** — the battery-margin projection uses a 20-minute
   rolling median of the discharge rate, so a stove or kettle running for a
   few minutes doesn't get projected forward as if it continued all night.

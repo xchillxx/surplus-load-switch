@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 DOMAIN = "surplus_load_switch"
 PLATFORMS = ["sensor", "number", "switch"]
 
@@ -83,6 +85,10 @@ MIN_RUNTIME_FORCE_AFTER_HOUR = 12
 # production instead of relying on the guessed defaults above, per calendar
 # month, once enough good-quality (non-cloudy) days exist for that month.
 CALIBRATION_INTERVAL_HOURS = 24  # how often to re-derive offsets from statistics
+# If a calibration attempt got no statistics back at all (e.g. the recorder
+# hadn't fully finished loading yet right after a restart), retry this soon
+# instead of waiting the full normal cadence above.
+CALIBRATION_RETRY_INTERVAL = timedelta(hours=1)
 CALIBRATION_LOOKBACK_DAYS = 400  # a bit over a year, so multi-year data accumulates
 # A day only counts toward calibration if its peak production reaches this
 # fraction of the 90th-percentile peak in the surrounding window — filters

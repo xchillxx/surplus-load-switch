@@ -7,6 +7,7 @@ from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_DEVICES,
@@ -30,6 +31,7 @@ async def async_setup_entry(
         PVModeSensor(coordinator, entry),
         PVSocSensor(coordinator, entry),
         PVSolarCalibrationSensor(coordinator, entry),
+        PVActiveSolarOffsetSensor(coordinator, entry),
     ]
     # Wallbox devices aren't evaluated in the cascade, so there's no
     # predicted-power diagnostics for them — their own power_sensor already
@@ -157,6 +159,39 @@ class PVSocSensor(_PVSensorBase):
         if not self.coordinator.data:
             return None
         return round(self.coordinator.data.avail_kwh, 2)
+
+
+class PVActiveSolarOffsetSensor(_PVSensorBase):
+    """The solar-start offset (hours after sunrise) currently in effect for
+    this month — whatever offsets_for() resolved to (measured/borrowed/
+    default). A plain numeric sensor with a history, so you can see how the
+    value in actual use has moved as calibration data accumulates, not just
+    a snapshot of the calibration status."""
+
+    _attr_name = "Aktiver Solar-Offset"
+    _attr_native_unit_of_measurement = "h"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:sun-clock"
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_active_solar_offset"
+
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return None
+        return round(self.coordinator.data.active_solar_offset_h, 2)
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        m = dt_util.now().month
+        return {
+            "monat": m,
+            "quelle": self.coordinator.data.calibration.get("quelle_pro_monat", {}).get(m),
+        }
 
 
 class PVSolarCalibrationSensor(_PVSensorBase):

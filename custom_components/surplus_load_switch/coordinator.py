@@ -107,6 +107,7 @@ class CoordinatorData:
     device_states: dict[str, bool] = field(default_factory=dict)
     device_diagnostics: dict[str, DeviceDiagnostics] = field(default_factory=dict)
     calibration: dict = field(default_factory=dict)
+    active_solar_offset_h: float = 0.0
 
 
 class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
@@ -125,6 +126,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._runtime_trackers: dict[str, DailyRuntimeTracker] = {}
         self._discharge_samples: deque[float] = deque(maxlen=DISCHARGE_SMOOTHING_SAMPLES)
         self._calibrator = SolarOffsetCalibrator(hass, entry_id, config[CONF_SOLAR_SENSOR])
+        self._last_offset_h = 0.0
         for dev in config.get(CONF_DEVICES, []):
             device_id = dev["_id"]
             self._device_trackers[device_id] = DeviceState(device_id=device_id)
@@ -268,6 +270,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         offsets = self._calibrator.offsets_for(configured_defaults)
         m = dt_util.now().month
         offset_h = offsets[m - 1]
+        self._last_offset_h = offset_h
 
         if sun is None:
             return dt_util.utcnow() + timedelta(hours=12)
@@ -338,6 +341,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             batt_ok=batt_ok,
             min_soc=min_soc,
             calibration=self._calibrator.diagnostics,
+            active_solar_offset_h=self._last_offset_h,
         )
 
         await self._evaluate_devices(data)

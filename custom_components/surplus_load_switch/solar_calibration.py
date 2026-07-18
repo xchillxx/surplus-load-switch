@@ -41,6 +41,7 @@ from .const import (
     CALIBRATION_LOOKBACK_DAYS,
     CALIBRATION_MAX_INTERP_MONTHS,
     CALIBRATION_MIN_GOOD_DAYS,
+    CALIBRATION_RETRY_INTERVAL,
     CALIBRATION_THRESHOLD_RATIO,
     STORAGE_VERSION,
 )
@@ -62,6 +63,7 @@ class SolarOffsetCalibrator:
         self._good_day_counts: dict[int, int] = {}
         self._last_calibrated: datetime | None = None
         self._last_sources: dict[int, str] = {}
+        self._last_query_empty = False
 
     async def async_load(self) -> None:
         data = await self._store.async_load()
@@ -151,7 +153,10 @@ class SolarOffsetCalibrator:
         }
 
     def due_for_recalibration(self, interval: timedelta) -> bool:
-        return self._last_calibrated is None or dt_util.utcnow() - self._last_calibrated >= interval
+        if self._last_calibrated is None:
+            return True
+        effective_interval = CALIBRATION_RETRY_INTERVAL if self._last_query_empty else interval
+        return dt_util.utcnow() - self._last_calibrated >= effective_interval
 
     async def async_recalibrate(self) -> None:
         """Pull long-term statistics and recompute per-month offsets.
@@ -182,8 +187,19 @@ class SolarOffsetCalibrator:
 
         points = result.get(self._solar_entity_id, [])
         if not points:
-            _LOGGER.debug("Solar offset calibration: no statistics available yet for %s", self._solar_entity_id)
+            # Doesn't set _last_calibrated to a value that blocks the normal
+            # 24h cadence — an empty result right after startup (recorder
+            # or its statistics index not fully ready yet) should be
+            # retried soon, not locked out for a full day. Once a real
+            # result comes back (even with 0 calibrated months from too
+            # little good data), the normal cadence takes over.
+            _LOGGER.warning(
+                "Solar offset calibration: no statistics returned for %s "
+                "(queried %s to %s, result had keys: %s) — will retry sooner than the normal 24h cadence",
+                self._solar_entity_id, start, end, list(result.keys()),
+            )
             self._last_calibrated = dt_util.utcnow()
+            self._last_query_empty = True
             return
 
         try:
@@ -195,6 +211,7 @@ class SolarOffsetCalibrator:
         self._offsets = offsets
         self._good_day_counts = good_counts
         self._last_calibrated = dt_util.utcnow()
+        self._last_query_empty = False
         await self._store.async_save({
             "offsets": self._offsets,
             "good_day_counts": self._good_day_counts,
