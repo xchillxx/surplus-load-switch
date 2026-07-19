@@ -40,6 +40,15 @@ STABLE_ON_CYCLES = 4   # 4 × 30s = 2 min before turning ON
 STABLE_OFF_CYCLES = 6   # 6 × 30s = 3 min — used when there's no battery margin to spare
 STABLE_OFF_CYCLES_MAX = 24  # 24 × 30s = 12 min — used when margin is comfortable
 
+# Priority staggering: when several devices cross their off-threshold in the
+# same cycle (e.g. solar drops off a cliff at sunset), they'd otherwise all
+# finish their off-hold at the same cycle count and switch off together.
+# Each priority rank below the highest gets this many fewer cycles to wait,
+# down to OFF_CYCLES_FLOOR — so the lowest-priority device always sheds
+# first, even when the underlying trigger fires for everyone at once.
+STAGGER_CYCLES_PER_PRIORITY_STEP = 2  # 2 × 30s = 1 min less patience per rank
+OFF_CYCLES_FLOOR = 2  # 2 × 30s = 1 min minimum, however low the priority
+
 # "Margin" = h_battery - h_to_solar, i.e. how many hours of battery buffer
 # exist beyond what's strictly needed until solar resumes. When margin is
 # large, a short deficit is more likely a transient spike (oven, kettle) than
@@ -62,9 +71,14 @@ DEFAULT_SOLAR_OFFSETS = [3.5, 3.0, 2.5, 2.0, 2.0, 2.2, 2.2, 2.0, 2.5, 3.0, 3.5, 
 
 # --- Power measurement (rolling average while device is ON) ---
 STORAGE_VERSION = 1
-POWER_HISTORY_WINDOW_DAYS = 7
+# 3 days: short enough to track weather-dependent draw (e.g. a heat pump
+# pulling more current on hot days) without needing 7 days of history before
+# it reflects current conditions.
+POWER_HISTORY_WINDOW_DAYS = 3
 # Samples are only taken while a device is ON, once per update cycle (30s).
-# 7 days of continuous ON time would be 20160 samples; cap generously.
+# 7 days of continuous ON time would be 20160 samples; cap generously (the
+# window itself is enforced by POWER_HISTORY_WINDOW_DAYS/_prune(), this is
+# just a hard ceiling on buffer size).
 MAX_SAMPLES_PER_DEVICE = 21000
 # Minimum samples before trusting the measured average over the configured estimate
 # (20 samples × 30s = 10 minutes of runtime)

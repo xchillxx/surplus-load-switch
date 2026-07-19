@@ -51,6 +51,18 @@ class _PVSensorBase(CoordinatorEntity[PVSurplusCoordinator], SensorEntity):
         self._entry = entry
 
     @property
+    def available(self) -> bool:
+        # CoordinatorEntity's default ties availability to
+        # last_update_success, which _require_valid() intentionally sets to
+        # False for a cycle whenever a core sensor briefly blips — but the
+        # coordinator still holds its last good data at that point (that's
+        # the whole point of skipping the cycle instead of computing with a
+        # 0). Without this override every entity here would flash
+        # "unavailable" on each such blip, hiding perfectly valid last-known
+        # values behind a stricter gate than the data itself needs.
+        return self.coordinator.data is not None
+
+    @property
     def device_info(self):
         return {
             "identifiers": {(DOMAIN, self._entry.entry_id)},

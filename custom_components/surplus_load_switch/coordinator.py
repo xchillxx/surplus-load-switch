@@ -47,9 +47,11 @@ from .const import (
     MARGIN_FOR_MAX_PATIENCE_H,
     MIN_RUNTIME_FORCE_AFTER_HOUR,
     MIN_SAMPLES_FOR_MEASURED_AVG,
+    OFF_CYCLES_FLOOR,
     STABLE_OFF_CYCLES,
     STABLE_OFF_CYCLES_MAX,
     STABLE_ON_CYCLES,
+    STAGGER_CYCLES_PER_PRIORITY_STEP,
     SURPLUS_OFF_THRESHOLD,
     SURPLUS_ON_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
@@ -363,14 +365,25 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         return energy
 
     @staticmethod
-    def _required_off_cycles(data: CoordinatorData) -> int:
+    def _required_off_cycles(data: CoordinatorData, priority_rank: int = 0) -> int:
         """More battery margin beyond what's needed until solar resumes ->
         wait longer before reacting to a deficit, since it's more likely a
-        short-lived spike than a real trend. No margin -> react fast."""
+        short-lived spike than a real trend. No margin -> react fast.
+
+        priority_rank (0 = highest priority device) staggers this further:
+        each rank below the highest gets STAGGER_CYCLES_PER_PRIORITY_STEP
+        fewer cycles, down to OFF_CYCLES_FLOOR. Without this, several
+        devices crossing their off-threshold in the same cycle (e.g. solar
+        dropping off a cliff at sunset) would all finish their hold at the
+        same cycle count and switch off simultaneously instead of shedding
+        lowest-priority first.
+        """
         margin_h = max(min(data.h_battery, 999.0) - data.h_to_solar, 0.0)
         fraction = min(margin_h / MARGIN_FOR_MAX_PATIENCE_H, 1.0)
         extra = (STABLE_OFF_CYCLES_MAX - STABLE_OFF_CYCLES) * fraction
-        return round(STABLE_OFF_CYCLES + extra)
+        base = round(STABLE_OFF_CYCLES + extra)
+        staggered = base - priority_rank * STAGGER_CYCLES_PER_PRIORITY_STEP
+        return max(staggered, OFF_CYCLES_FLOOR)
 
     def _get_solar_start(self) -> datetime:
         sun = self.hass.states.get("sun.sun")
@@ -524,7 +537,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         now_dt = dt_util.utcnow()
         horizon_end = now_dt + timedelta(hours=data.h_to_solar + BATT_OK_BUFFER_H)
 
-        for dev in candidate_devices:
+        for priority_rank, dev in enumerate(candidate_devices):
             device_id = dev["_id"]
             control_id = control_entity_id(dev)
             is_on = device_is_on[device_id]
@@ -638,7 +651,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 projected_segments, now_dt, horizon_end, base_discharge_kw, available_surplus
             )
             battery_would_last = data.avail_kwh > energy_needed_kwh and data.soc > data.min_soc
-            required_off_cycles = self._required_off_cycles(data)
+            required_off_cycles = self._required_off_cycles(data, priority_rank)
             diag.required_off_cycles = required_off_cycles
 
             should_on = (

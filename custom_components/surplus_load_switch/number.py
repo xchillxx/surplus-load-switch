@@ -41,6 +41,13 @@ class PVMinSocNumber(CoordinatorEntity[PVSurplusCoordinator], NumberEntity):
         }
 
     @property
+    def available(self) -> bool:
+        # This value comes straight from the config entry, not
+        # coordinator.data — a skipped update cycle (transient sensor blip)
+        # has no bearing on it, so it should never go unavailable over that.
+        return True
+
+    @property
     def native_value(self) -> float:
         return self._entry.data.get(CONF_MIN_SOC, 20.0)
 

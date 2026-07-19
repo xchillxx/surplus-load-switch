@@ -67,6 +67,13 @@ class PVDeviceSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
         }
 
     @property
+    def available(self) -> bool:
+        # See _PVSensorBase.available in sensor.py — a coordinator refresh
+        # skipped due to a transient sensor blip shouldn't hide this
+        # entity's last-known state.
+        return self.coordinator.data is not None
+
+    @property
     def is_on(self) -> bool | None:
         if self.coordinator.data and self.coordinator.data.device_states:
             return self.coordinator.data.device_states.get(self._device_id)

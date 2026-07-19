@@ -27,8 +27,11 @@ cloud passes over or another appliance briefly kicks in.
   what's left over.
 - **Automatic power measurement** — optionally link a power sensor per
   device. The integration learns its real average consumption over a
-  rolling 7-day window (while the device is on) and uses that instead of a
-  static estimate once enough data exists.
+  rolling 3-day window (while the device is on) and uses that instead of a
+  static estimate once enough data exists — short enough to track
+  weather-dependent draw (e.g. a heat pump pulling more current on hot
+  days) without needing most of a week before it reflects current
+  conditions.
 - **Battery-aware overnight logic** — devices stay on overnight if the
   battery has enough charge to last until solar production resumes the next
   morning (based on sunrise + a monthly offset, since raw sunrise isn't
@@ -137,11 +140,15 @@ should_on  = remaining_surplus > device_power + 0.2 kW   OR   battery_would_last
 should_off = remaining_surplus < device_power - 0.2 kW   AND  NOT battery_would_last
 ```
 
-`device_power` is the measured 7-day average (once ≥20 samples exist) or the
+`device_power` is the measured 3-day average (once ≥20 samples exist) or the
 configured estimate. An ON decision must hold for 2 minutes before it's acted
 on. An OFF decision's required hold time scales from 3 minutes (no battery
 margin to spare — react fast) up to 12 minutes (4h+ margin — likely a
-transient spike, safe to wait it out).
+transient spike, safe to wait it out), then shortens further by 1 minute per
+priority step below the highest (down to a 1-minute floor) — so if several
+devices cross their off-threshold in the same cycle (e.g. solar drops off a
+cliff at sunset), the lowest-priority one finishes its hold and switches off
+first instead of everything dropping out together.
 
 `battery_would_last` is evaluated per device, projecting forward instead of
 reading the *current* discharge trend — turning a device on doesn't make it
@@ -173,7 +180,10 @@ If any of the four core sensors (solar, load, SOC, battery power) reports
 `unavailable`/`unknown`, the coordinator skips that update cycle entirely
 instead of treating the missing value as 0 — a brief sensor hiccup on the
 solar sensor would otherwise look exactly like "no sun" and could switch
-devices off. The last known data is kept until the sensor recovers.
+devices off. The last known data is kept until the sensor recovers, and all
+of this integration's own entities keep showing that last-known state too
+(rather than going `unavailable` themselves) for as long as the skip
+continues.
 
 ## License
 
