@@ -86,6 +86,7 @@ class DeviceDiagnostics:
     runtime_hours_today: float = 0.0
     force_runtime: bool = False
     effective_cutoff: str | None = None
+    should_be_on: bool = False
 
 
 @dataclass
@@ -578,6 +579,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             if in_window is False or (in_window is None and legacy_off_only) or not dependency_met:
                 tracker.on_counter = 0
                 tracker.off_counter = 0
+                diag.should_be_on = False
                 if is_on:
                     reason = (
                         "its prerequisite device is off" if not dependency_met
@@ -631,6 +633,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 and (remaining_surplus < predicted_power + SURPLUS_OFF_THRESHOLD)
                 and not battery_would_last
             )
+            # In the small hysteresis dead zone between the on/off
+            # thresholds, neither condition holds — the target is simply
+            # "stay as you are", not a deviation either way.
+            diag.should_be_on = should_on if (should_on or should_off) else is_on
 
             if should_on:
                 # Reserve this device's predicted share (and its cutoff, if

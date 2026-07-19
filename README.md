@@ -158,6 +158,12 @@ Otherwise a lower-priority device's battery projection stays needlessly
 pessimistic once a higher-priority windowed device (e.g. a pool pump that
 stops at 20:00 regardless) is due to switch off anyway.
 
+Each device's power-tracking sensor exposes the real decision as
+attributes — `sollte_an_sein` (what the cascade currently wants: on/off)
+and `korrekt_geschaltet` (whether the real device state matches that) — so
+a dashboard can show the actual verdict instead of reimplementing an
+approximation of the logic that can drift out of sync as the logic evolves.
+
 Each device also gets an "— Abschalt-Puffer" ("off buffer") sensor showing,
 in seconds, how much longer an active off-decision needs to hold before it's
 acted on — 0 while the device isn't currently counting down toward being
