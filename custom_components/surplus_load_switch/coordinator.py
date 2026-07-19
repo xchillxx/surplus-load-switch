@@ -103,6 +103,11 @@ class CoordinatorData:
     surplus_kw: float = 0.0
     base_load_kw: float = 0.0
     avail_kwh: float = 0.0
+    # Set twice: a naive avail_kwh/discharge_rate placeholder in
+    # _async_update_data, then overwritten at the end of _evaluate_devices
+    # with the time-window-aware projection (see _hours_until_depleted) —
+    # by the time a listener reads coordinator.data, this and batt_ok always
+    # reflect the same logic the switching decisions above just used.
     h_battery: float = 999.0
     h_to_solar: float = 0.0
     solar_start: datetime | None = None
@@ -363,6 +368,49 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             uncovered = max(active_power - available_surplus, 0.0)
             energy += (base_discharge_kw + uncovered) * seg_hours
         return energy
+
+    @staticmethod
+    def _hours_until_depleted(
+        segments: list[tuple[float, datetime | None]],
+        now: datetime,
+        avail_kwh: float,
+        base_discharge_kw: float,
+        available_surplus: float,
+        max_horizon_h: float = 999.0,
+    ) -> float:
+        """Hours from now until the projected energy use would exceed
+        avail_kwh — the exact inverse of _project_energy_kwh, walking the
+        same time-windowed segments forward instead of a fixed horizon.
+
+        This is what the "Akku reicht" diagnostic uses instead of a flat
+        avail_kwh / current_discharge_rate division: that division assumes
+        today's discharge rate holds constant all night, which looks like a
+        shortfall the moment a device with a known cutoff (a time window or
+        schedule) is part of the current draw, even though it's about to
+        drop out and free up that headroom. Walking the same segments the
+        real should_on/should_off decision is based on keeps this number
+        honest about what the cascade actually expects to happen.
+        """
+        horizon_end = now + timedelta(hours=max_horizon_h)
+        boundaries = sorted({c for _, c in segments if c is not None and now < c < horizon_end})
+        boundaries = [now, *boundaries, horizon_end]
+
+        remaining_kwh = avail_kwh
+        for seg_start, seg_end in zip(boundaries, boundaries[1:]):
+            seg_hours = (seg_end - seg_start).total_seconds() / 3600.0
+            if seg_hours <= 0:
+                continue
+            active_power = sum(p for p, c in segments if c is None or c > seg_start)
+            uncovered = max(active_power - available_surplus, 0.0)
+            rate = base_discharge_kw + uncovered
+            if rate <= 0:
+                continue  # this segment doesn't drain the battery at all
+            seg_energy = rate * seg_hours
+            if seg_energy >= remaining_kwh:
+                hours_into_segment = remaining_kwh / rate
+                return (seg_start - now).total_seconds() / 3600.0 + hours_into_segment
+            remaining_kwh -= seg_energy
+        return max_horizon_h
 
     @staticmethod
     def _required_off_cycles(data: CoordinatorData, priority_rank: int = 0) -> int:
@@ -710,3 +758,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         data.device_states = device_states
         data.device_diagnostics = device_diagnostics
+
+        # Replace the naive avail_kwh / current_discharge_rate estimate set
+        # in _async_update_data with the same time-window-aware projection
+        # the cascade itself just used — committed_segments is exactly the
+        # set of devices (and their cutoffs) the should_on/should_off
+        # decisions above are based on. Otherwise the displayed "Akku
+        # reicht" number and batt_ok/Modus would keep looking like a
+        # shortfall right up until a windowed device's cutoff, even while
+        # the real per-device logic already accounts for it and is fine.
+        data.h_battery = self._hours_until_depleted(
+            committed_segments, now_dt, data.avail_kwh, base_discharge_kw, available_surplus
+        )
+        data.batt_ok = data.h_battery > (data.h_to_solar + BATT_OK_BUFFER_H) and data.soc > data.min_soc

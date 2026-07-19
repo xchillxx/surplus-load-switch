@@ -176,6 +176,13 @@ in seconds, how much longer an active off-decision needs to hold before it's
 acted on — 0 while the device isn't currently counting down toward being
 turned off.
 
+"Akku reicht" ("battery would last") and the day/night mode sensor use this
+same time-window-aware projection too, not a flat avail_kwh / current
+discharge-rate division — a device with a known cutoff dropping out of the
+load shortens the effective drain rate for the rest of the projection, so
+this number reflects what the cascade actually expects to happen rather
+than looking like a shortfall right up until that cutoff.
+
 If any of the four core sensors (solar, load, SOC, battery power) reports
 `unavailable`/`unknown`, the coordinator skips that update cycle entirely
 instead of treating the missing value as 0 — a brief sensor hiccup on the
