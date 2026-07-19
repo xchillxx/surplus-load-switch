@@ -369,7 +369,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             if seg_hours <= 0:
                 continue
             active_power = sum(p for p, c in segments if c is None or c > seg_start)
-            uncovered = max(active_power - available_surplus, 0.0)
+            # available_surplus must be floored at 0 here — a negative
+            # surplus means the base load alone already exceeds solar,
+            # which is exactly what base_discharge_kw accounts for
+            # separately. Without the floor, a negative surplus would add
+            # its own magnitude on top of active_power instead of just
+            # failing to cover it, double-counting the base load's deficit
+            # once through base_discharge_kw and again here.
+            uncovered = max(active_power - max(available_surplus, 0.0), 0.0)
             energy += (base_discharge_kw + uncovered) * seg_hours
         return energy
 
@@ -405,7 +412,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             if seg_hours <= 0:
                 continue
             active_power = sum(p for p, c in segments if c is None or c > seg_start)
-            uncovered = max(active_power - available_surplus, 0.0)
+            uncovered = max(active_power - max(available_surplus, 0.0), 0.0)
             rate = base_discharge_kw + uncovered
             if rate <= 0:
                 continue  # this segment doesn't drain the battery at all
