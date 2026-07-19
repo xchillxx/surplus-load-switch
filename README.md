@@ -150,6 +150,14 @@ starts drawing power, and a lower-priority device sheds before a
 higher-priority one when there isn't enough margin for both, rather than
 every device sharing one global "is the battery discharging right now" flag.
 
+The projection is also time-window-aware: a committed device with a known
+cutoff — its own time window/schedule helper's next off-time, or inherited
+from a prerequisite it depends on — drops out of the projected load at that
+point instead of being assumed to draw power all the way to solar start.
+Otherwise a lower-priority device's battery projection stays needlessly
+pessimistic once a higher-priority windowed device (e.g. a pool pump that
+stops at 20:00 regardless) is due to switch off anyway.
+
 Each device also gets an "— Abschalt-Puffer" ("off buffer") sensor showing,
 in seconds, how much longer an active off-decision needs to hold before it's
 acted on — 0 while the device isn't currently counting down toward being

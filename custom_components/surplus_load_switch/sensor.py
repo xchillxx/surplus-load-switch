@@ -258,6 +258,7 @@ class PVDevicePowerSensor(_PVSensorBase):
             "laufzeit_heute_h": round(diag.runtime_hours_today, 2),
             "mindest_laufzeit_erzwungen": diag.force_runtime,
             "voraussetzung_erfullt": diag.dependency_met,
+            "naechster_cutoff": diag.effective_cutoff,
         }
 
     @property

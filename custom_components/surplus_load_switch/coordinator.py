@@ -85,6 +85,7 @@ class DeviceDiagnostics:
     on_counter: int = 0
     runtime_hours_today: float = 0.0
     force_runtime: bool = False
+    effective_cutoff: str | None = None
 
 
 @dataclass
@@ -254,6 +255,103 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             return start_t <= now_t < end_t
         return now_t >= start_t or now_t < end_t  # wraps past midnight
 
+    def _effective_cutoff(
+        self,
+        dev: dict,
+        now: datetime,
+        devices_by_id: dict[str, dict],
+        _visited: frozenset[str] | None = None,
+    ) -> datetime | None:
+        """The next known moment this device's power draw will drop to
+        zero, or None if there's no way to know (it might keep drawing all
+        the way to the projection horizon).
+
+        Three independent sources, the earliest of which wins since any
+        one of them alone forces the device off:
+        - A schedule.* helper's own `next_event` attribute while the
+          schedule is currently "on" — next_event is then necessarily the
+          moment it turns off.
+        - A simple window_end time (next occurrence from now, including
+          past-midnight wraparound).
+        - Inherited from a prerequisite device's own cutoff, if this
+          device depends on one — it gets forced off the instant its
+          prerequisite does, regardless of its own window/schedule.
+        """
+        _visited = _visited or frozenset()
+        device_id = dev.get("_id")
+        if device_id in _visited:
+            return None  # guards against a misconfigured dependency cycle
+        _visited = _visited | {device_id}
+
+        candidates: list[datetime] = []
+
+        schedule_entity = dev.get(CONF_DEVICE_SCHEDULE_ENTITY)
+        if schedule_entity:
+            state = self.hass.states.get(schedule_entity)
+            if state is not None and state.state == "on":
+                next_event_str = state.attributes.get("next_event")
+                next_event = dt_util.parse_datetime(next_event_str) if next_event_str else None
+                if next_event is not None:
+                    candidates.append(dt_util.as_utc(next_event))
+        else:
+            window_end_str = dev.get(CONF_DEVICE_WINDOW_END)
+            end_t = dt_util.parse_time(window_end_str) if window_end_str else None
+            if end_t is not None:
+                candidate = dt_util.now().replace(
+                    hour=end_t.hour, minute=end_t.minute, second=0, microsecond=0
+                )
+                candidate_utc = dt_util.as_utc(candidate)
+                if candidate_utc <= now:
+                    candidate_utc += timedelta(days=1)
+                candidates.append(candidate_utc)
+
+        depends_on_id = dev.get(CONF_DEVICE_DEPENDS_ON)
+        if depends_on_id:
+            prereq = devices_by_id.get(depends_on_id)
+            if prereq is not None:
+                prereq_cutoff = self._effective_cutoff(prereq, now, devices_by_id, _visited)
+                if prereq_cutoff is not None:
+                    candidates.append(prereq_cutoff)
+
+        return min(candidates) if candidates else None
+
+    @staticmethod
+    def _project_energy_kwh(
+        segments: list[tuple[float, datetime | None]],
+        now: datetime,
+        horizon_end: datetime,
+        base_discharge_kw: float,
+        available_surplus: float,
+    ) -> float:
+        """Projected battery energy (kWh) drawn between now and
+        horizon_end, given a set of committed devices that each draw
+        constant power until their own known cutoff (or indefinitely, if
+        cutoff is None).
+
+        This is what makes the overnight projection aware of time windows
+        and schedules: a device with a known cutoff drops out of the load
+        at that point instead of being assumed to keep drawing all the way
+        to horizon_end, which would otherwise make lower-priority devices'
+        projections needlessly pessimistic once a higher-priority
+        windowed device is due to stop anyway. With no cutoffs at all this
+        reduces to exactly the old single constant-rate calculation.
+        """
+        if horizon_end <= now:
+            return 0.0
+
+        boundaries = sorted({c for _, c in segments if c is not None and now < c < horizon_end})
+        boundaries = [now, *boundaries, horizon_end]
+
+        energy = 0.0
+        for seg_start, seg_end in zip(boundaries, boundaries[1:]):
+            seg_hours = (seg_end - seg_start).total_seconds() / 3600.0
+            if seg_hours <= 0:
+                continue
+            active_power = sum(p for p, c in segments if c is None or c > seg_start)
+            uncovered = max(active_power - available_surplus, 0.0)
+            energy += (base_discharge_kw + uncovered) * seg_hours
+        return energy
+
     @staticmethod
     def _required_off_cycles(data: CoordinatorData) -> int:
         """More battery margin beyond what's needed until solar resumes ->
@@ -355,6 +453,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         it doesn't count as "unavoidable base load" for our devices.
         """
         all_devices = self.devices
+        devices_by_id = {d["_id"]: d for d in all_devices}
         wallbox_devices = [d for d in all_devices if d.get(CONF_DEVICE_IS_WALLBOX, False)]
         candidate_devices = [d for d in all_devices if not d.get(CONF_DEVICE_IS_WALLBOX, False)]
 
@@ -402,6 +501,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         device_states: dict[str, bool] = {}
         device_diagnostics: dict[str, DeviceDiagnostics] = {}
         cumulative_committed = 0.0
+        committed_segments: list[tuple[float, datetime | None]] = []
+        now_dt = dt_util.utcnow()
+        horizon_end = now_dt + timedelta(hours=data.h_to_solar + BATT_OK_BUFFER_H)
 
         for dev in candidate_devices:
             device_id = dev["_id"]
@@ -501,16 +603,21 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # decision back and forth every few minutes; (2) every device
             # shared the same flag, so when it flipped, all of them turned
             # off together instead of shedding lowest-priority load first.
-            projected_committed = cumulative_committed + predicted_power
-            uncovered_by_surplus = max(projected_committed - available_surplus, 0.0)
-            projected_discharge = base_discharge_kw + uncovered_by_surplus
-            projected_h_battery = (
-                data.avail_kwh / projected_discharge if projected_discharge > 0.05 else 999.0
+            #
+            # The projection is also time-window-aware: a committed device
+            # with a known cutoff (its own schedule/window, or inherited
+            # from a prerequisite it depends on) drops out of the load at
+            # that point instead of being assumed to draw power all the way
+            # to solar start — otherwise a lower-priority device's
+            # projection stays needlessly pessimistic after a
+            # higher-priority windowed device is due to stop anyway.
+            own_cutoff = self._effective_cutoff(dev, now_dt, devices_by_id)
+            diag.effective_cutoff = own_cutoff.isoformat() if own_cutoff else None
+            projected_segments = [*committed_segments, (predicted_power, own_cutoff)]
+            energy_needed_kwh = self._project_energy_kwh(
+                projected_segments, now_dt, horizon_end, base_discharge_kw, available_surplus
             )
-            battery_would_last = (
-                projected_h_battery > (data.h_to_solar + BATT_OK_BUFFER_H)
-                and data.soc > data.min_soc
-            )
+            battery_would_last = data.avail_kwh > energy_needed_kwh and data.soc > data.min_soc
             required_off_cycles = self._required_off_cycles(data)
             diag.required_off_cycles = required_off_cycles
 
@@ -526,9 +633,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             )
 
             if should_on:
-                # Reserve this device's predicted share so lower-priority
-                # devices only see what's genuinely left over.
+                # Reserve this device's predicted share (and its cutoff, if
+                # any) so lower-priority devices only see what's genuinely
+                # left over, and only for as long as this device actually
+                # keeps drawing it.
                 cumulative_committed += predicted_power
+                committed_segments.append((predicted_power, own_cutoff))
 
             if should_on and not is_on:
                 tracker.on_counter += 1
