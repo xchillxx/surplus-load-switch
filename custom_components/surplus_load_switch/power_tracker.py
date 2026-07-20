@@ -1,4 +1,4 @@
-"""Tracks measured power draw per device over a rolling 7-day window.
+"""Tracks measured power draw per device over a rolling active-runtime window.
 
 Samples are taken once per coordinator cycle while the device is switched ON.
 This gives a realistic average consumption (e.g. a miner that throttles under
@@ -8,7 +8,6 @@ entered once during setup.
 from __future__ import annotations
 
 from collections import deque
-from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -16,14 +15,22 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     MAX_SAMPLES_PER_DEVICE,
-    POWER_HISTORY_WINDOW_DAYS,
     POWER_STORE_SAVE_DELAY,
     STORAGE_VERSION,
 )
 
 
 class DevicePowerTracker:
-    """Rolling 7-day power sample buffer for a single managed device."""
+    """Rolling power sample buffer for a single managed device, covering the
+    last MAX_SAMPLES_PER_DEVICE samples of *active* runtime (see const.py) —
+    not a calendar-time window. Samples are only appended while the device
+    is on, so the deque's own maxlen eviction is the entire windowing
+    mechanism: an idle device (e.g. a pool heat pump sitting unused through
+    several rainy days) simply isn't touched, and its existing samples stay
+    valid until it runs again, rather than aging out on the calendar and
+    forcing a fallback to the configured estimate right when they're next
+    needed.
+    """
 
     def __init__(self, hass: HomeAssistant, entry_id: str, device_key: str) -> None:
         self._store: Store = Store(
@@ -35,22 +42,14 @@ class DevicePowerTracker:
     async def async_load(self) -> None:
         data = await self._store.async_load()
         if data and "samples" in data:
+            # Constructing with maxlen already trims any stored surplus
+            # (e.g. from a smaller MAX_SAMPLES_PER_DEVICE in a previous
+            # version) down to the current window on load.
             self._samples = deque(data["samples"], maxlen=MAX_SAMPLES_PER_DEVICE)
-        self._prune()
 
     def add_sample(self, power_kw: float) -> None:
         self._samples.append([dt_util.utcnow().isoformat(), power_kw])
-        self._prune()
         self._store.async_delay_save(self._data_to_save, POWER_STORE_SAVE_DELAY)
-
-    def _prune(self) -> None:
-        cutoff = dt_util.utcnow() - timedelta(days=POWER_HISTORY_WINDOW_DAYS)
-        while self._samples:
-            ts = dt_util.parse_datetime(self._samples[0][0])
-            if ts is not None and ts < cutoff:
-                self._samples.popleft()
-            else:
-                break
 
     def _data_to_save(self) -> dict:
         return {"samples": list(self._samples)}

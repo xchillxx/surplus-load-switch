@@ -26,12 +26,13 @@ cloud passes over or another appliance briefly kicks in.
   priority device gets first claim on available surplus, the next only sees
   what's left over.
 - **Automatic power measurement** — optionally link a power sensor per
-  device. The integration learns its real average consumption over a
-  rolling 3-day window (while the device is on) and uses that instead of a
-  static estimate once enough data exists — short enough to track
-  weather-dependent draw (e.g. a heat pump pulling more current on hot
-  days) without needing most of a week before it reflects current
-  conditions.
+  device. The integration learns its real average consumption over the
+  last 24 hours of *active* runtime — not 24 calendar hours — and uses that
+  instead of a static estimate once enough data exists. Tracking active
+  runtime rather than calendar time means a device that goes idle for a
+  few days (e.g. a pool heat pump during a rainy stretch) doesn't lose its
+  history and fall back to the static estimate right when it starts running
+  again; it just keeps the last real samples until fresh ones replace them.
 - **Battery-aware overnight logic** — devices stay on overnight if the
   battery has enough charge to last until solar production resumes the next
   morning (based on sunrise + a monthly offset, since raw sunrise isn't
@@ -145,7 +146,7 @@ should_on  = remaining_surplus > device_power + 0.2 kW   OR   battery_would_last
 should_off = remaining_surplus < device_power - 0.2 kW   AND  NOT battery_would_last
 ```
 
-`device_power` is the measured 3-day average (once ≥20 samples exist) or the
+`device_power` is the measured 24h-active-runtime average (once ≥20 samples exist) or the
 configured estimate. An ON decision must hold for 2 minutes before it's acted
 on. An OFF decision's required hold time scales from 3 minutes (no battery
 margin to spare — react fast) up to 12 minutes (4h+ margin — likely a

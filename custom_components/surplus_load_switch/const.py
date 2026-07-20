@@ -71,15 +71,16 @@ DEFAULT_SOLAR_OFFSETS = [3.5, 3.0, 2.5, 2.0, 2.0, 2.2, 2.2, 2.0, 2.5, 3.0, 3.5, 
 
 # --- Power measurement (rolling average while device is ON) ---
 STORAGE_VERSION = 1
-# 3 days: short enough to track weather-dependent draw (e.g. a heat pump
-# pulling more current on hot days) without needing 7 days of history before
-# it reflects current conditions.
-POWER_HISTORY_WINDOW_DAYS = 3
-# Samples are only taken while a device is ON, once per update cycle (30s).
-# 7 days of continuous ON time would be 20160 samples; cap generously (the
-# window itself is enforced by POWER_HISTORY_WINDOW_DAYS/_prune(), this is
-# just a hard ceiling on buffer size).
-MAX_SAMPLES_PER_DEVICE = 21000
+# The window is defined by *active* (ON) runtime, not wall-clock days — a
+# calendar-day cutoff would empty out during any idle stretch longer than
+# the window (e.g. several rainy days with a weather-dependent device like
+# a pool heat pump never running), discarding perfectly good historical
+# data right before it's needed again once the device runs. 24h of active
+# runtime instead adapts to however many calendar days that actually takes
+# — samples simply aren't touched while the device is off, since they're
+# only appended (and the oldest evicted) while it's on.
+POWER_HISTORY_ACTIVE_HOURS = 24
+MAX_SAMPLES_PER_DEVICE = int(POWER_HISTORY_ACTIVE_HOURS * 3600 / UPDATE_INTERVAL_SECONDS)  # 2880
 # Minimum samples before trusting the measured average over the configured estimate
 # (20 samples × 30s = 10 minutes of runtime)
 MIN_SAMPLES_FOR_MEASURED_AVG = 20
