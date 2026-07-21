@@ -16,7 +16,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = PVSurplusCoordinator(hass, config, entry.entry_id)
     await coordinator.async_setup_power_trackers()
-    await coordinator.async_config_entry_first_refresh()
+    # Deliberately async_refresh() rather than async_config_entry_first_refresh():
+    # the latter raises ConfigEntryNotReady if the very first data fetch fails,
+    # which puts the *entire* integration into a failed "will retry later" state
+    # with growing backoff — not just this one cycle, and not self-healing on
+    # the coordinator's own 30s schedule the way every other transient sensor
+    # blip does. A core sensor (including our own newly-added template sensors,
+    # which need a moment to register) happening to be momentarily unavailable
+    # right as this integration reloads (e.g. after a config change) would
+    # otherwise strand every entity as unavailable until a manual restart forces
+    # an immediate retry — as opposed to just waiting ~30s for the next cycle.
+    await coordinator.async_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
