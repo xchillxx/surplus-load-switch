@@ -147,14 +147,24 @@ should_off = remaining_surplus < device_power - 0.2 kW   AND  NOT battery_would_
 ```
 
 `device_power` is the measured 24h-active-runtime average (once ≥20 samples exist) or the
-configured estimate. An ON decision must hold for 2 minutes before it's acted
-on. An OFF decision's required hold time scales from 3 minutes (no battery
-margin to spare — react fast) up to 12 minutes (4h+ margin — likely a
-transient spike, safe to wait it out), then shortens further by 1 minute per
-priority step below the highest (down to a 1-minute floor) — so if several
-devices cross their off-threshold in the same cycle (e.g. solar drops off a
-cliff at sunset), the lowest-priority one finishes its hold and switches off
-first instead of everything dropping out together.
+configured estimate. No switching decision fires off a brief few-minute
+fluctuation: an ON decision must hold for 10 minutes before it's acted on,
+and an OFF decision's required hold time scales from 10 minutes (no battery
+margin to spare — react as fast as the floor allows) up to 20 minutes (4h+
+margin — likely a transient spike, safe to wait it out), then shortens
+further by 1 minute per priority step below the highest, never below the
+10-minute floor — so if several devices cross their off-threshold in the
+same cycle (e.g. solar drops off a cliff at sunset), the lowest-priority one
+still finishes its hold and switches off first, just not any faster than 10
+minutes.
+
+During actual daylight (sun above the horizon), the battery projection also
+caps its look-ahead at a short fixed horizon instead of "hours until solar
+resumes" — once today's calibrated solar-start threshold has already
+passed, that figure points at tomorrow's, which would otherwise make a
+passing cloud at noon look exactly like "no more sun for 23 hours" and
+justify shedding devices over a temporary dip. The full overnight horizon
+only applies once the sun has actually set.
 
 `battery_would_last` is evaluated per device, projecting forward instead of
 reading the *current* discharge trend — turning a device on doesn't make it

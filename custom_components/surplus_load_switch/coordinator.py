@@ -41,6 +41,7 @@ from .const import (
     CONF_SOC_SENSOR,
     CONF_SOLAR_OFFSETS,
     CONF_SOLAR_SENSOR,
+    DAYTIME_PROJECTION_HORIZON_H,
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
     DOMAIN,
@@ -111,7 +112,13 @@ class CoordinatorData:
     # by the time a listener reads coordinator.data, this and batt_ok always
     # reflect the same logic the switching decisions above just used.
     h_battery: float = 999.0
-    h_to_solar: float = 0.0
+    h_to_solar: float = 0.0  # raw — for display only, see effective_h_to_solar
+    sun_above_horizon: bool = False
+    # h_to_solar during real daytime (sun still up), capped to a short
+    # fixed horizon instead of "hours until tomorrow's threshold" — this
+    # is what battery-projection decisions actually use. See
+    # DAYTIME_PROJECTION_HORIZON_H in const.py.
+    effective_h_to_solar: float = 0.0
     solar_start: datetime | None = None
     batt_ok: bool = False
     min_soc: float = 20.0
@@ -457,7 +464,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         same cycle count and switch off simultaneously instead of shedding
         lowest-priority first.
         """
-        margin_h = max(min(data.h_battery, 999.0) - data.h_to_solar, 0.0)
+        margin_h = max(min(data.h_battery, 999.0) - data.effective_h_to_solar, 0.0)
         fraction = min(margin_h / MARGIN_FOR_MAX_PATIENCE_H, 1.0)
         extra = (STABLE_OFF_CYCLES_MAX - STABLE_OFF_CYCLES) * fraction
         base = round(STABLE_OFF_CYCLES + extra)
@@ -534,7 +541,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         now = dt_util.utcnow()
         h_to_solar = max((solar_start - now).total_seconds() / 3600.0, 0.0)
 
-        batt_ok = h_battery > (h_to_solar + BATT_OK_BUFFER_H) and soc > min_soc
+        # See DAYTIME_PROJECTION_HORIZON_H in const.py: h_to_solar points
+        # at tomorrow's threshold for the entire rest of today once this
+        # morning's has passed, which is a wildly pessimistic horizon for
+        # a battery projection while the sun is still actually up.
+        sun_state = self.hass.states.get("sun.sun")
+        sun_above_horizon = sun_state is not None and sun_state.state == "above_horizon"
+        effective_h_to_solar = DAYTIME_PROJECTION_HORIZON_H if sun_above_horizon else h_to_solar
+
+        batt_ok = h_battery > (effective_h_to_solar + BATT_OK_BUFFER_H) and soc > min_soc
 
         data = CoordinatorData(
             solar_kw=solar,
@@ -546,6 +561,8 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             avail_kwh=avail_kwh,
             h_battery=h_battery,
             h_to_solar=h_to_solar,
+            sun_above_horizon=sun_above_horizon,
+            effective_h_to_solar=effective_h_to_solar,
             solar_start=solar_start,
             batt_ok=batt_ok,
             min_soc=min_soc,
@@ -716,7 +733,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         cumulative_committed = 0.0
         committed_segments: list[tuple[float, datetime | None]] = []
         now_dt = dt_util.utcnow()
-        horizon_end = now_dt + timedelta(hours=data.h_to_solar + BATT_OK_BUFFER_H)
+        horizon_end = now_dt + timedelta(hours=data.effective_h_to_solar + BATT_OK_BUFFER_H)
 
         for priority_rank, dev in enumerate(candidate_devices):
             device_id = dev["_id"]
@@ -903,4 +920,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         data.h_battery = self._hours_until_depleted(
             committed_segments, now_dt, data.avail_kwh, base_discharge_kw, available_surplus
         )
-        data.batt_ok = data.h_battery > (data.h_to_solar + BATT_OK_BUFFER_H) and data.soc > data.min_soc
+        data.batt_ok = (
+            data.h_battery > (data.effective_h_to_solar + BATT_OK_BUFFER_H) and data.soc > data.min_soc
+        )

@@ -35,19 +35,44 @@ SURPLUS_ON_THRESHOLD = 0.2    # kW: turn on when surplus > this
 SURPLUS_OFF_THRESHOLD = -0.2  # kW: turn off when surplus < this
 BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
 
-# Stability: how many coordinator cycles (30s each) must condition hold
-STABLE_ON_CYCLES = 4   # 4 × 30s = 2 min before turning ON
-STABLE_OFF_CYCLES = 6   # 6 × 30s = 3 min — used when there's no battery margin to spare
-STABLE_OFF_CYCLES_MAX = 24  # 24 × 30s = 12 min — used when margin is comfortable
+# h_to_solar ("hours until solar_start") is the time until the *next*
+# calibrated morning threshold — once today's has already passed, that's
+# tomorrow's, roughly a full day away, even at high noon with a cloud
+# passing overhead. Using that as the battery-projection horizon made a
+# brief daytime dip look like "no more sun for 23 hours", badly
+# overweighting a small, temporary deficit and forcing devices off (and
+# with a short patience window too, since _required_off_cycles' margin
+# calculation is poisoned by the same inflated h_to_solar). Whenever the
+# sun is still above the horizon, the projection horizon and the
+# should-conserve-battery threshold use this short, fixed value instead
+# of h_to_solar — long enough to ride out a passing cloud, nowhere near
+# "assume no sun until tomorrow morning". h_to_solar itself is untouched
+# for display (the "Bis Solar-Start" sensor still honestly answers "how
+# long until tomorrow's threshold" once today's has passed).
+DAYTIME_PROJECTION_HORIZON_H = 1.0
+
+# Stability: how many coordinator cycles (30s each) must condition hold.
+# No switching action fires off a brief few-minute fluctuation — every
+# on/off decision needs at least 10 minutes of the condition holding
+# true, however low the priority or however tight the battery margin
+# looks. (The sensor-staleness correction elsewhere is a separate,
+# additional safeguard specifically for the cloud-polling-lag scenario,
+# not a substitute for this general floor.)
+STABLE_ON_CYCLES = 20   # 20 × 30s = 10 min before turning ON
+STABLE_OFF_CYCLES = 20   # 20 × 30s = 10 min minimum — used when there's no battery margin to spare
+STABLE_OFF_CYCLES_MAX = 40  # 40 × 30s = 20 min — used when margin is comfortable
 
 # Priority staggering: when several devices cross their off-threshold in the
 # same cycle (e.g. solar drops off a cliff at sunset), they'd otherwise all
 # finish their off-hold at the same cycle count and switch off together.
 # Each priority rank below the highest gets this many fewer cycles to wait,
 # down to OFF_CYCLES_FLOOR — so the lowest-priority device always sheds
-# first, even when the underlying trigger fires for everyone at once.
+# first, even when the underlying trigger fires for everyone at once. The
+# floor itself is still the 10-minute minimum above, not shorter — the
+# staggering only spreads out *when within that range* each priority
+# finishes waiting, it never drops any device below the general floor.
 STAGGER_CYCLES_PER_PRIORITY_STEP = 2  # 2 × 30s = 1 min less patience per rank
-OFF_CYCLES_FLOOR = 2  # 2 × 30s = 1 min minimum, however low the priority
+OFF_CYCLES_FLOOR = 20  # 20 × 30s = 10 min minimum, however low the priority
 
 # How long to keep using the pre-transition managed-power figure for
 # base_load AND battery-discharge attribution after a managed device's
