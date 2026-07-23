@@ -51,17 +51,21 @@ OFF_CYCLES_FLOOR = 2  # 2 × 30s = 1 min minimum, however low the priority
 
 # How long to keep using the pre-transition managed-power figure for
 # base_load AND battery-discharge attribution after a managed device's
-# on/off state changes — covers cloud-polled sensors (e.g. FusionSolarPlus,
-# observed ~5 min lag) whose readings don't reflect the change
-# immediately. Confirmed this applies to both the house-load sensor and
-# the battery charge/discharge sensor (same cloud source, same lag), so
-# this single grace period gates both corrections consistently. A fixed
-# timer rather than watching for a sensor to visibly catch up, since even
-# a freshly-timestamped reading from these sensors can still carry a
-# stale value (their own polling cadence, not just whether HA has seen a
-# new state) — kept close to the observed lag so the correction doesn't
-# overstay once the sensors have genuinely caught up.
-LOAD_SENSOR_STALENESS_GRACE = timedelta(minutes=6)
+# on/off state changes, at most — covers cloud-polled sensors (e.g.
+# FusionSolarPlus, observed ~5 min lag) whose readings don't reflect the
+# change immediately. This is a safety cap, not the primary release
+# condition: normally the freeze releases as soon as both the load and
+# discharge sensors have each produced STALENESS_MIN_REFRESHES genuinely
+# new readings (real evidence they've caught up — see
+# _evaluate_devices), since a fixed timer alone was observed releasing
+# right as a sensor was mid-refresh, before its value had actually
+# settled. This cap only matters if a sensor stalls and never reaches
+# that count.
+LOAD_SENSOR_STALENESS_GRACE = timedelta(minutes=10)
+# How many genuinely new readings the load and discharge sensors must
+# each produce after a managed device's composition changes before the
+# staleness correction trusts them again.
+STALENESS_MIN_REFRESHES = 2
 
 # "Margin" = h_battery - h_to_solar, i.e. how many hours of battery buffer
 # exist beyond what's strictly needed until solar resumes. When margin is

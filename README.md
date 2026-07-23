@@ -189,18 +189,21 @@ load shortens the effective drain rate for the rest of the projection, so
 this number reflects what the cascade actually expects to happen rather
 than looking like a shortfall right up until that cutoff.
 
-If your house-load sensor comes from a cloud-polled integration with its
-own update lag (a few minutes isn't unusual), a device turning off can
-briefly look like a spike in unmanaged base load — the sensor still
-reports the pre-transition total, and since the device you just turned
-off is no longer subtracted from it, that lingering reading gets
-misattributed to "everything else". This would otherwise show up as a
-sudden, unexplained battery-margin drop and can shed a lower-priority
-device right as a higher-priority windowed device's cutoff should have
-made things easier, not harder. For a few minutes after any managed
-device's on/off state changes, the pre-transition power figure is used
-instead of the fresh one for this calculation, since that's what the
-still-lagging total actually corresponds to.
+If your house-load and battery-discharge sensors come from a
+cloud-polled integration with its own update lag (a few minutes isn't
+unusual), a device turning off can briefly look like a spike in
+unmanaged base load and discharge — the sensors still report the
+pre-transition totals, and since the device you just turned off is no
+longer subtracted from them, that lingering reading gets misattributed
+to "everything else". This would otherwise show up as a sudden,
+unexplained battery-margin drop and can shed a lower-priority device
+right as a higher-priority windowed device's cutoff should have made
+things easier, not harder. After any managed device's on/off state
+changes, the pre-transition power figure is used instead of the fresh
+one for this calculation, until both sensors have each produced at
+least 2 genuinely new readings since the change — real evidence they've
+caught up, rather than guessing a fixed delay — capped at 10 minutes in
+case a sensor stalls and never reaches that count.
 
 If any of the four core sensors (solar, load, SOC, battery power) reports
 `unavailable`/`unknown`, the coordinator skips that update cycle entirely

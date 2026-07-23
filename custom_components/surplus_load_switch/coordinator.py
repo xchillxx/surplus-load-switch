@@ -53,6 +53,7 @@ from .const import (
     STABLE_OFF_CYCLES_MAX,
     STABLE_ON_CYCLES,
     STAGGER_CYCLES_PER_PRIORITY_STEP,
+    STALENESS_MIN_REFRESHES,
     SURPLUS_OFF_THRESHOLD,
     SURPLUS_ON_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
@@ -139,13 +140,24 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # detect a composition change and reset the discharge smoothing
         # window when one happens (see _evaluate_devices).
         self._last_managed_on: frozenset[str] = frozenset()
-        # Tracks the managed-device mix a still-unrefreshed load-sensor
+        # Tracks the managed-device mix a still-unrefreshed load/discharge
         # reading was last known to actually reflect, and the on/off
         # composition as of the previous cycle — see the staleness
-        # correction in _evaluate_devices.
+        # correction in _evaluate_devices. The freeze releases once both
+        # source sensors have each genuinely refreshed at least
+        # STALENESS_MIN_REFRESHES times since the transition (real
+        # evidence they've caught up), not just after a fixed delay —
+        # confirmed against real data that a fixed timer can release right
+        # as the sensor is mid-refresh, before its value has actually
+        # settled, capped by LOAD_SENSOR_STALENESS_GRACE so a stalled
+        # sensor doesn't freeze this indefinitely.
         self._last_managed_power_kw: float = 0.0
         self._stale_managed_power_kw: float | None = None
         self._stale_since: datetime | None = None
+        self._last_seen_load_kw: float | None = None
+        self._load_refresh_count: int = 0
+        self._last_seen_discharge_kw: float | None = None
+        self._discharge_refresh_count: int = 0
         self._calibrator = SolarOffsetCalibrator(hass, entry_id, config[CONF_SOLAR_SENSOR])
         self._last_offset_h = 0.0
         for dev in config.get(CONF_DEVICES, []):
@@ -593,45 +605,64 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         # Our own switch/climate states react within seconds of a
         # transition (window/schedule cutoff, dependency, surplus
-        # decision), but the house-load sensor can be a cloud-polled
-        # integration that only refreshes every few minutes (observed:
-        # ~5 min lag on FusionSolarPlus, and its own refreshes during that
-        # lag can still carry a stale-looking value — a fresh last_changed
-        # timestamp doesn't reliably mean the value itself has caught up,
-        # so that can't be used as the "has it recovered" signal). Right
-        # after a managed device turns off, load_kw can keep reporting the
-        # pre-transition total for several cycles — since managed_power_kw
-        # already reflects the device being off, subtracting it from that
-        # stale (still-higher) total misattributes the device's own
-        # lingering reading to "base load", spiking it and tanking
-        # available_surplus until the sensor genuinely catches up. This
+        # decision), but the house-load and battery-discharge sensors are
+        # a cloud-polled integration that only refreshes every few minutes
+        # (observed: ~5 min lag on FusionSolarPlus, confirmed on both). A
+        # fresh last_changed/value doesn't by itself prove the reading has
+        # settled into the post-transition reality either — this system
+        # has been observed producing a low-looking-but-still-transitional
+        # value right as it mid-refreshes. Right after a managed device
+        # turns off, subtracting the fresh (lower) managed_power_kw from a
+        # load/discharge reading that still reflects the pre-transition
+        # situation misattributes the device's own lingering draw to
+        # "base load"/"unavoidable discharge", spiking both and tanking
+        # available_surplus until the sensors genuinely catch up. This
         # happens every evening a windowed device (e.g. the pool pump)
         # hits its cutoff, not just occasionally.
         #
         # Keep using the managed-power figure from just before a
-        # composition change for a fixed grace period, instead of the
-        # current one, since that's what the still-displayed (possibly
-        # stale) total actually corresponds to.
+        # composition change until BOTH the load and discharge sensors
+        # have each produced at least STALENESS_MIN_REFRESHES genuinely
+        # new readings since — real evidence they've cycled past the
+        # transition, rather than guessing a fixed delay — capped by
+        # LOAD_SENSOR_STALENESS_GRACE in case a sensor stalls and never
+        # reaches that count.
         now = dt_util.utcnow()
 
         if managed_power_kw != self._last_managed_power_kw and self._stale_managed_power_kw is None:
             # Only capture a fresh freeze point if we're not already mid
-            # grace-period — a second device changing before the sensor
-            # has caught up with the first (e.g. the pool pump and its
+            # grace-period — a second device changing before the sensors
+            # have caught up with the first (e.g. the pool pump and its
             # dependent heat pump both hitting their cutoff within the
             # same minute) must not overwrite the original pre-cluster
-            # value with an intermediate one the sensor never actually
+            # value with an intermediate one the sensors never actually
             # reflected either.
             self._stale_managed_power_kw = self._last_managed_power_kw
             self._stale_since = now
+            self._last_seen_load_kw = data.load_kw
+            self._load_refresh_count = 0
+            self._last_seen_discharge_kw = data.discharge_kw
+            self._discharge_refresh_count = 0
 
         effective_managed_power_kw = managed_power_kw
         if self._stale_managed_power_kw is not None:
-            if now - self._stale_since < LOAD_SENSOR_STALENESS_GRACE:
-                effective_managed_power_kw = self._stale_managed_power_kw
-            else:
+            if data.load_kw != self._last_seen_load_kw:
+                self._load_refresh_count += 1
+                self._last_seen_load_kw = data.load_kw
+            if data.discharge_kw != self._last_seen_discharge_kw:
+                self._discharge_refresh_count += 1
+                self._last_seen_discharge_kw = data.discharge_kw
+
+            caught_up = (
+                self._load_refresh_count >= STALENESS_MIN_REFRESHES
+                and self._discharge_refresh_count >= STALENESS_MIN_REFRESHES
+            )
+            timed_out = now - self._stale_since >= LOAD_SENSOR_STALENESS_GRACE
+            if caught_up or timed_out:
                 self._stale_managed_power_kw = None
                 self._stale_since = None
+            else:
+                effective_managed_power_kw = self._stale_managed_power_kw
 
         self._last_managed_power_kw = managed_power_kw
 
