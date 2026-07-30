@@ -26,6 +26,7 @@ from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_DEVICES,
     CONF_DEVICE_DEPENDS_ON,
+    CONF_DEVICE_ENABLED,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
     CONF_DEVICE_NAME,
@@ -92,6 +93,7 @@ class DeviceDiagnostics:
     force_runtime: bool = False
     effective_cutoff: str | None = None
     should_be_on: bool = False
+    enabled: bool = True
 
 
 @dataclass
@@ -786,6 +788,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             depends_on_id = dev.get(CONF_DEVICE_DEPENDS_ON)
             dependency_met = depends_on_id is None or device_is_on.get(depends_on_id, False)
             diag.dependency_met = dependency_met
+
+            # A device can be disabled entirely via its "— Aktiviert" switch
+            # (e.g. going on vacation and wanting the boiler to just stay
+            # off) — treated the same as a hard window/dependency cutoff:
+            # forced off immediately, never reserved by the cascade. Config
+            # and historical power/runtime data are untouched, so the
+            # device picks up right where it left off once re-enabled.
+            device_enabled = dev.get(CONF_DEVICE_ENABLED, True)
+            diag.enabled = device_enabled
+
             device_diagnostics[device_id] = diag
 
             if not control_id:
@@ -805,13 +817,19 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # all". A device with the legacy off_only flag and no window
             # behaves like a window that's always closed, for backward
             # compatibility.
-            if in_window is False or (in_window is None and legacy_off_only) or not dependency_met:
+            if (
+                not device_enabled
+                or in_window is False
+                or (in_window is None and legacy_off_only)
+                or not dependency_met
+            ):
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
                 if is_on:
                     reason = (
-                        "its prerequisite device is off" if not dependency_met
+                        "it's been disabled" if not device_enabled
+                        else "its prerequisite device is off" if not dependency_met
                         else "outside its configured time window"
                     )
                     _LOGGER.info(

@@ -273,6 +273,7 @@ class PVDevicePowerSensor(_PVSensorBase):
             "naechster_cutoff": diag.effective_cutoff,
             "sollte_an_sein": diag.should_be_on,
             "korrekt_geschaltet": diag.is_on == diag.should_be_on,
+            "aktiviert": diag.enabled,
         }
 
     @property

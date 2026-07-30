@@ -8,11 +8,13 @@ from __future__ import annotations
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_DEVICES,
+    CONF_DEVICE_ENABLED,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_NAME,
     CONF_DEVICE_PRIORITY,
@@ -29,11 +31,13 @@ async def async_setup_entry(
 ) -> None:
     coordinator: PVSurplusCoordinator = hass.data[DOMAIN][entry.entry_id]
     devices = entry.data.get(CONF_DEVICES, [])
+    non_wallbox = [dev for dev in devices if not dev.get(CONF_DEVICE_IS_WALLBOX, False)]
     entities = [
         PVDeviceSwitch(coordinator, entry, dev)
-        for dev in devices
-        if not dev.get(CONF_DEVICE_IS_WALLBOX, False) and control_entity_id(dev)
+        for dev in non_wallbox
+        if control_entity_id(dev)
     ]
+    entities += [PVDeviceEnabledSwitch(coordinator, entry, dev) for dev in non_wallbox]
     async_add_entities(entities)
 
 
@@ -84,3 +88,66 @@ class PVDeviceSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await _control_turn_off(self.hass, self._device)
+
+
+class PVDeviceEnabledSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
+    """Enable/disable a device entirely. While disabled, the coordinator
+    forces it off immediately and never reserves cascade budget for it —
+    the same hard-cutoff treatment as being outside a time window — but
+    its configuration, historical power average, and daily-runtime data
+    are untouched, so it picks up right where it left off once
+    re-enabled. Meant for e.g. going on vacation and wanting a device to
+    just stay off without deleting its setup.
+
+    Reads/writes the config entry directly rather than coordinator.data,
+    since toggling it changes what the coordinator computes rather than
+    reflecting something the coordinator already computed."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:toggle-switch"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        coordinator: PVSurplusCoordinator,
+        entry: ConfigEntry,
+        device: dict,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._device_id = device["_id"]
+        name = device.get(CONF_DEVICE_NAME, self._device_id)
+        self._attr_name = f"{name} — Aktiviert"
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_enabled"
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._entry.entry_id)},
+            "name": "Surplus Load Switch",
+        }
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def is_on(self) -> bool:
+        devices = self._entry.data.get(CONF_DEVICES, [])
+        dev = next((d for d in devices if d.get("_id") == self._device_id), None)
+        return dev.get(CONF_DEVICE_ENABLED, True) if dev else True
+
+    async def _async_set_enabled(self, enabled: bool) -> None:
+        devices = self._entry.data.get(CONF_DEVICES, [])
+        new_devices = [
+            {**d, CONF_DEVICE_ENABLED: enabled} if d.get("_id") == self._device_id else d
+            for d in devices
+        ]
+        new_data = {**self._entry.data, CONF_DEVICES: new_devices}
+        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._async_set_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._async_set_enabled(False)

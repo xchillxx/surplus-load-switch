@@ -29,6 +29,11 @@ CONF_DEVICE_WINDOW_END = "window_end"
 CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes priority over window_start/end
 CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
 CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that must be ON first
+# Per-device "enabled" toggle — exposed as a live switch entity (switch.py),
+# not a config-flow field, since it's meant for a quick vacation-style
+# on/off rather than something you configure once at setup. Absent/True
+# means enabled; only ever written as False by that switch entity.
+CONF_DEVICE_ENABLED = "enabled"
 
 # Logic thresholds
 SURPLUS_ON_THRESHOLD = 0.2    # kW: turn on when surplus > this
