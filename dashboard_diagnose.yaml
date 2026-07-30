@@ -1,87 +1,146 @@
+# Surplus Load Switch — example diagnostics dashboard
+#
+# How to use this:
+# 1. Settings → Dashboards → Add Dashboard → "New dashboard from scratch",
+#    then edit it in YAML mode (top-right menu → "Edit in YAML") and paste
+#    the content of this file in — or add it as a new view on an existing
+#    dashboard the same way.
+# 2. This file has THREE example devices (Pumpe / Wärmepumpe / Miner) to
+#    match a typical priority-1/2/3 setup. Replace every entity_id marked
+#    "<-- replace" with your own — the easiest way to find them is
+#    Settings → Devices & Services → Entities → filter by "surplus_load_switch"
+#    (for this integration's own entities) or by your device's real name
+#    (for the switch/climate entity it controls).
+# 3. If you have more or fewer devices than three, copy/remove one whole
+#    device block (an "entities" card in the middle column + a "logbook"
+#    card in the right column + the corresponding lines in the Status
+#    markdown card) per device.
+# 4. Everything under "Live-Werte (global)" and the four bottom rows
+#    (Überschuss/Akku reicht/Bis Solar-Start/Verfügbare Akkukapazität/Modus/
+#    Mindest-SOC) uses this integration's own entity IDs, which are the
+#    same for every installation — no replacement needed there.
+
 title: Surplus Load Switch — Diagnose
 cards:
-  # ── Linke Spalte: Status, Miner, Live-Werte ─────────────
+  # ── Spalte 1: Status, Verlauf, globale Live-Werte ───────────────────────
   - type: vertical-stack
     cards:
       - type: markdown
-        title: Status
+        title: Status (nach Priorität)
         content: >-
-          {% set surplus = states('sensor.pv_surplus_manager_uberschuss') | float(0) %}
-          {% set h_bat = states('sensor.pv_surplus_manager_akku_reicht') | float(999) %}
-          {% set h_sol = states('sensor.pv_surplus_manager_bis_solar_start') | float(0) %}
-          {% set modus = states('sensor.pv_surplus_manager_modus') %}
-          {% set miner_on = is_state('switch.shelly_plug_m_gen3_2', 'on') %}
-          {% set batt_ok = h_bat > (h_sol + 0.5) %}
-          {% set should_run = surplus > 0.2 or batt_ok %}
-          {% if miner_on and should_run %}🟢 **Miner läuft korrekt**
-          {% elif not miner_on and not should_run %}🔴 **Miner aus — korrekt**
-          {% else %}⚠️ **Abweichung: Miner ist {{ 'AN' if miner_on else 'AUS' }}, sollte laut Logik {{ 'AN' if should_run else 'AUS' }} sein**
-          {% endif %}
+          {% set surplus = states('sensor.surplus_load_switch_uberschuss') | float(0) %}
+          {% set h_bat = states('sensor.surplus_load_switch_akku_reicht') | float(999) %}
+          {% set h_sol = states('sensor.surplus_load_switch_bis_solar_start') | float(0) %}
+          {% set modus = states('sensor.surplus_load_switch_modus') %}
+
+          {% set pumpe_on = is_state('switch.YOUR_PUMPE_SWITCH', 'on') %}
+          {% set pumpe_should = state_attr('sensor.surplus_load_switch_pumpe_o_leistung', 'sollte_an_sein') %}
+          {% if pumpe_on == pumpe_should %}{% if pumpe_on %}🟢 **Pumpe (Prio 1) läuft korrekt** {% else %}🔴 **Pumpe (Prio 1) aus — korrekt** {% endif %}{% else %}⚠️ **Pumpe (Prio 1) Abweichung: ist {{ 'AN' if pumpe_on else 'AUS' }}, sollte {{ 'AN' if pumpe_should else 'AUS' }} sein** {% endif %}
+
+          {% set wp_on = is_state('switch.YOUR_WAERMEPUMPE_SWITCH', 'on') %}
+          {% set wp_should = state_attr('sensor.surplus_load_switch_waermepumpe_o_leistung', 'sollte_an_sein') %}
+          {% if wp_on == wp_should %}{% if wp_on %}🟢 **Wärmepumpe (Prio 2) läuft korrekt** {% else %}🔴 **Wärmepumpe (Prio 2) aus — korrekt** {% endif %}{% else %}⚠️ **Wärmepumpe (Prio 2) Abweichung: ist {{ 'AN' if wp_on else 'AUS' }}, sollte {{ 'AN' if wp_should else 'AUS' }} sein** {% endif %}
+
+          {% set miner_on = is_state('switch.YOUR_MINER_SWITCH', 'on') %}
+          {% set miner_should = state_attr('sensor.surplus_load_switch_miner_o_leistung', 'sollte_an_sein') %}
+          {% if miner_on == miner_should %}{% if miner_on %}🟢 **Miner (Prio 3) läuft korrekt** {% else %}🔴 **Miner (Prio 3) aus — korrekt** {% endif %}{% else %}⚠️ **Miner (Prio 3) Abweichung: ist {{ 'AN' if miner_on else 'AUS' }}, sollte {{ 'AN' if miner_should else 'AUS' }} sein** {% endif %}
 
           {{ modus }} · Überschuss **{{ surplus | round(2) }} kW** · Akku reicht **{{ h_bat | round(1) if h_bat < 999 else '∞' }} h** vs. bis Solar **{{ h_sol | round(1) }} h**
 
-      - type: entities
-        title: Miner
-        entities:
-          - entity: switch.shelly_plug_m_gen3_2
-            name: Miner (echter Switch)
-          - entity: switch.technik_abstellraum_pv_surplus_manager_miner_prio_1_2
-            name: Miner (Integration-Ansicht)
-          - entity: sensor.technik_abstellraum_pv_surplus_manager_miner_o_leistung_2
-            name: Ø Leistung (gemessen/geschätzt)
-
-      - type: entities
-        title: Live-Werte
-        entities:
-          - entity: sensor.fsp_ne_195099276_flow_solar_power
-            name: Solar
-          - entity: sensor.fsp_ne_195099276_flow_load_power
-            name: Hausverbrauch (gesamt)
-          - entity: sensor.fsp_ne_195107282_state_of_charge
-            name: Akku SOC
-          - entity: sensor.fsp_ne_195107282_charge_discharge_power
-            name: Akku Lade(+)/Entlade(-)
-          - entity: sensor.fsp_ne_195104398_output_power
-            name: Wallbox Leistung
-          - type: divider
-          - entity: sensor.pv_surplus_manager_uberschuss
-            name: "→ Überschuss (nach Wallbox-Abzug)"
-          - entity: sensor.pv_surplus_manager_akku_reicht
-            name: "→ Akku reicht"
-          - entity: sensor.pv_surplus_manager_bis_solar_start
-            name: "→ Bis Solar-Start"
-          - entity: sensor.pv_surplus_manager_verfugbare_akkukapazitat
-            name: "→ Verfügbare Akkukapazität"
-          - entity: sensor.pv_surplus_manager_modus
-            name: "→ Modus"
-          - entity: number.pv_surplus_manager_mindest_soc
-            name: Mindest-SOC (Einstellung)
-
-  # ── Rechte Spalte: Verläufe + Logbuch ────────────────────
-  - type: vertical-stack
-    cards:
       - type: history-graph
-        title: SOC + Solar + Miner (24h)
         hours_to_show: 24
         entities:
-          - entity: sensor.fsp_ne_195107282_state_of_charge
-            name: SOC %
-          - entity: sensor.fsp_ne_195099276_flow_solar_power
-            name: Solar kW
-          - entity: switch.shelly_plug_m_gen3_2
+          - entity: switch.YOUR_PUMPE_SWITCH   # <-- replace
+            name: Pumpe
+          - entity: switch.YOUR_WAERMEPUMPE_SWITCH   # <-- replace
+            name: Wärmepumpe
+          - entity: switch.YOUR_MINER_SWITCH   # <-- replace
             name: Miner
 
-      - type: history-graph
-        title: Überschuss + Wallbox-Leistung (24h)
-        hours_to_show: 24
+      - type: entities
+        title: Live-Werte (global)
         entities:
-          - entity: sensor.pv_surplus_manager_uberschuss
-            name: Überschuss kW
-          - entity: sensor.fsp_ne_195104398_output_power
-            name: Wallbox kW
+          - entity: sensor.YOUR_SOLAR_SENSOR   # <-- replace: your configured solar_sensor
+            name: Solar
+          - entity: sensor.YOUR_LOAD_SENSOR   # <-- replace: your configured load_sensor
+            name: Hausverbrauch (gesamt)
+          - entity: sensor.YOUR_SOC_SENSOR   # <-- replace: your configured soc_sensor
+            name: Akku SOC
+          - entity: sensor.YOUR_BATT_SENSOR   # <-- replace: your configured batt_sensor
+            name: Akku Lade(+)/Entlade(-)
+          - type: divider
+          - entity: sensor.surplus_load_switch_uberschuss
+            name: "→ Überschuss (exkl. Wallbox + laufende Geräte)"
+          - entity: sensor.surplus_load_switch_akku_reicht
+            name: "→ Akku reicht"
+          - entity: sensor.surplus_load_switch_bis_solar_start
+            name: "→ Bis Solar-Start"
+          - entity: sensor.surplus_load_switch_verfugbare_akkukapazitat
+            name: "→ Verfügbare Akkukapazität"
+          - entity: sensor.surplus_load_switch_modus
+            name: "→ Modus"
+          - entity: number.surplus_load_switch_mindest_soc
+            name: Mindest-SOC (Einstellung)
 
+  # ── Spalte 2: ein Kärtchen pro Gerät ─────────────────────────────────────
+  - type: vertical-stack
+    cards:
+      - type: entities
+        title: Pumpe (Prio 1)
+        entities:
+          - entity: switch.YOUR_PUMPE_SWITCH   # <-- replace: the real switch this device controls
+            name: Pumpe (echter Switch)
+          - entity: switch.surplus_load_switch_pumpe_aktiviert
+            name: Aktiviert
+          - entity: sensor.surplus_load_switch_pumpe_o_leistung
+            name: Ø Leistung (gemessen/geschätzt)
+          - type: divider
+          - entity: schedule.YOUR_SCHEDULE_HELPER   # <-- replace, or delete this row if no schedule is set
+            name: Zeitfenster-Helfer
+          - entity: sensor.surplus_load_switch_pumpe_abschalt_puffer
+            name: Abschalt-Countdown
+
+      - type: entities
+        title: Wärmepumpe (Prio 2)
+        entities:
+          - entity: climate.YOUR_WAERMEPUMPE_CLIMATE   # <-- replace: only if this is a climate device, else use a switch entity
+            name: Wärmepumpe (echte Entität)
+          - entity: switch.surplus_load_switch_waermepumpe_aktiviert
+            name: Aktiviert
+          - entity: sensor.surplus_load_switch_waermepumpe_o_leistung
+            name: Ø Leistung (gemessen/geschätzt)
+          - type: divider
+          - entity: sensor.surplus_load_switch_waermepumpe_abschalt_puffer
+            name: Abschalt-Countdown
+
+      - type: entities
+        title: Miner (Prio 3)
+        entities:
+          - entity: switch.YOUR_MINER_SWITCH   # <-- replace
+            name: Miner (echter Switch)
+          - entity: switch.surplus_load_switch_miner_aktiviert
+            name: Aktiviert
+          - entity: sensor.surplus_load_switch_miner_o_leistung
+            name: Ø Leistung (gemessen/geschätzt)
+          - type: divider
+          - entity: sensor.surplus_load_switch_miner_abschalt_puffer
+            name: Abschalt-Countdown
+
+  # ── Spalte 3: Schaltvorgänge-Logbücher ───────────────────────────────────
+  - type: vertical-stack
+    cards:
       - type: logbook
-        title: Miner-Schaltvorgänge (Begründung)
+        title: Pumpe Schaltvorgänge (24h)
         hours_to_show: 24
         entities:
-          - switch.shelly_plug_m_gen3_2
+          - switch.YOUR_PUMPE_SWITCH   # <-- replace
+      - type: logbook
+        title: Wärmepumpe Schaltvorgänge (24h)
+        hours_to_show: 24
+        entities:
+          - climate.YOUR_WAERMEPUMPE_CLIMATE   # <-- replace
+      - type: logbook
+        title: Miner Schaltvorgänge (24h)
+        hours_to_show: 24
+        entities:
+          - switch.YOUR_MINER_SWITCH   # <-- replace
