@@ -94,6 +94,7 @@ class DeviceDiagnostics:
     effective_cutoff: str | None = None
     should_be_on: bool = False
     enabled: bool = True
+    priority: float = 99.0
 
 
 @dataclass
@@ -760,6 +761,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
             predicted_power, diag = self._predicted_power_kw(dev)
             diag.is_on = is_on
+            diag.priority = dev.get(CONF_DEVICE_PRIORITY, 99)
             diag.runtime_hours_today = runtime_hours_today
             in_window = self._in_window(dev)
             legacy_off_only = dev.get(CONF_DEVICE_OFF_ONLY, False)
