@@ -325,6 +325,7 @@ class PVDeviceOffTimerSensor(_PVSensorBase):
         return {
             "zyklen_gehalten": diag.off_counter,
             "benoetigte_zyklen": diag.required_off_cycles,
+            "prioritaet": diag.priority,
         }
 
     @property

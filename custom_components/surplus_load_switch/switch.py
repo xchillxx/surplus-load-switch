@@ -132,10 +132,19 @@ class PVDeviceEnabledSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntit
         return True
 
     @property
-    def is_on(self) -> bool:
+    def _device(self) -> dict | None:
         devices = self._entry.data.get(CONF_DEVICES, [])
-        dev = next((d for d in devices if d.get("_id") == self._device_id), None)
+        return next((d for d in devices if d.get("_id") == self._device_id), None)
+
+    @property
+    def is_on(self) -> bool:
+        dev = self._device
         return dev.get(CONF_DEVICE_ENABLED, True) if dev else True
+
+    @property
+    def extra_state_attributes(self):
+        dev = self._device
+        return {"prioritaet": dev.get(CONF_DEVICE_PRIORITY, 99)} if dev else {}
 
     async def _async_set_enabled(self, enabled: bool) -> None:
         devices = self._entry.data.get(CONF_DEVICES, [])

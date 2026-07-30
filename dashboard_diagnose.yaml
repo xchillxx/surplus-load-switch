@@ -82,7 +82,9 @@ cards:
             - entity_id: "sensor.*surplus_load_switch*_abschalt_puffer"
             - entity_id: "switch.*surplus_load_switch*_aktiviert"
         sort:
-          method: entity_id
+          method: attribute
+          attribute: prioritaet
+          numeric: true
 
   # ── Spalte 3: Schaltvorgänge aller Geräte, ein gemeinsames Logbuch ───────
   - type: vertical-stack
