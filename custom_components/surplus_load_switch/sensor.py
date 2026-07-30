@@ -275,6 +275,7 @@ class PVDevicePowerSensor(_PVSensorBase):
             "korrekt_geschaltet": diag.is_on == diag.should_be_on,
             "aktiviert": diag.enabled,
             "prioritaet": diag.priority,
+            "ist_an": diag.is_on,
         }
 
     @property
