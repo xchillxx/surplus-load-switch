@@ -10,6 +10,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CLIMATE_HVAC_MODE_OPTIONS,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATT_SENSOR,
     CONF_DEVICES,
@@ -33,8 +34,6 @@ from .const import (
     CONF_SOLAR_SENSOR,
     DOMAIN,
 )
-
-CLIMATE_HVAC_MODE_OPTIONS = ["heat", "cool", "auto", "heat_cool", "dry", "fan_only"]
 
 
 def _default(d: dict, key: str) -> dict:

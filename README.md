@@ -138,6 +138,20 @@ Copy `custom_components/surplus_load_switch` into your `config/custom_components
 Priority determines serving order (1 = highest). Use "Edit device" to change
 priority or other values later, and "Remove device" to delete one.
 
+### Adjusting settings afterwards without the Configure dialog
+
+Adding a new device still goes through the Configure menu above (it's a
+guided, multi-step form — better suited to that than a dashboard tile), but
+changing an existing device's settings afterwards doesn't have to. Every
+device also gets a set of live entities for its everyday-tunable values —
+priority, estimated power, minimum daily runtime, which switch/climate
+entity it controls, its power sensor, its schedule helper, and its
+dependency — plus global ones for the four core sensors and battery
+capacity. Add these to any dashboard (or use the self-adapting example
+dashboard below, which already includes them) and edit them the same way
+as any other number/select entity, including through automations or
+scripts if you want to change something on a schedule.
+
 ## Example dashboard
 
 [`dashboard_diagnose.yaml`](dashboard_diagnose.yaml) is a diagnostics

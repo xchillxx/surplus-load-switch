@@ -1,7 +1,13 @@
 from datetime import timedelta
 
 DOMAIN = "surplus_load_switch"
-PLATFORMS = ["sensor", "number", "switch"]
+PLATFORMS = ["sensor", "number", "switch", "select"]
+
+CLIMATE_HVAC_MODE_OPTIONS = ["heat", "cool", "auto", "heat_cool", "dry", "fan_only"]
+# Sentinel shown in select entities for an optional field with no value
+# selected — never itself written to config; async_select_option maps it
+# back to None/removing the key.
+SELECT_NONE = "— keine/keiner —"
 
 # Config keys — global
 CONF_SOLAR_SENSOR = "solar_sensor"
