@@ -140,18 +140,19 @@ priority or other values later, and "Remove device" to delete one.
 
 ## Example dashboard
 
-[`dashboard_diagnose.yaml`](dashboard_diagnose.yaml) is a ready-to-adapt
-Lovelace view showing the same kind of diagnostics dashboard as the
-screenshot above: a status card comparing what each device is actually
-doing against what the cascade currently wants, a 24h history graph, all
-of this integration's own global sensors, one card per device, and a
-per-device switching logbook. This integration's own entity IDs (the
-`sensor.surplus_load_switch_*` ones) are the same for every installation
-and need no changes; the file has comments marking exactly which
-entity_ids to swap in for your own solar/load/SOC/battery sensors and
-your devices' real switch/climate entities. Paste it into a new
-dashboard (or a new view on an existing one) via Settings → Dashboards →
-"Edit in YAML".
+[`dashboard_diagnose.yaml`](dashboard_diagnose.yaml) is a diagnostics
+dashboard showing the same kind of view as the screenshot above — and it
+self-adapts to however many devices you've configured. Add or remove a
+device in the integration's Configure menu and this view picks it up on
+its own; there are no per-device entity IDs to fill in, since it
+discovers everything through the consistent naming pattern this
+integration always uses (`sensor.surplus_load_switch_*`), not hardcoded
+references. The status card (built entirely from core Home Assistant
+templating) works standalone; the device-overview and logbook cards use
+the free [auto-entities](https://github.com/thomasloven/lovelace-auto-entities)
+HACS card to stay dynamic — install that first if you don't already have
+it. Paste the file into a new dashboard (or a new view on an existing
+one) via Settings → Dashboards → "Edit in YAML".
 
 ## How the decision logic works
 

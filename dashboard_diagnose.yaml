@@ -1,28 +1,35 @@
-# Surplus Load Switch — example diagnostics dashboard
+# Surplus Load Switch — self-adapting diagnostics dashboard
+#
+# Unlike a hand-built per-device dashboard, this one automatically shows
+# every device you've configured — add or remove a device in the
+# integration's Configure menu and this view picks it up on its own, no
+# YAML editing required. It works by discovering entities through naming
+# patterns this integration always uses, rather than hardcoding entity IDs
+# per device.
+#
+# Requirements:
+# - Home Assistant 2024.10+ (needs v1.16.2+ of this integration for the
+#   full status line — see below).
+# - The "auto-entities" custom card from HACS (Frontend section):
+#   https://github.com/thomasloven/lovelace-auto-entities
+#   Without it, the Status card (which needs no extra card, just core
+#   Home Assistant) still works fine on its own — only the "Geräte-
+#   Übersicht" and "Schaltvorgänge" cards below need auto-entities.
 #
 # How to use this:
-# 1. Settings → Dashboards → Add Dashboard → "New dashboard from scratch",
-#    then edit it in YAML mode (top-right menu → "Edit in YAML") and paste
-#    the content of this file in — or add it as a new view on an existing
-#    dashboard the same way.
-# 2. This file has THREE example devices (Pumpe / Wärmepumpe / Miner) to
-#    match a typical priority-1/2/3 setup. Replace every entity_id marked
-#    "<-- replace" with your own — the easiest way to find them is
-#    Settings → Devices & Services → Entities → filter by "surplus_load_switch"
-#    (for this integration's own entities) or by your device's real name
-#    (for the switch/climate entity it controls).
-# 3. If you have more or fewer devices than three, copy/remove one whole
-#    device block (an "entities" card in the middle column + a "logbook"
-#    card in the right column + the corresponding lines in the Status
-#    markdown card) per device.
-# 4. Everything under "Live-Werte (global)" and the four bottom rows
-#    (Überschuss/Akku reicht/Bis Solar-Start/Verfügbare Akkukapazität/Modus/
-#    Mindest-SOC) uses this integration's own entity IDs, which are the
-#    same for every installation — no replacement needed there.
+# Settings → Dashboards → Add Dashboard → "New dashboard from scratch",
+# then edit it in YAML mode (top-right menu → "Edit in YAML") and paste
+# the content of this file in — or add it as a new view on an existing
+# dashboard the same way. That's it; no per-device entity IDs to fill in.
+#
+# The only thing this can't discover automatically is a 24h history graph
+# of your *real* switch/climate entities (those have arbitrary names this
+# integration has no fixed pattern for) — add one yourself with the
+# history-graph card if you want it, pointing at your own devices.
 
 title: Surplus Load Switch — Diagnose
 cards:
-  # ── Spalte 1: Status, Verlauf, globale Live-Werte ───────────────────────
+  # ── Spalte 1: Status (löst sich automatisch auf, keine Anpassung nötig) ──
   - type: vertical-stack
     cards:
       - type: markdown
@@ -32,115 +39,62 @@ cards:
           {% set h_bat = states('sensor.surplus_load_switch_akku_reicht') | float(999) %}
           {% set h_sol = states('sensor.surplus_load_switch_bis_solar_start') | float(0) %}
           {% set modus = states('sensor.surplus_load_switch_modus') %}
+          {% set ns = namespace(rows=[]) %}
+          {% for s in states.sensor if 'surplus_load_switch' in s.entity_id and s.entity_id.endswith('_o_leistung') %}
+          {% set prio = state_attr(s.entity_id, 'prioritaet') | default(99) | float(99) %}
+          {% set ns.rows = ns.rows + [(prio, s.entity_id)] %}
+          {% endfor %}
 
-          {% set pumpe_on = is_state('switch.YOUR_PUMPE_SWITCH', 'on') %}
-          {% set pumpe_should = state_attr('sensor.surplus_load_switch_pumpe_o_leistung', 'sollte_an_sein') %}
-          {% if pumpe_on == pumpe_should %}{% if pumpe_on %}🟢 **Pumpe (Prio 1) läuft korrekt** {% else %}🔴 **Pumpe (Prio 1) aus — korrekt** {% endif %}{% else %}⚠️ **Pumpe (Prio 1) Abweichung: ist {{ 'AN' if pumpe_on else 'AUS' }}, sollte {{ 'AN' if pumpe_should else 'AUS' }} sein** {% endif %}
-
-          {% set wp_on = is_state('switch.YOUR_WAERMEPUMPE_SWITCH', 'on') %}
-          {% set wp_should = state_attr('sensor.surplus_load_switch_waermepumpe_o_leistung', 'sollte_an_sein') %}
-          {% if wp_on == wp_should %}{% if wp_on %}🟢 **Wärmepumpe (Prio 2) läuft korrekt** {% else %}🔴 **Wärmepumpe (Prio 2) aus — korrekt** {% endif %}{% else %}⚠️ **Wärmepumpe (Prio 2) Abweichung: ist {{ 'AN' if wp_on else 'AUS' }}, sollte {{ 'AN' if wp_should else 'AUS' }} sein** {% endif %}
-
-          {% set miner_on = is_state('switch.YOUR_MINER_SWITCH', 'on') %}
-          {% set miner_should = state_attr('sensor.surplus_load_switch_miner_o_leistung', 'sollte_an_sein') %}
-          {% if miner_on == miner_should %}{% if miner_on %}🟢 **Miner (Prio 3) läuft korrekt** {% else %}🔴 **Miner (Prio 3) aus — korrekt** {% endif %}{% else %}⚠️ **Miner (Prio 3) Abweichung: ist {{ 'AN' if miner_on else 'AUS' }}, sollte {{ 'AN' if miner_should else 'AUS' }} sein** {% endif %}
+          {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace('Surplus Load Switch ', '').replace(' — Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% if aktiv == false %}⚪ **{{ name }} (Prio {{ prio | int }}) deaktiviert**
+          {% elif korrekt %}{% if an %}🟢 **{{ name }} (Prio {{ prio | int }}) läuft korrekt**
+          {% else %}🔴 **{{ name }} (Prio {{ prio | int }}) aus — korrekt**
+          {% endif %}{% else %}⚠️ **{{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein**
+          {% endif %}{% endfor %}
 
           {{ modus }} · Überschuss **{{ surplus | round(2) }} kW** · Akku reicht **{{ h_bat | round(1) if h_bat < 999 else '∞' }} h** vs. bis Solar **{{ h_sol | round(1) }} h**
-
-      - type: history-graph
-        hours_to_show: 24
-        entities:
-          - entity: switch.YOUR_PUMPE_SWITCH   # <-- replace
-            name: Pumpe
-          - entity: switch.YOUR_WAERMEPUMPE_SWITCH   # <-- replace
-            name: Wärmepumpe
-          - entity: switch.YOUR_MINER_SWITCH   # <-- replace
-            name: Miner
 
       - type: entities
         title: Live-Werte (global)
         entities:
-          - entity: sensor.YOUR_SOLAR_SENSOR   # <-- replace: your configured solar_sensor
-            name: Solar
-          - entity: sensor.YOUR_LOAD_SENSOR   # <-- replace: your configured load_sensor
-            name: Hausverbrauch (gesamt)
-          - entity: sensor.YOUR_SOC_SENSOR   # <-- replace: your configured soc_sensor
-            name: Akku SOC
-          - entity: sensor.YOUR_BATT_SENSOR   # <-- replace: your configured batt_sensor
-            name: Akku Lade(+)/Entlade(-)
-          - type: divider
           - entity: sensor.surplus_load_switch_uberschuss
-            name: "→ Überschuss (exkl. Wallbox + laufende Geräte)"
+            name: Überschuss (exkl. Wallbox + laufende Geräte)
           - entity: sensor.surplus_load_switch_akku_reicht
-            name: "→ Akku reicht"
+            name: Akku reicht
           - entity: sensor.surplus_load_switch_bis_solar_start
-            name: "→ Bis Solar-Start"
+            name: Bis Solar-Start
           - entity: sensor.surplus_load_switch_verfugbare_akkukapazitat
-            name: "→ Verfügbare Akkukapazität"
+            name: Verfügbare Akkukapazität
           - entity: sensor.surplus_load_switch_modus
-            name: "→ Modus"
+            name: Modus
           - entity: number.surplus_load_switch_mindest_soc
             name: Mindest-SOC (Einstellung)
 
-  # ── Spalte 2: ein Kärtchen pro Gerät ─────────────────────────────────────
+  # ── Spalte 2: eine Zeile pro Gerät, für jedes konfigurierte Gerät ────────
   - type: vertical-stack
     cards:
-      - type: entities
-        title: Pumpe (Prio 1)
-        entities:
-          - entity: switch.YOUR_PUMPE_SWITCH   # <-- replace: the real switch this device controls
-            name: Pumpe (echter Switch)
-          - entity: switch.surplus_load_switch_pumpe_aktiviert
-            name: Aktiviert
-          - entity: sensor.surplus_load_switch_pumpe_o_leistung
-            name: Ø Leistung (gemessen/geschätzt)
-          - type: divider
-          - entity: schedule.YOUR_SCHEDULE_HELPER   # <-- replace, or delete this row if no schedule is set
-            name: Zeitfenster-Helfer
-          - entity: sensor.surplus_load_switch_pumpe_abschalt_puffer
-            name: Abschalt-Countdown
+      - type: custom:auto-entities
+        card:
+          type: entities
+          title: Geräte-Übersicht (automatisch)
+        filter:
+          include:
+            - entity_id: "sensor.*surplus_load_switch*_o_leistung"
+            - entity_id: "sensor.*surplus_load_switch*_abschalt_puffer"
+            - entity_id: "switch.*surplus_load_switch*_aktiviert"
+        sort:
+          method: entity_id
 
-      - type: entities
-        title: Wärmepumpe (Prio 2)
-        entities:
-          - entity: climate.YOUR_WAERMEPUMPE_CLIMATE   # <-- replace: only if this is a climate device, else use a switch entity
-            name: Wärmepumpe (echte Entität)
-          - entity: switch.surplus_load_switch_waermepumpe_aktiviert
-            name: Aktiviert
-          - entity: sensor.surplus_load_switch_waermepumpe_o_leistung
-            name: Ø Leistung (gemessen/geschätzt)
-          - type: divider
-          - entity: sensor.surplus_load_switch_waermepumpe_abschalt_puffer
-            name: Abschalt-Countdown
-
-      - type: entities
-        title: Miner (Prio 3)
-        entities:
-          - entity: switch.YOUR_MINER_SWITCH   # <-- replace
-            name: Miner (echter Switch)
-          - entity: switch.surplus_load_switch_miner_aktiviert
-            name: Aktiviert
-          - entity: sensor.surplus_load_switch_miner_o_leistung
-            name: Ø Leistung (gemessen/geschätzt)
-          - type: divider
-          - entity: sensor.surplus_load_switch_miner_abschalt_puffer
-            name: Abschalt-Countdown
-
-  # ── Spalte 3: Schaltvorgänge-Logbücher ───────────────────────────────────
+  # ── Spalte 3: Schaltvorgänge aller Geräte, ein gemeinsames Logbuch ───────
   - type: vertical-stack
     cards:
-      - type: logbook
-        title: Pumpe Schaltvorgänge (24h)
-        hours_to_show: 24
-        entities:
-          - switch.YOUR_PUMPE_SWITCH   # <-- replace
-      - type: logbook
-        title: Wärmepumpe Schaltvorgänge (24h)
-        hours_to_show: 24
-        entities:
-          - climate.YOUR_WAERMEPUMPE_CLIMATE   # <-- replace
-      - type: logbook
-        title: Miner Schaltvorgänge (24h)
-        hours_to_show: 24
-        entities:
-          - switch.YOUR_MINER_SWITCH   # <-- replace
+      - type: custom:auto-entities
+        card:
+          type: logbook
+          title: Schaltvorgänge (24h, automatisch)
+          hours_to_show: 24
+        card_param: entities
+        filter:
+          include:
+            - entity_id: "switch.*surplus_load_switch*_prio_*"
+        sort:
+          method: entity_id
