@@ -45,10 +45,10 @@ cards:
           {% set ns.rows = ns.rows + [(prio, s.entity_id)] %}
           {% endfor %}
 
-          {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace('Surplus Load Switch ', '').replace(' — Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% if aktiv == false %}⚪ **{{ name }} (Prio {{ prio | int }}) deaktiviert**
-          {% elif korrekt %}{% if an %}🟢 **{{ name }} (Prio {{ prio | int }}) läuft korrekt**
-          {% else %}🔴 **{{ name }} (Prio {{ prio | int }}) aus — korrekt**
-          {% endif %}{% else %}⚠️ **{{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein**
+          {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace('Surplus Load Switch ', '').replace(' — Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% set cutoff = state_attr(eid, 'naechster_cutoff') %}{% set fenster = ' · Zeitfenster bis ' ~ (cutoff | as_datetime | as_local).strftime('%H:%M') if cutoff else '' %}{% if aktiv == false %}⚪ **{{ name }} (Prio {{ prio | int }}) deaktiviert**
+          {% elif korrekt %}{% if an %}🟢 **{{ name }} (Prio {{ prio | int }}) läuft korrekt**{{ fenster }}
+          {% else %}🔴 **{{ name }} (Prio {{ prio | int }}) aus — korrekt**{{ fenster }}
+          {% endif %}{% else %}⚠️ **{{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein**{{ fenster }}
           {% endif %}{% endfor %}
 
           {{ modus }} · Überschuss **{{ surplus | round(2) }} kW** · Akku reicht **{{ h_bat | round(1) if h_bat < 999 else '∞' }} h** vs. bis Solar **{{ h_sol | round(1) }} h**
