@@ -208,18 +208,35 @@ views:
   - title: Logs
     path: logs
     icon: mdi:text-box-outline
+    # "panel" instead of the other tabs' "sections" layout: a single card
+    # that fills the browser edge-to-edge instead of being capped to a
+    # narrow centered column -- a log wants width, not a grid of tiles.
+    #
+    # A real table (Datum/Gerät/Titel/Details) instead of a logbook card:
+    # the coordinator logs every cascade decision every cycle (not just
+    # changes) into a rolling in-memory buffer, exposed as the "eintraege"
+    # attribute on a sensor named "Log". Found here via
+    # selectattr('attributes.eintraege', 'defined') rather than an
+    # entity_id pattern -- that attribute name is unique enough to find the
+    # sensor reliably regardless of how its entity_id or device name ends
+    # up slugified, which an entity_id glob can't guarantee.
+    type: panel
     cards:
-      - type: custom:auto-entities
-        card:
-          type: logbook
-          title: Entscheidungs-Log (72h, automatisch)
-          hours_to_show: 72
-        card_param: entities
-        filter:
-          include:
-            - entity_id: "switch.*surplus_load_switch*_prio_*"
-            - entity_id: "switch.*_kaskaden_status"
-            - entity_id: "switch.*_ein_aus"
-            - entity_id: "binary_sensor.*surplus_load_switch*"
-        sort:
-          method: entity_id
+      - type: markdown
+        title: Entscheidungs-Log (jeder Zyklus, alle Geräte)
+        card_mod:
+          style: >-
+            ha-markdown table { width: 100%; border-collapse: collapse; }
+            ha-markdown th, ha-markdown td { text-align: left; padding: 4px 10px; border-bottom: 1px solid var(--divider-color); font-size: 13px; }
+            ha-markdown th:nth-child(1), ha-markdown td:nth-child(1) { white-space: nowrap; }
+            ha-markdown th:nth-child(2), ha-markdown td:nth-child(2) { white-space: nowrap; }
+        content: >-
+          {% set lsensor = (states.sensor | selectattr('attributes.eintraege', 'defined') | list | first) %}
+          {% set eintraege = (state_attr(lsensor.entity_id, 'eintraege') if lsensor else []) or [] %}
+
+          **{{ eintraege | length }} Einträge im Puffer** (neueste zuerst, letzte 200 angezeigt)
+
+          | Datum/Uhrzeit | Gerät | Titel | Details |
+          |---|---|---|---|
+          {% for e in eintraege[:200] %}| {{ (e.zeit | as_datetime | as_local).strftime('%d.%m. %H:%M:%S') }} | {{ e.wer }} | {{ e.titel }} | {{ e.details }} |
+          {% endfor %}

@@ -32,6 +32,7 @@ async def async_setup_entry(
         PVSocSensor(coordinator, entry),
         PVSolarCalibrationSensor(coordinator, entry),
         PVActiveSolarOffsetSensor(coordinator, entry),
+        PVLogTableSensor(coordinator, entry),
     ]
     # Wallbox devices aren't evaluated in the cascade, so there's no
     # predicted-power diagnostics for them — their own power_sensor already
@@ -280,6 +281,35 @@ class PVSolarCalibrationSensor(_PVSensorBase):
         if not self.coordinator.data:
             return {}
         return self.coordinator.data.calibration
+
+
+class PVLogTableSensor(_PVSensorBase):
+    """Every logged event (device decisions every cycle, plus system-level
+    events), newest first, as a plain list attribute — lets the dashboard
+    render a real Datum/Gerät/Titel/Details table instead of the fixed
+    timeline layout a logbook card is stuck with. Independent of
+    coordinator.data being fresh (available regardless), since some of the
+    most interesting entries — a sensor going unavailable — happen exactly
+    when a cycle's data update fails."""
+
+    _attr_name = "Log"
+    _attr_icon = "mdi:table"
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_log_table"
+
+    @property
+    def native_value(self):
+        return len(self.coordinator.log_entries)
+
+    @property
+    def extra_state_attributes(self):
+        return {"eintraege": list(self.coordinator.log_entries)}
 
 
 class PVDevicePowerSensor(_PVDeviceSensorBase):

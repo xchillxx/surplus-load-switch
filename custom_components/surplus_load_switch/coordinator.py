@@ -170,14 +170,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._load_refresh_count: int = 0
         self._last_seen_discharge_kw: float | None = None
         self._discharge_refresh_count: int = 0
-        # The should_be_on target last logged for each device — a decision
-        # log entry is written whenever this changes, not every cycle
-        # (which would be one entry every 30s per device). This is the
-        # target the cascade wants, not necessarily what's physically
-        # switched yet — STABLE_ON_CYCLES/STABLE_OFF_CYCLES still gate the
-        # actual actuation, so the "will switch" reasoning is visible
-        # before the device itself flips.
-        self._last_should_be_on: dict[str, bool] = {}
         # Whether each core sensor was readable as of the last cycle — a
         # system-log entry is written only on the transition (goes
         # unavailable / comes back), not every cycle it stays that way.
@@ -190,6 +182,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # written back, so only the last write to land actually sticks and
         # the rest are silently lost. Confirmed happening in practice.
         self.config_write_lock = asyncio.Lock()
+        # Rolling table of every logged event (device decisions every
+        # cycle, plus system-level events like recalibration), newest
+        # first — exposed as a sensor attribute so the dashboard can render
+        # a real Datum/Gerät/Titel/Details table instead of the fixed
+        # timeline layout of a logbook card. Capped well under the
+        # recorder's attribute-size warning threshold; this entity's own
+        # state history isn't meaningful to record anyway, only its current
+        # (live-templated) attribute value is.
+        self.log_entries: deque[dict] = deque(maxlen=1000)
         self._calibrator = SolarOffsetCalibrator(hass, entry_id, config[CONF_SOLAR_SENSOR])
         self._last_offset_h = 0.0
         for dev in config.get(CONF_DEVICES, []):
@@ -254,11 +255,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # though nothing was ever actually down.
         was_tracked = entity_id in self._last_sensor_valid
         if was_tracked and self._last_sensor_valid[entity_id] != valid:
-            message = (
+            titel = "Sensor wieder verfügbar" if valid else "Sensor nicht verfügbar"
+            details = (
                 f"{entity_id} wieder verfügbar" if valid
                 else f"{entity_id} nicht verfügbar — Zyklus wird übersprungen, bis es sich erholt"
             )
-            self.hass.async_create_task(self._log_system(message))
+            self.hass.async_create_task(self._log_system(titel, details))
         self._last_sensor_valid[entity_id] = valid
         if not valid:
             raise UpdateFailed(f"{entity_id} is unavailable/unknown — skipping this cycle")
@@ -277,45 +279,50 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         unit = (state.attributes.get("unit_of_measurement") or "kW").upper()
         return value / 1000.0 if unit == "W" else value
 
-    async def _log_decision(self, dev: dict, should_be_on: bool, reason: str) -> None:
-        """Write one logbook entry for a device's should_be_on target
-        flipping — the actual reasoning behind the cascade's decision, not
-        just the eventual on/off state change (which is several hold-time
-        cycles later). Attributed to the device's own managed switch, not
-        its power sensor — Home Assistant's logbook UI silently drops
-        logbook.log entries for the "sensor" domain (a "sensor" is Continuous
-        state, unliked to be tracked in the logbook), so attributing this to
-        a sensor entity meant the entry existed via the API but never
-        rendered anywhere in the frontend."""
+    def _record(self, wer: str, titel: str, details: str) -> None:
+        """Append one row to the rolling log table (newest first) that the
+        dashboard's Logs tab renders as an actual Datum/Gerät/Titel/Details
+        table — this is separate from the logbook.log calls below, which
+        feed Home Assistant's own native Logbook."""
+        self.log_entries.appendleft({
+            "zeit": dt_util.now().isoformat(),
+            "wer": wer,
+            "titel": titel,
+            "details": details,
+        })
+
+    async def _log_decision(self, dev: dict, titel: str, details: str) -> None:
+        """Write one entry (both to the logbook and the log table) for a
+        device's cascade decision this cycle — every cycle, not just when
+        the target changes, since the user wants to see every calculation,
+        not only transitions. Attributed to the device's own managed
+        switch, not its power sensor — Home Assistant's logbook UI
+        silently drops logbook.log entries for the "sensor" domain, so
+        attributing this to a sensor entity meant the entry existed via the
+        API but never rendered anywhere in the frontend."""
         device_id = dev["_id"]
         name = dev.get(CONF_DEVICE_NAME, device_id)
-        verb = "soll einschalten" if should_be_on else "soll ausschalten"
-        message = f"{verb} — {reason}"
+        self._record(name, titel, details)
         entity_id = er.async_get(self.hass).async_get_entity_id(
             "switch", DOMAIN, f"{self._entry_id}_{device_id}_managed"
         )
-        service_data = {"name": name, "message": message, "domain": DOMAIN}
+        service_data = {"name": name, "message": f"{titel} — {details}", "domain": DOMAIN}
         if entity_id:
             service_data["entity_id"] = entity_id
         await self.hass.services.async_call("logbook", "log", service_data, blocking=False)
 
-    async def _maybe_log_decision(self, dev: dict, should_be_on: bool, reason: str) -> None:
-        device_id = dev["_id"]
-        if self._last_should_be_on.get(device_id) == should_be_on:
-            return
-        self._last_should_be_on[device_id] = should_be_on
-        await self._log_decision(dev, should_be_on, reason)
-
-    async def _log_system(self, message: str) -> None:
-        """Write a logbook entry for something background/system-level
-        (not a per-device decision) — a recalibration finishing, a cycle
-        being skipped because a core sensor went unavailable, etc.
-        Attributed to the always-on system binary_sensor, since a plain
-        "sensor" domain entry never renders in the logbook UI."""
+    async def _log_system(self, titel: str, details: str) -> None:
+        """Write a logbook + log-table entry for something background/
+        system-level (not a per-device decision) — a recalibration
+        finishing, a cycle being skipped because a core sensor went
+        unavailable, etc. Attributed to the always-on system binary_sensor,
+        since a plain "sensor" domain entry never renders in the logbook
+        UI."""
+        self._record("SLS", titel, details)
         entity_id = er.async_get(self.hass).async_get_entity_id(
             "binary_sensor", DOMAIN, f"{self._entry_id}_system_status"
         )
-        service_data = {"name": "System", "message": message, "domain": DOMAIN}
+        service_data = {"name": "System", "message": f"{titel} — {details}", "domain": DOMAIN}
         if entity_id:
             service_data["entity_id"] = entity_id
         await self.hass.services.async_call("logbook", "log", service_data, blocking=False)
@@ -601,8 +608,8 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             months = len(diag["kalibrierte_monate"])
             good_days = sum(diag["gute_tage_pro_monat"].values())
             await self._log_system(
-                f"Solar-Start-Kalibrierung aktualisiert: {months}/12 Monate kalibriert "
-                f"aus {good_days} guten Tagen"
+                "Solar-Start-Kalibrierung",
+                f"{months}/12 Monate kalibriert aus {good_days} guten Tagen",
             )
 
         for sensor_key in (CONF_SOLAR_SENSOR, CONF_LOAD_SENSOR, CONF_SOC_SENSOR, CONF_BATT_SENSOR):
@@ -914,12 +921,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
+                hard_off_titel = (
+                    "Deaktiviert" if not device_enabled
+                    else "Abhängigkeit nicht erfüllt" if not dependency_met
+                    else "Außerhalb Zeitfenster"
+                )
                 hard_off_reason = (
                     "deaktiviert" if not device_enabled
                     else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
                     else "außerhalb des Zeitfensters"
                 )
-                await self._maybe_log_decision(dev, False, hard_off_reason)
+                await self._log_decision(dev, hard_off_titel, hard_off_reason)
                 if is_on:
                     _LOGGER.info(
                         "PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), hard_off_reason,
@@ -976,27 +988,37 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
             if should_on:
                 if force_runtime:
+                    decision_titel = "Einschalten — Mindest-Laufzeit"
                     decision_reason = (
                         f"Mindest-Laufzeit erzwungen ({runtime_hours_today:.1f}h/"
                         f"{min_daily_runtime_h:.1f}h heute erreicht)"
                     )
                 elif battery_would_last:
+                    decision_titel = "Einschalten — Akku reicht"
                     decision_reason = (
                         f"Akku würde bis Solar-Start reichen (auch mit "
                         f"{predicted_power:.2f} kW zusätzlich)"
                     )
                 else:
+                    decision_titel = "Einschalten — Überschuss"
                     decision_reason = (
                         f"Überschuss ausreichend ({remaining_surplus:.2f} kW verfügbar, "
                         f"{predicted_power:.2f} kW benötigt)"
                     )
-                await self._maybe_log_decision(dev, True, decision_reason)
+                await self._log_decision(dev, decision_titel, decision_reason)
             elif should_off:
                 decision_reason = (
                     f"Überschuss/Akku reichen nicht ({remaining_surplus:.2f} kW verfügbar, "
                     f"{predicted_power:.2f} kW benötigt, Akku würde nicht bis Solar-Start reichen)"
                 )
-                await self._maybe_log_decision(dev, False, decision_reason)
+                await self._log_decision(dev, "Ausschalten — Überschuss/Akku reichen nicht", decision_reason)
+            else:
+                stable_titel = "Bleibt an — Hysterese" if is_on else "Bleibt aus — Hysterese"
+                decision_reason = (
+                    f"im Hysterese-Bereich ({remaining_surplus:.2f} kW Überschuss, "
+                    f"{predicted_power:.2f} kW benötigt) — Zustand unverändert"
+                )
+                await self._log_decision(dev, stable_titel, decision_reason)
 
             if should_on:
                 # Reserve this device's predicted share (and its cutoff, if

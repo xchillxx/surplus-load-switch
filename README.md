@@ -102,12 +102,15 @@ cloud passes over or another appliance briefly kicks in.
   touching its configuration, historical power average, or daily-runtime
   data — it picks up right where it left off once re-enabled. For e.g. going
   on vacation and wanting one device to just stay off.
-- **Decision log** — every time a device's target on/off state actually
-  changes, the integration writes a logbook entry with the real reasoning
-  behind it (outside its time window, an unmet dependency, disabled,
-  minimum runtime being forced, surplus/battery numbers), not just the
-  eventual switch action — so it's possible to see *why* the cascade
-  decided what it did, not only *what* it did.
+- **Decision log** — every cascade cycle, for every device, the integration
+  records the real reasoning behind that cycle's decision (outside its
+  time window, an unmet dependency, disabled, minimum runtime being
+  forced, surplus/battery numbers, or unchanged in the hysteresis dead
+  zone) — both as a Home Assistant logbook entry and in a rolling
+  in-memory table (last 1000 entries) exposed as a sensor attribute, so
+  it's possible to see *why* the cascade decided what it did every time it
+  ran, not only when something changed. The example dashboard's Logs tab
+  renders that table as Datum/Gerät/Titel/Details columns.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
   Devices & Services, nested under the integration's hub device, instead of
