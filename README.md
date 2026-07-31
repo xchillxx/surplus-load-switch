@@ -96,12 +96,24 @@ cloud passes over or another appliance briefly kicks in.
   Mark a device as depending on another; it's only ever turned on while the
   prerequisite is also on, so it never wastes a cascade reservation or
   dilutes its own power measurement with idle-but-"on" time.
-- **Per-device enable switch** — each device gets an "— Aktiviert" switch
+- **Per-device enable switch** — each device gets an "Aktiviert" switch
   entity. Turning it off forces that device off immediately (same as being
   outside its time window) and takes it out of the cascade entirely, without
   touching its configuration, historical power average, or daily-runtime
   data — it picks up right where it left off once re-enabled. For e.g. going
   on vacation and wanting one device to just stay off.
+- **Decision log** — every time a device's target on/off state actually
+  changes, the integration writes a logbook entry with the real reasoning
+  behind it (outside its time window, an unmet dependency, disabled,
+  minimum runtime being forced, surplus/battery numbers), not just the
+  eventual switch action — so it's possible to see *why* the cascade
+  decided what it did, not only *what* it did.
+- **One Home Assistant device per configured device** — each configured
+  device (Miner, Boiler, ...) gets its own device card under Settings →
+  Devices & Services, nested under the integration's hub device, instead of
+  every entity piling into one flat list — keeps entity names short (e.g.
+  "Ø Leistung" rather than repeating the device and integration name in
+  every entity).
 - Fully configurable through the Home Assistant UI (no YAML required).
 
 ## Requirements

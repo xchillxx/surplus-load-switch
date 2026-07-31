@@ -1,102 +1,202 @@
-# Surplus Load Switch — self-adapting diagnostics dashboard
+# Surplus Load Switch — self-adapting sidebar dashboard
 #
-# Unlike a hand-built per-device dashboard, this one automatically shows
-# every device you've configured — add or remove a device in the
-# integration's Configure menu and this view picks it up on its own, no
-# YAML editing required. It works by discovering entities through naming
-# patterns this integration always uses, rather than hardcoding entity IDs
-# per device.
+# A dedicated dashboard (not just a view) with three tabs: Diagnose,
+# Einstellungen and Logs. All three self-adapt to however many devices
+# you've configured — add or remove a device in the integration's
+# Configure menu and every tab picks it up on its own, no YAML editing
+# required. This works by discovering entities through the naming
+# patterns this integration always uses, not by hardcoding entity IDs
+# per device — nothing in this file needs to be edited for your own
+# setup.
 #
 # Requirements:
-# - Home Assistant 2024.10+ (needs v1.16.2+ of this integration for the
-#   full status line — see below).
+# - Surplus Load Switch v1.17.0+ (for the live number/select settings
+#   entities the Einstellungen tab is built from).
 # - The "auto-entities" custom card from HACS (Frontend section):
 #   https://github.com/thomasloven/lovelace-auto-entities
-#   Without it, the Status card (which needs no extra card, just core
-#   Home Assistant) still works fine on its own — only the "Geräte-
-#   Übersicht" and "Schaltvorgänge" cards below need auto-entities.
+#   The Diagnose tab's Status card needs no extra card (core Home
+#   Assistant templating only) — everything else on this page does.
 #
 # How to use this:
-# Settings → Dashboards → Add Dashboard → "New dashboard from scratch",
-# then edit it in YAML mode (top-right menu → "Edit in YAML") and paste
-# the content of this file in — or add it as a new view on an existing
-# dashboard the same way. That's it; no per-device entity IDs to fill in.
+# Settings → Dashboards → "Add Dashboard" → "New dashboard from
+# scratch" → give it a name and icon, tick "Show in sidebar" → once
+# created, open its three-dot menu → "Edit in YAML" and paste this
+# file's content in. It appears as its own entry in the sidebar, with
+# Diagnose / Einstellungen / Logs as tabs at the top — no separate view
+# to add to an existing dashboard.
 #
-# The only thing this can't discover automatically is a 24h history graph
-# of your *real* switch/climate entities (those have arbitrary names this
-# integration has no fixed pattern for) — add one yourself with the
-# history-graph card if you want it, pointing at your own devices.
+# Adding a brand-new device still goes through the integration's own
+# Configure dialog (a guided multi-step form fits that better than a
+# dashboard ever could) — this dashboard is for *watching* and
+# *adjusting* devices you've already added.
 
-title: Surplus Load Switch — Diagnose
-cards:
-  # ── Spalte 1: Status (löst sich automatisch auf, keine Anpassung nötig) ──
-  - type: vertical-stack
+views:
+  - title: Diagnose
+    path: diagnose
+    icon: mdi:chart-box-outline
     cards:
-      - type: markdown
-        title: Status (nach Priorität)
-        content: >-
-          {% set surplus = states('sensor.surplus_load_switch_uberschuss') | float(0) %}
-          {% set h_bat = states('sensor.surplus_load_switch_akku_reicht') | float(999) %}
-          {% set h_sol = states('sensor.surplus_load_switch_bis_solar_start') | float(0) %}
-          {% set modus = states('sensor.surplus_load_switch_modus') %}
-          {% set ns = namespace(rows=[]) %}
-          {% for s in states.sensor if 'surplus_load_switch' in s.entity_id and s.entity_id.endswith('_o_leistung') %}
-          {% set prio = state_attr(s.entity_id, 'prioritaet') | default(99) | float(99) %}
-          {% set ns.rows = ns.rows + [(prio, s.entity_id)] %}
-          {% endfor %}
+      - type: vertical-stack
+        cards:
+          - type: markdown
+            title: Status (nach Priorität)
+            content: >-
+              {% set surplus = states('sensor.surplus_load_switch_uberschuss') | float(0) %}
+              {% set h_bat = states('sensor.surplus_load_switch_akku_reicht') | float(999) %}
+              {% set h_sol = states('sensor.surplus_load_switch_bis_solar_start') | float(0) %}
+              {% set modus = states('sensor.surplus_load_switch_modus') %}
+              {% set ns = namespace(rows=[]) %}
+              {% for s in states.sensor if 'surplus_load_switch' in s.entity_id and s.entity_id.endswith('_o_leistung') %}
+              {% set prio = state_attr(s.entity_id, 'prioritaet') | default(99) | float(99) %}
+              {% set ns.rows = ns.rows + [(prio, s.entity_id)] %}
+              {% endfor %}
 
-          {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace('Surplus Load Switch ', '').replace(' — Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% set cutoff = state_attr(eid, 'naechster_cutoff') %}{% set fenster = ' · Zeitfenster bis ' ~ (cutoff | as_datetime | as_local).strftime('%H:%M') if cutoff else '' %}{% if aktiv == false %}⚪ **{{ name }} (Prio {{ prio | int }}) deaktiviert**
-          {% elif korrekt %}{% if an %}🟢 **{{ name }} (Prio {{ prio | int }}) läuft korrekt**{{ fenster }}
-          {% else %}🔴 **{{ name }} (Prio {{ prio | int }}) aus — korrekt**{{ fenster }}
-          {% endif %}{% else %}⚠️ **{{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein**{{ fenster }}
-          {% endif %}{% endfor %}
+              {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace(' Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% set cutoff = state_attr(eid, 'naechster_cutoff') %}{% set fenster = ' · Zeitfenster bis ' ~ (cutoff | as_datetime | as_local).strftime('%H:%M') if cutoff else '' %}{% if aktiv == false %}⚪ **{{ name }} (Prio {{ prio | int }}) deaktiviert**
+              {% elif korrekt %}{% if an %}🟢 **{{ name }} (Prio {{ prio | int }}) läuft korrekt**{{ fenster }}
+              {% else %}🔴 **{{ name }} (Prio {{ prio | int }}) aus — korrekt**{{ fenster }}
+              {% endif %}{% else %}⚠️ **{{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein**{{ fenster }}
+              {% endif %}{% endfor %}
 
-          {{ modus }} · Überschuss **{{ surplus | round(2) }} kW** · Akku reicht **{{ h_bat | round(1) if h_bat < 999 else '∞' }} h** vs. bis Solar **{{ h_sol | round(1) }} h**
+              {{ modus }} · Überschuss **{{ surplus | round(2) }} kW** · Akku reicht **{{ h_bat | round(1) if h_bat < 999 else '∞' }} h** vs. bis Solar **{{ h_sol | round(1) }} h**
 
-      - type: entities
-        title: Live-Werte (global)
-        entities:
-          - entity: sensor.surplus_load_switch_uberschuss
-            name: Überschuss (exkl. Wallbox + laufende Geräte)
-          - entity: sensor.surplus_load_switch_akku_reicht
-            name: Akku reicht
-          - entity: sensor.surplus_load_switch_bis_solar_start
-            name: Bis Solar-Start
-          - entity: sensor.surplus_load_switch_verfugbare_akkukapazitat
-            name: Verfügbare Akkukapazität
-          - entity: sensor.surplus_load_switch_modus
-            name: Modus
-          - entity: number.surplus_load_switch_mindest_soc
-            name: Mindest-SOC (Einstellung)
+          - type: entities
+            title: Live-Werte (global)
+            entities:
+              - entity: sensor.surplus_load_switch_uberschuss
+                name: Überschuss (exkl. Wallbox + laufende Geräte)
+              - entity: sensor.surplus_load_switch_akku_reicht
+                name: Akku reicht
+              - entity: sensor.surplus_load_switch_bis_solar_start
+                name: Bis Solar-Start
+              - entity: sensor.surplus_load_switch_verfugbare_akkukapazitat
+                name: Verfügbare Akkukapazität
+              - entity: sensor.surplus_load_switch_modus
+                name: Modus
 
-  # ── Spalte 2: eine Zeile pro Gerät, für jedes konfigurierte Gerät ────────
-  - type: vertical-stack
+      - type: vertical-stack
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+              title: Geräte-Übersicht (automatisch)
+            filter:
+              include:
+                - entity_id: "sensor.*surplus_load_switch*_o_leistung"
+                - entity_id: "sensor.*surplus_load_switch*_abschalt_puffer"
+                - entity_id: "switch.*surplus_load_switch*_aktiviert"
+            sort:
+              method: attribute
+              attribute: prioritaet
+              numeric: true
+
+      - type: vertical-stack
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: logbook
+              title: Schaltvorgänge (24h, automatisch)
+              hours_to_show: 24
+            card_param: entities
+            filter:
+              include:
+                - entity_id: "switch.*surplus_load_switch*_prio_*"
+                - entity_id: "switch.*_kaskaden_status"
+                - entity_id: "sensor.*surplus_load_switch*_o_leistung"
+            sort:
+              method: entity_id
+
+  - title: Einstellungen
+    path: einstellungen
+    icon: mdi:cog
     cards:
-      - type: custom:auto-entities
-        card:
-          type: entities
-          title: Geräte-Übersicht (automatisch)
-        filter:
-          include:
-            - entity_id: "sensor.*surplus_load_switch*_o_leistung"
-            - entity_id: "sensor.*surplus_load_switch*_abschalt_puffer"
-            - entity_id: "switch.*surplus_load_switch*_aktiviert"
-        sort:
-          method: attribute
-          attribute: prioritaet
-          numeric: true
+      - type: vertical-stack
+        cards:
+          - type: heading
+            heading: System
+            icon: mdi:cog-outline
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: "number.*surplus_load_switch*mindest_soc"
+                - entity_id: "number.*surplus_load_switch*batteriekapazitat"
+                - entity_id: "select.*surplus_load_switch*_solar_sensor"
+                - entity_id: "select.*surplus_load_switch*_last_sensor"
+                - entity_id: "select.*surplus_load_switch*_soc_sensor"
+                - entity_id: "select.*surplus_load_switch*_akku_leistungssensor"
+            sort:
+              method: entity_id
 
-  # ── Spalte 3: Schaltvorgänge aller Geräte, ein gemeinsames Logbuch ───────
-  - type: vertical-stack
+      - type: vertical-stack
+        cards:
+          - type: heading
+            heading: Geräte — Priorität & Leistung
+            icon: mdi:tune
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: "number.*surplus_load_switch*"
+              exclude:
+                - entity_id: "number.*surplus_load_switch*mindest_soc"
+                - entity_id: "number.*surplus_load_switch*batteriekapazitat"
+            sort:
+              method: attribute
+              attribute: prioritaet
+              numeric: true
+
+      - type: vertical-stack
+        cards:
+          - type: heading
+            heading: Geräte — Verknüpfungen
+            icon: mdi:link-variant
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: "select.*surplus_load_switch*"
+              exclude:
+                - entity_id: "select.*_solar_sensor"
+                - entity_id: "select.*_last_sensor"
+                - entity_id: "select.*_soc_sensor"
+                - entity_id: "select.*_akku_leistungssensor"
+            sort:
+              method: attribute
+              attribute: prioritaet
+              numeric: true
+
+      - type: vertical-stack
+        cards:
+          - type: heading
+            heading: Geräte — Aktiviert
+            icon: mdi:toggle-switch
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: "switch.*surplus_load_switch*_aktiviert"
+            sort:
+              method: attribute
+              attribute: prioritaet
+              numeric: true
+
+  - title: Logs
+    path: logs
+    icon: mdi:text-box-outline
     cards:
       - type: custom:auto-entities
         card:
           type: logbook
-          title: Schaltvorgänge (24h, automatisch)
-          hours_to_show: 24
+          title: Entscheidungs-Log (72h, automatisch)
+          hours_to_show: 72
         card_param: entities
         filter:
           include:
             - entity_id: "switch.*surplus_load_switch*_prio_*"
+            - entity_id: "switch.*_kaskaden_status"
+            - entity_id: "sensor.*surplus_load_switch*_o_leistung"
         sort:
           method: entity_id

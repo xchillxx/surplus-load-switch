@@ -16,12 +16,11 @@ from .const import (
     CONF_DEVICES,
     CONF_DEVICE_ENABLED,
     CONF_DEVICE_IS_WALLBOX,
-    CONF_DEVICE_NAME,
     CONF_DEVICE_PRIORITY,
     DOMAIN,
 )
 from .coordinator import PVSurplusCoordinator
-from .device_control import control_entity_id, is_device_on
+from .device_control import control_entity_id, is_device_on, sub_device_info
 from .device_control import async_turn_off as _control_turn_off
 from .device_control import async_turn_on as _control_turn_on
 
@@ -47,6 +46,8 @@ class PVDeviceSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
 
     _attr_has_entity_name = True
 
+    _attr_name = "Kaskaden-Status"
+
     def __init__(
         self,
         coordinator: PVSurplusCoordinator,
@@ -57,18 +58,12 @@ class PVDeviceSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
         self._entry = entry
         self._device_id = device["_id"]
         self._device = device
-        name = device.get(CONF_DEVICE_NAME, control_entity_id(device))
-        prio = device.get(CONF_DEVICE_PRIORITY, 99)
-        self._attr_name = f"{name} (Prio {prio})"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_managed"
         self._attr_icon = "mdi:power-plug"
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Surplus Load Switch",
-        }
+        return sub_device_info(self._entry.entry_id, self._device)
 
     @property
     def available(self) -> bool:
@@ -104,6 +99,7 @@ class PVDeviceEnabledSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntit
     reflecting something the coordinator already computed."""
 
     _attr_has_entity_name = True
+    _attr_name = "Aktiviert"
     _attr_icon = "mdi:toggle-switch"
     _attr_entity_category = EntityCategory.CONFIG
 
@@ -116,16 +112,11 @@ class PVDeviceEnabledSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntit
         super().__init__(coordinator)
         self._entry = entry
         self._device_id = device["_id"]
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Aktiviert"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_enabled"
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Surplus Load Switch",
-        }
+        return sub_device_info(self._entry.entry_id, self._device or {"_id": self._device_id})
 
     @property
     def available(self) -> bool:

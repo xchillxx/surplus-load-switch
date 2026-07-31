@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -168,6 +169,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._load_refresh_count: int = 0
         self._last_seen_discharge_kw: float | None = None
         self._discharge_refresh_count: int = 0
+        # The should_be_on target last logged for each device — a decision
+        # log entry is written whenever this changes, not every cycle
+        # (which would be one entry every 30s per device). This is the
+        # target the cascade wants, not necessarily what's physically
+        # switched yet — STABLE_ON_CYCLES/STABLE_OFF_CYCLES still gate the
+        # actual actuation, so the "will switch" reasoning is visible
+        # before the device itself flips.
+        self._last_should_be_on: dict[str, bool] = {}
         self._calibrator = SolarOffsetCalibrator(hass, entry_id, config[CONF_SOLAR_SENSOR])
         self._last_offset_h = 0.0
         for dev in config.get(CONF_DEVICES, []):
@@ -240,6 +249,32 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             return 0.0
         unit = (state.attributes.get("unit_of_measurement") or "kW").upper()
         return value / 1000.0 if unit == "W" else value
+
+    async def _log_decision(self, dev: dict, should_be_on: bool, reason: str) -> None:
+        """Write one logbook entry for a device's should_be_on target
+        flipping — the actual reasoning behind the cascade's decision, not
+        just the eventual on/off state change (which is several hold-time
+        cycles later and already visible in the logbook via the switch
+        itself). Attributed to the device's own power-diagnostic sensor so
+        it shows up alongside that device's other entries."""
+        device_id = dev["_id"]
+        name = dev.get(CONF_DEVICE_NAME, device_id)
+        verb = "soll einschalten" if should_be_on else "soll ausschalten"
+        message = f"{verb} — {reason}"
+        entity_id = er.async_get(self.hass).async_get_entity_id(
+            "sensor", DOMAIN, f"{self._entry_id}_{device_id}_power"
+        )
+        service_data = {"name": name, "message": message, "domain": DOMAIN}
+        if entity_id:
+            service_data["entity_id"] = entity_id
+        await self.hass.services.async_call("logbook", "log", service_data, blocking=False)
+
+    async def _maybe_log_decision(self, dev: dict, should_be_on: bool, reason: str) -> None:
+        device_id = dev["_id"]
+        if self._last_should_be_on.get(device_id) == should_be_on:
+            return
+        self._last_should_be_on[device_id] = should_be_on
+        await self._log_decision(dev, should_be_on, reason)
 
     def _predicted_power_kw(self, dev: dict) -> tuple[float, DeviceDiagnostics]:
         """Return (predicted_power_kw, diagnostics) — measured average if enough
@@ -828,14 +863,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
+                hard_off_reason = (
+                    "deaktiviert" if not device_enabled
+                    else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
+                    else "außerhalb des Zeitfensters"
+                )
+                await self._maybe_log_decision(dev, False, hard_off_reason)
                 if is_on:
-                    reason = (
-                        "it's been disabled" if not device_enabled
-                        else "its prerequisite device is off" if not dependency_met
-                        else "outside its configured time window"
-                    )
                     _LOGGER.info(
-                        "PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), reason,
+                        "PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), hard_off_reason,
                     )
                     await async_turn_off(self.hass, dev)
                 continue
@@ -886,6 +922,30 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # thresholds, neither condition holds — the target is simply
             # "stay as you are", not a deviation either way.
             diag.should_be_on = should_on if (should_on or should_off) else is_on
+
+            if should_on:
+                if force_runtime:
+                    decision_reason = (
+                        f"Mindest-Laufzeit erzwungen ({runtime_hours_today:.1f}h/"
+                        f"{min_daily_runtime_h:.1f}h heute erreicht)"
+                    )
+                elif battery_would_last:
+                    decision_reason = (
+                        f"Akku würde bis Solar-Start reichen (auch mit "
+                        f"{predicted_power:.2f} kW zusätzlich)"
+                    )
+                else:
+                    decision_reason = (
+                        f"Überschuss ausreichend ({remaining_surplus:.2f} kW verfügbar, "
+                        f"{predicted_power:.2f} kW benötigt)"
+                    )
+                await self._maybe_log_decision(dev, True, decision_reason)
+            elif should_off:
+                decision_reason = (
+                    f"Überschuss/Akku reichen nicht ({remaining_surplus:.2f} kW verfügbar, "
+                    f"{predicted_power:.2f} kW benötigt, Akku würde nicht bis Solar-Start reichen)"
+                )
+                await self._maybe_log_decision(dev, False, decision_reason)
 
             if should_on:
                 # Reserve this device's predicted share (and its cutoff, if

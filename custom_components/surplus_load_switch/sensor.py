@@ -12,12 +12,11 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_DEVICES,
     CONF_DEVICE_IS_WALLBOX,
-    CONF_DEVICE_NAME,
-    CONF_DEVICE_PRIORITY,
     DOMAIN,
     UPDATE_INTERVAL_SECONDS,
 )
 from .coordinator import PVSurplusCoordinator
+from .device_control import hub_device_info, sub_device_info
 
 
 async def async_setup_entry(
@@ -64,12 +63,27 @@ class _PVSensorBase(CoordinatorEntity[PVSurplusCoordinator], SensorEntity):
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Surplus Load Switch",
-            "manufacturer": "Community",
-            "model": "Surplus Load Switch",
-        }
+        return {**hub_device_info(self._entry.entry_id), "manufacturer": "Community"}
+
+
+class _PVDeviceSensorBase(_PVSensorBase):
+    """Base for a sensor belonging to one configured device — lives on
+    that device's own sub_device_info entry (named after the device
+    itself) rather than the hub, so its friendly_name is just its own
+    short label ("Ø Leistung", not "SLS Miner — Ø Leistung") and Settings
+    -> Devices & Services shows one clean card per device instead of one
+    giant flat list on the hub."""
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._device = device
+        self._device_id = device["_id"]
+
+    @property
+    def device_info(self):
+        return sub_device_info(self._entry.entry_id, self._device)
 
 
 class PVSurplusSensor(_PVSensorBase):
@@ -233,19 +247,14 @@ class PVSolarCalibrationSensor(_PVSensorBase):
         return self.coordinator.data.calibration
 
 
-class PVDevicePowerSensor(_PVSensorBase):
-    """Shows the predicted power for one device — measured 7-day average once
-    enough samples exist, otherwise the configured estimate."""
+class PVDevicePowerSensor(_PVDeviceSensorBase):
+    """Shows the predicted power for one device — measured active-runtime
+    average once enough samples exist, otherwise the configured estimate."""
 
+    _attr_name = "Ø Leistung"
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:chart-line"
-
-    def __init__(self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict) -> None:
-        super().__init__(coordinator, entry)
-        self._device_id = device["_id"]
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Ø Leistung"
 
     @property
     def unique_id(self):
@@ -285,7 +294,7 @@ class PVDevicePowerSensor(_PVSensorBase):
         return self.coordinator.data.device_diagnostics.get(self._device_id)
 
 
-class PVDeviceOffTimerSensor(_PVSensorBase):
+class PVDeviceOffTimerSensor(_PVDeviceSensorBase):
     """Seconds remaining before this device would actually be switched off,
     once an off-decision has started holding. There's a buffer on purpose —
     a device isn't cut the instant the battery projection turns negative;
@@ -295,15 +304,10 @@ class PVDeviceOffTimerSensor(_PVSensorBase):
     toward being turned off (stable on, stable off, or being force-managed
     by a window/dependency, which acts immediately with no buffer)."""
 
+    _attr_name = "Abschalt-Puffer"
     _attr_native_unit_of_measurement = "s"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:timer-sand"
-
-    def __init__(self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict) -> None:
-        super().__init__(coordinator, entry)
-        self._device_id = device["_id"]
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Abschalt-Puffer"
 
     @property
     def unique_id(self):

@@ -10,7 +10,41 @@ from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_DEVICE_CLIMATE_ENTITY, CONF_DEVICE_CLIMATE_ON_MODE, CONF_DEVICE_SWITCH
+from .const import (
+    CONF_DEVICE_CLIMATE_ENTITY,
+    CONF_DEVICE_CLIMATE_ON_MODE,
+    CONF_DEVICE_NAME,
+    CONF_DEVICE_SWITCH,
+    DOMAIN,
+)
+
+
+def hub_device_info(entry_id: str) -> dict:
+    """The single 'SLS' device that global (non-per-device) entities
+    belong to. Abbreviated (not the full "Surplus Load Switch") because
+    it prefixes every entity's friendly_name via has_entity_name — the
+    full name made every global entity's display name unnecessarily
+    long. Per-device entities live on their own sub_device_info device
+    instead, named after the device itself, not this hub."""
+    return {
+        "identifiers": {(DOMAIN, entry_id)},
+        "name": "SLS",
+    }
+
+
+def sub_device_info(entry_id: str, device: dict) -> dict:
+    """Each configured device (Miner, Boiler, ...) gets its own HA device,
+    nested under the hub device via via_device, instead of every device's
+    entities piling into one flat list on the hub. Settings -> Devices &
+    Services then shows one clean card per configured device, each with
+    its own Steuerung section containing only that device's entities."""
+    device_id = device["_id"]
+    name = device.get(CONF_DEVICE_NAME, device_id)
+    return {
+        "identifiers": {(DOMAIN, f"{entry_id}_{device_id}")},
+        "name": name,
+        "via_device": (DOMAIN, entry_id),
+    }
 
 
 def is_device_on(hass: HomeAssistant, dev: dict) -> bool:

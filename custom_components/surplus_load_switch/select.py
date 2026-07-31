@@ -37,6 +37,7 @@ from .const import (
     SELECT_NONE,
 )
 from .coordinator import PVSurplusCoordinator
+from .device_control import hub_device_info, sub_device_info
 
 
 async def async_setup_entry(
@@ -70,10 +71,7 @@ class _PVSelectBase(CoordinatorEntity[PVSurplusCoordinator], SelectEntity):
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Surplus Load Switch",
-        }
+        return hub_device_info(self._entry.entry_id)
 
     @property
     def available(self) -> bool:
@@ -126,6 +124,10 @@ class _PVDeviceSelectBase(_PVSelectBase):
         self._device_id = device["_id"]
 
     @property
+    def device_info(self):
+        return sub_device_info(self._entry.entry_id, self._device or {"_id": self._device_id})
+
+    @property
     def _device(self) -> dict | None:
         devices = self._entry.data.get(CONF_DEVICES, [])
         return next((d for d in devices if d.get("_id") == self._device_id), None)
@@ -166,8 +168,7 @@ class PVDeviceControlEntitySelect(_PVDeviceSelectBase):
         is_climate = device.get(CONF_DEVICE_IS_CLIMATE, False)
         self._field = CONF_DEVICE_CLIMATE_ENTITY if is_climate else CONF_DEVICE_SWITCH
         self._domain = "climate" if is_climate else "switch"
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Steuerungs-Entität"
+        self._attr_name = "Steuerungs-Entität"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_control_entity"
 
     @property
@@ -185,14 +186,13 @@ class PVDeviceClimateOnModeSelect(_PVDeviceSelectBase):
     as climate-controlled."""
 
     _field = CONF_DEVICE_CLIMATE_ON_MODE
+    _attr_name = "Climate-Modus (An)"
     _attr_icon = "mdi:thermostat"
 
     def __init__(
         self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
     ) -> None:
         super().__init__(coordinator, entry, device)
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Climate-Modus (An)"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_climate_on_mode"
 
     @property
@@ -233,28 +233,26 @@ class _PVDeviceOptionalEntitySelect(_PVDeviceSelectBase):
 class PVDevicePowerSensorSelect(_PVDeviceOptionalEntitySelect):
     _field = CONF_DEVICE_POWER_SENSOR
     _domain = "sensor"
+    _attr_name = "Leistungssensor"
     _attr_icon = "mdi:flash-outline"
 
     def __init__(
         self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
     ) -> None:
         super().__init__(coordinator, entry, device)
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Leistungssensor"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_power_sensor_select"
 
 
 class PVDeviceScheduleSelect(_PVDeviceOptionalEntitySelect):
     _field = CONF_DEVICE_SCHEDULE_ENTITY
     _domain = "schedule"
+    _attr_name = "Zeitplan-Helfer"
     _attr_icon = "mdi:calendar-clock"
 
     def __init__(
         self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
     ) -> None:
         super().__init__(coordinator, entry, device)
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Zeitplan-Helfer"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_schedule_select"
 
 
@@ -264,6 +262,7 @@ class PVDeviceDependsOnSelect(_PVDeviceSelectBase):
     names, not raw entity IDs, since these aren't live HA entities."""
 
     _field = CONF_DEVICE_DEPENDS_ON
+    _attr_name = "Abhängigkeit"
     _attr_icon = "mdi:link-variant"
 
     def __init__(
@@ -274,8 +273,6 @@ class PVDeviceDependsOnSelect(_PVDeviceSelectBase):
         candidates: list[dict],
     ) -> None:
         super().__init__(coordinator, entry, device)
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Abhängigkeit"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_depends_on"
         self._choices = {
             d.get(CONF_DEVICE_NAME, d["_id"]): d["_id"]

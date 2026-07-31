@@ -20,13 +20,13 @@ from .const import (
     CONF_DEVICES,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
-    CONF_DEVICE_NAME,
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_PRIORITY,
     CONF_MIN_SOC,
     DOMAIN,
 )
 from .coordinator import PVSurplusCoordinator
+from .device_control import hub_device_info, sub_device_info
 
 
 async def async_setup_entry(
@@ -57,10 +57,7 @@ class _PVGlobalNumberBase(CoordinatorEntity[PVSurplusCoordinator], NumberEntity)
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Surplus Load Switch",
-        }
+        return hub_device_info(self._entry.entry_id)
 
     @property
     def available(self) -> bool:
@@ -132,10 +129,7 @@ class _PVDeviceNumberBase(CoordinatorEntity[PVSurplusCoordinator], NumberEntity)
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Surplus Load Switch",
-        }
+        return sub_device_info(self._entry.entry_id, self._device or {"_id": self._device_id})
 
     @property
     def available(self) -> bool:
@@ -163,6 +157,7 @@ class _PVDeviceNumberBase(CoordinatorEntity[PVSurplusCoordinator], NumberEntity)
 
 class PVDevicePriorityNumber(_PVDeviceNumberBase):
     _field = CONF_DEVICE_PRIORITY
+    _attr_name = "Priorität"
     _attr_icon = "mdi:sort-numeric-ascending"
     _attr_native_min_value = 1
     _attr_native_max_value = 99
@@ -173,8 +168,6 @@ class PVDevicePriorityNumber(_PVDeviceNumberBase):
         self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
     ) -> None:
         super().__init__(coordinator, entry, device)
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Priorität"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_priority"
 
     @property
@@ -193,6 +186,7 @@ class PVDevicePowerEstimateNumber(_PVDeviceNumberBase):
     sensor's history is ever cleared."""
 
     _field = CONF_DEVICE_POWER_KW
+    _attr_name = "Geschätzte Leistung"
     _attr_icon = "mdi:flash"
     _attr_native_min_value = 0.05
     _attr_native_max_value = 22.0
@@ -204,8 +198,6 @@ class PVDevicePowerEstimateNumber(_PVDeviceNumberBase):
         self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
     ) -> None:
         super().__init__(coordinator, entry, device)
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Geschätzte Leistung"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_power_estimate"
 
     @property
@@ -223,6 +215,7 @@ class PVDeviceMinRuntimeNumber(_PVDeviceNumberBase):
     sentinel here."""
 
     _field = CONF_DEVICE_MIN_DAILY_RUNTIME_H
+    _attr_name = "Mindest-Laufzeit (0 = aus)"
     _attr_icon = "mdi:timer-outline"
     _attr_native_min_value = 0
     _attr_native_max_value = 24
@@ -234,8 +227,6 @@ class PVDeviceMinRuntimeNumber(_PVDeviceNumberBase):
         self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
     ) -> None:
         super().__init__(coordinator, entry, device)
-        name = device.get(CONF_DEVICE_NAME, self._device_id)
-        self._attr_name = f"{name} — Mindest-Laufzeit (0 = aus)"
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_min_runtime"
 
     @property
