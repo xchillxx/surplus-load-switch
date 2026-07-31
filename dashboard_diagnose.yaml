@@ -39,6 +39,8 @@ views:
         cards:
           - type: markdown
             title: Status (nach Priorität)
+            card_mod:
+              style: "ha-markdown { line-height: 1.25 !important; } ha-markdown p { margin-block: 2px !important; }"
             content: >-
               {% set surplus = states('sensor.surplus_load_switch_uberschuss') | float(0) %}
               {% set h_bat = states('sensor.surplus_load_switch_akku_reicht') | float(999) %}
@@ -50,27 +52,76 @@ views:
               {% set ns.rows = ns.rows + [(prio, s.entity_id)] %}
               {% endfor %}
 
-              {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace(' Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% set cutoff = state_attr(eid, 'naechster_cutoff') %}{% set fenster = ' · Zeitfenster bis ' ~ (cutoff | as_datetime | as_local).strftime('%H:%M') if cutoff else '' %}{% if aktiv == false %}⚪ **{{ name }} (Prio {{ prio | int }}) deaktiviert**
-              {% elif korrekt %}{% if an %}🟢 **{{ name }} (Prio {{ prio | int }}) läuft korrekt**{{ fenster }}
-              {% else %}🔴 **{{ name }} (Prio {{ prio | int }}) aus — korrekt**{{ fenster }}
-              {% endif %}{% else %}⚠️ **{{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein**{{ fenster }}
-              {% endif %}{% endfor %}
+              {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace(' Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% set cutoff = state_attr(eid, 'naechster_cutoff') %}{% set fenster = ' · Zeitfenster bis ' ~ (cutoff | as_datetime | as_local).strftime('%H:%M') if cutoff else '' %}{% if aktiv == false %}⚪ {{ name }} (Prio {{ prio | int }}) deaktiviert{% elif korrekt %}{% if an %}🟢 {{ name }} (Prio {{ prio | int }}) läuft korrekt{{ fenster }}{% else %}🔴 {{ name }} (Prio {{ prio | int }}) aus — korrekt{{ fenster }}{% endif %}{% else %}⚠️ {{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein{{ fenster }}{% endif %}<br>
+              {% endfor %}
 
-              {{ modus }} · Überschuss **{{ surplus | round(2) }} kW** · Akku reicht **{{ h_bat | round(1) if h_bat < 999 else '∞' }} h** vs. bis Solar **{{ h_sol | round(1) }} h**
+              {{ modus }} · Überschuss {{ surplus | round(2) }} kW · Akku reicht {{ h_bat | round(1) if h_bat < 999 else '∞' }} h vs. bis Solar {{ h_sol | round(1) }} h
 
           - type: entities
             title: Live-Werte (global)
+            # Solar-Leistung / Hausverbrauch / Batterie-SOC / Batterie-Leistung
+            # below use "attribute" rows on the Überschuss sensor as a safe
+            # generic default (works without editing anything) — but tapping
+            # them then opens the Überschuss graph, not each value's own
+            # history. For a proper history graph per value, replace those
+            # four rows' "type: attribute" block with a plain
+            # "- entity: <your raw solar/load/soc/battery sensor>" pointing
+            # at whichever entity you picked for that field in Einstellungen
+            # -> System.
             entities:
+              - type: attribute
+                entity: sensor.surplus_load_switch_uberschuss
+                attribute: solar_kw
+                name: Solar-Leistung
+                icon: mdi:solar-power
+                suffix: " kW"
+              - type: attribute
+                entity: sensor.surplus_load_switch_uberschuss
+                attribute: house_load_kw
+                name: Hausverbrauch (gesamt)
+                icon: mdi:home-lightning-bolt-outline
+                suffix: " kW"
+              - type: attribute
+                entity: sensor.surplus_load_switch_uberschuss
+                attribute: base_load_kw
+                name: Grundlast (ohne verwaltete Geräte)
+                icon: mdi:home-import-outline
+                suffix: " kW"
               - entity: sensor.surplus_load_switch_uberschuss
                 name: Überschuss (exkl. Wallbox + laufende Geräte)
+                icon: mdi:transmission-tower
+              - type: attribute
+                entity: sensor.surplus_load_switch_uberschuss
+                attribute: soc
+                name: Batterie-SOC
+                icon: mdi:battery
+                suffix: " %"
+              - type: attribute
+                entity: sensor.surplus_load_switch_uberschuss
+                attribute: batt_kw
+                name: Batterie-Leistung (+ laden / - entladen)
+                icon: mdi:battery-charging
+                suffix: " kW"
               - entity: sensor.surplus_load_switch_akku_reicht
                 name: Akku reicht
+                icon: mdi:battery-clock
               - entity: sensor.surplus_load_switch_bis_solar_start
                 name: Bis Solar-Start
+                icon: mdi:weather-sunset-up
               - entity: sensor.surplus_load_switch_verfugbare_akkukapazitat
                 name: Verfügbare Akkukapazität
+                icon: mdi:battery-high
+              - entity: sun.sun
+                name: Sonne über Horizont
+                icon: mdi:sun-angle
+              - type: attribute
+                entity: sensor.surplus_load_switch_uberschuss
+                attribute: batt_ok
+                name: Akku ausreichend (Nachtmodus OK)
+                icon: mdi:battery-check
               - entity: sensor.surplus_load_switch_modus
                 name: Modus
+                icon: mdi:information-outline
 
       - type: vertical-stack
         cards:
@@ -78,6 +129,9 @@ views:
             card:
               type: entities
               title: Geräte-Übersicht (automatisch)
+              show_header_toggle: false
+              card_mod:
+                style: "#states > div:nth-child(3n):not(:last-child) { border-bottom: 1px solid var(--divider-color); padding-bottom: 8px; margin-bottom: 8px; }"
             filter:
               include:
                 - entity_id: "sensor.*surplus_load_switch*_o_leistung"
@@ -100,7 +154,8 @@ views:
               include:
                 - entity_id: "switch.*surplus_load_switch*_prio_*"
                 - entity_id: "switch.*_kaskaden_status"
-                - entity_id: "sensor.*surplus_load_switch*_o_leistung"
+                - entity_id: "switch.*_ein_aus"
+                - entity_id: "binary_sensor.*surplus_load_switch*"
             sort:
               method: entity_id
 
@@ -130,58 +185,25 @@ views:
       - type: vertical-stack
         cards:
           - type: heading
-            heading: Geräte — Priorität & Leistung
-            icon: mdi:tune
-          - type: custom:auto-entities
-            card:
-              type: entities
-            filter:
-              include:
-                - entity_id: "number.*surplus_load_switch*"
-              exclude:
-                - entity_id: "number.*surplus_load_switch*mindest_soc"
-                - entity_id: "number.*surplus_load_switch*batteriekapazitat"
-            sort:
-              method: attribute
-              attribute: prioritaet
-              numeric: true
+            heading: Geräte
+            icon: mdi:devices
+          - type: markdown
+            card_mod:
+              style: "ha-markdown { line-height: 1.6 !important; }"
+            content: >-
+              {% set ns = namespace(rows=[]) %}
+              {% for s in states.sensor if 'surplus_load_switch' in s.entity_id and s.entity_id.endswith('_o_leistung') %}
+              {% set did = device_id(s.entity_id) %}
+              {% set prio = state_attr(s.entity_id, 'prioritaet') | default(99) | float(99) %}
+              {% set ns.rows = ns.rows + [(prio, device_attr(did, 'name'), did)] %}
+              {% endfor %}
 
-      - type: vertical-stack
-        cards:
-          - type: heading
-            heading: Geräte — Verknüpfungen
-            icon: mdi:link-variant
-          - type: custom:auto-entities
-            card:
-              type: entities
-            filter:
-              include:
-                - entity_id: "select.*surplus_load_switch*"
-              exclude:
-                - entity_id: "select.*_solar_sensor"
-                - entity_id: "select.*_last_sensor"
-                - entity_id: "select.*_soc_sensor"
-                - entity_id: "select.*_akku_leistungssensor"
-            sort:
-              method: attribute
-              attribute: prioritaet
-              numeric: true
+              {% for prio, name, did in ns.rows | sort %}**[{{ name }} (Prio {{ prio | int }})](/config/devices/device/{{ did }})**<br>
+              {% endfor %}
 
-      - type: vertical-stack
-        cards:
-          - type: heading
-            heading: Geräte — Aktiviert
-            icon: mdi:toggle-switch
-          - type: custom:auto-entities
-            card:
-              type: entities
-            filter:
-              include:
-                - entity_id: "switch.*surplus_load_switch*_aktiviert"
-            sort:
-              method: attribute
-              attribute: prioritaet
-              numeric: true
+              Klick auf ein Gerät öffnet dessen eigene Seite mit Priorität, Leistung,
+              Mindest-Laufzeit, Steuerungs-Entität, Leistungssensor, Zeitplan-Helfer,
+              Abhängigkeit und dem Aktiviert-Schalter — alles an einem Ort, direkt bearbeitbar.
 
   - title: Logs
     path: logs
@@ -197,6 +219,7 @@ views:
           include:
             - entity_id: "switch.*surplus_load_switch*_prio_*"
             - entity_id: "switch.*_kaskaden_status"
-            - entity_id: "sensor.*surplus_load_switch*_o_leistung"
+            - entity_id: "switch.*_ein_aus"
+            - entity_id: "binary_sensor.*surplus_load_switch*"
         sort:
           method: entity_id

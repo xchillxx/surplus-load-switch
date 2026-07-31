@@ -82,8 +82,9 @@ class PVMinSocNumber(_PVGlobalNumberBase):
         return self._entry.data.get(CONF_MIN_SOC, 20.0)
 
     async def async_set_native_value(self, value: float) -> None:
-        new_data = {**self._entry.data, CONF_MIN_SOC: value}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        async with self.coordinator.config_write_lock:
+            new_data = {**self._entry.data, CONF_MIN_SOC: value}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
         # Update coordinator config live in addition to the reload the
         # entry-update listener triggers, so the currently-in-flight cycle
         # (if any) already sees it rather than waiting for the reload.
@@ -109,8 +110,9 @@ class PVBatteryCapacityNumber(_PVGlobalNumberBase):
         return self._entry.data.get(CONF_BATTERY_CAPACITY_KWH, 13.8)
 
     async def async_set_native_value(self, value: float) -> None:
-        new_data = {**self._entry.data, CONF_BATTERY_CAPACITY_KWH: value}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        async with self.coordinator.config_write_lock:
+            new_data = {**self._entry.data, CONF_BATTERY_CAPACITY_KWH: value}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
 
 
 class _PVDeviceNumberBase(CoordinatorEntity[PVSurplusCoordinator], NumberEntity):
@@ -146,13 +148,14 @@ class _PVDeviceNumberBase(CoordinatorEntity[PVSurplusCoordinator], NumberEntity)
         return {"prioritaet": dev.get(CONF_DEVICE_PRIORITY, 99)} if dev else {}
 
     async def _async_write(self, value) -> None:
-        devices = self._entry.data.get(CONF_DEVICES, [])
-        new_devices = [
-            {**d, self._field: value} if d.get("_id") == self._device_id else d
-            for d in devices
-        ]
-        new_data = {**self._entry.data, CONF_DEVICES: new_devices}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        async with self.coordinator.config_write_lock:
+            devices = self._entry.data.get(CONF_DEVICES, [])
+            new_devices = [
+                {**d, self._field: value} if d.get("_id") == self._device_id else d
+                for d in devices
+            ]
+            new_data = {**self._entry.data, CONF_DEVICES: new_devices}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
 
 
 class PVDevicePriorityNumber(_PVDeviceNumberBase):
@@ -163,6 +166,7 @@ class PVDevicePriorityNumber(_PVDeviceNumberBase):
     _attr_native_max_value = 99
     _attr_native_step = 1
     _attr_mode = NumberMode.BOX
+    _attr_suggested_display_precision = 0
 
     def __init__(
         self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict

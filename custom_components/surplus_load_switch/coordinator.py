@@ -8,6 +8,7 @@ samples exist, the configured estimate.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import statistics
 from collections import deque
@@ -177,6 +178,18 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # actual actuation, so the "will switch" reasoning is visible
         # before the device itself flips.
         self._last_should_be_on: dict[str, bool] = {}
+        # Whether each core sensor was readable as of the last cycle — a
+        # system-log entry is written only on the transition (goes
+        # unavailable / comes back), not every cycle it stays that way.
+        self._last_sensor_valid: dict[str, bool] = {}
+        # Serializes every read-modify-write of the config entry's data
+        # (device enabled/priority/power/etc. number & select entities, the
+        # per-device enabled switch) — without this, toggling several of
+        # these entities at once (e.g. a "toggle all" dashboard button) is a
+        # real race: each one reads entry.data before any of the others has
+        # written back, so only the last write to land actually sticks and
+        # the rest are silently lost. Confirmed happening in practice.
+        self.config_write_lock = asyncio.Lock()
         self._calibrator = SolarOffsetCalibrator(hass, entry_id, config[CONF_SOLAR_SENSOR])
         self._last_offset_h = 0.0
         for dev in config.get(CONF_DEVICES, []):
@@ -233,7 +246,21 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         gets switched based on a sensor that isn't actually reporting.
         """
         state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unavailable", "unknown", ""):
+        valid = state is not None and state.state not in ("unavailable", "unknown", "")
+        # Only log real transitions — the entity's first-ever observation
+        # (right after startup/reload) always looks like a "change" against
+        # the empty dict otherwise, which would falsely announce "wieder
+        # verfügbar" for every core sensor on every single restart even
+        # though nothing was ever actually down.
+        was_tracked = entity_id in self._last_sensor_valid
+        if was_tracked and self._last_sensor_valid[entity_id] != valid:
+            message = (
+                f"{entity_id} wieder verfügbar" if valid
+                else f"{entity_id} nicht verfügbar — Zyklus wird übersprungen, bis es sich erholt"
+            )
+            self.hass.async_create_task(self._log_system(message))
+        self._last_sensor_valid[entity_id] = valid
+        if not valid:
             raise UpdateFailed(f"{entity_id} is unavailable/unknown — skipping this cycle")
 
     def _get_power_kw(self, entity_id: str | None) -> float:
@@ -254,15 +281,18 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """Write one logbook entry for a device's should_be_on target
         flipping — the actual reasoning behind the cascade's decision, not
         just the eventual on/off state change (which is several hold-time
-        cycles later and already visible in the logbook via the switch
-        itself). Attributed to the device's own power-diagnostic sensor so
-        it shows up alongside that device's other entries."""
+        cycles later). Attributed to the device's own managed switch, not
+        its power sensor — Home Assistant's logbook UI silently drops
+        logbook.log entries for the "sensor" domain (a "sensor" is Continuous
+        state, unliked to be tracked in the logbook), so attributing this to
+        a sensor entity meant the entry existed via the API but never
+        rendered anywhere in the frontend."""
         device_id = dev["_id"]
         name = dev.get(CONF_DEVICE_NAME, device_id)
         verb = "soll einschalten" if should_be_on else "soll ausschalten"
         message = f"{verb} — {reason}"
         entity_id = er.async_get(self.hass).async_get_entity_id(
-            "sensor", DOMAIN, f"{self._entry_id}_{device_id}_power"
+            "switch", DOMAIN, f"{self._entry_id}_{device_id}_managed"
         )
         service_data = {"name": name, "message": message, "domain": DOMAIN}
         if entity_id:
@@ -275,6 +305,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             return
         self._last_should_be_on[device_id] = should_be_on
         await self._log_decision(dev, should_be_on, reason)
+
+    async def _log_system(self, message: str) -> None:
+        """Write a logbook entry for something background/system-level
+        (not a per-device decision) — a recalibration finishing, a cycle
+        being skipped because a core sensor went unavailable, etc.
+        Attributed to the always-on system binary_sensor, since a plain
+        "sensor" domain entry never renders in the logbook UI."""
+        entity_id = er.async_get(self.hass).async_get_entity_id(
+            "binary_sensor", DOMAIN, f"{self._entry_id}_system_status"
+        )
+        service_data = {"name": "System", "message": message, "domain": DOMAIN}
+        if entity_id:
+            service_data["entity_id"] = entity_id
+        await self.hass.services.async_call("logbook", "log", service_data, blocking=False)
 
     def _predicted_power_kw(self, dev: dict) -> tuple[float, DeviceDiagnostics]:
         """Return (predicted_power_kw, diagnostics) — measured average if enough
@@ -549,10 +593,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
     async def _async_update_data(self) -> CoordinatorData:
         # Re-derive the learned solar-start offsets once a day at most — this
         # reads months of statistics and does real computation, far too
-        # expensive to repeat every 30s cycle. Independent of the live
-        # sensor checks below since it only reads historical statistics.
+        # expensive to repeat every cycle. Independent of the live sensor
+        # checks below since it only reads historical statistics.
         if self._calibrator.due_for_recalibration(timedelta(hours=CALIBRATION_INTERVAL_HOURS)):
             await self._calibrator.async_recalibrate()
+            diag = self._calibrator.diagnostics
+            months = len(diag["kalibrierte_monate"])
+            good_days = sum(diag["gute_tage_pro_monat"].values())
+            await self._log_system(
+                f"Solar-Start-Kalibrierung aktualisiert: {months}/12 Monate kalibriert "
+                f"aus {good_days} guten Tagen"
+            )
 
         for sensor_key in (CONF_SOLAR_SENSOR, CONF_LOAD_SENSOR, CONF_SOC_SENSOR, CONF_BATT_SENSOR):
             self._require_valid(self._config[sensor_key])

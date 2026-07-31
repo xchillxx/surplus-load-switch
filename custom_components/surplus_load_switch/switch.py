@@ -46,7 +46,7 @@ class PVDeviceSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
 
     _attr_has_entity_name = True
 
-    _attr_name = "Kaskaden-Status"
+    _attr_name = "Ein/Aus"
 
     def __init__(
         self,
@@ -138,13 +138,14 @@ class PVDeviceEnabledSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntit
         return {"prioritaet": dev.get(CONF_DEVICE_PRIORITY, 99)} if dev else {}
 
     async def _async_set_enabled(self, enabled: bool) -> None:
-        devices = self._entry.data.get(CONF_DEVICES, [])
-        new_devices = [
-            {**d, CONF_DEVICE_ENABLED: enabled} if d.get("_id") == self._device_id else d
-            for d in devices
-        ]
-        new_data = {**self._entry.data, CONF_DEVICES: new_devices}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        async with self.coordinator.config_write_lock:
+            devices = self._entry.data.get(CONF_DEVICES, [])
+            new_devices = [
+                {**d, CONF_DEVICE_ENABLED: enabled} if d.get("_id") == self._device_id else d
+                for d in devices
+            ]
+            new_data = {**self._entry.data, CONF_DEVICES: new_devices}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._async_set_enabled(True)

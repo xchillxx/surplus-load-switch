@@ -25,6 +25,7 @@ async def async_setup_entry(
     coordinator: PVSurplusCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = [
         PVSurplusSensor(coordinator, entry),
+        PVBaseLoadSensor(coordinator, entry),
         PVHBatterySensor(coordinator, entry),
         PVHToSolarSensor(coordinator, entry),
         PVModeSensor(coordinator, entry),
@@ -104,6 +105,16 @@ class PVSurplusSensor(_PVSensorBase):
 
     @property
     def extra_state_attributes(self):
+        # base_load_kw/solar_kw/house_load_kw/batt_ok are still read by the
+        # example dashboard (as a generic fallback for installs that
+        # haven't pointed those rows at their own raw sensors, and until
+        # Grundlast/Akku-ausreichend's own entity_ids are known post-
+        # release) — soc/min_soc/batt_kw/discharge_kw/smoothed_discharge_kw/
+        # sun_above_horizon were only ever attributes here for the same
+        # purpose and are no longer read anywhere (Batterie-SOC, Batterie-
+        # Leistung and Sonne-über-Horizont now link straight to their real
+        # source entities), so they're gone rather than kept as dead
+        # duplication of data the raw sensors already provide.
         if not self.coordinator.data:
             return {}
         d = self.coordinator.data
@@ -111,7 +122,31 @@ class PVSurplusSensor(_PVSensorBase):
             "base_load_kw": round(d.base_load_kw, 3),
             "solar_kw": round(d.solar_kw, 3),
             "house_load_kw": round(d.load_kw, 3),
+            "batt_ok": d.batt_ok,
         }
+
+
+class PVBaseLoadSensor(_PVSensorBase):
+    """Load the managed devices don't account for — house consumption minus
+    the wallbox and whatever's currently drawn by devices this integration
+    itself controls. Its own entity (not just an attribute on Überschuss)
+    so it gets its own recorder history instead of always opening
+    Überschuss's graph when tapped."""
+
+    _attr_name = "Grundlast"
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:home-import-outline"
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_base_load"
+
+    @property
+    def native_value(self):
+        if self.coordinator.data:
+            return round(self.coordinator.data.base_load_kw, 3)
+        return None
 
 
 class PVHBatterySensor(_PVSensorBase):

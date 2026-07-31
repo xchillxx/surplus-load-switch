@@ -1,7 +1,18 @@
 from datetime import timedelta
 
 DOMAIN = "surplus_load_switch"
-PLATFORMS = ["sensor", "number", "switch", "select"]
+PLATFORMS = ["sensor", "number", "switch", "select", "binary_sensor"]
+
+# Defined early: every "N coordinator cycles" constant below is derived from
+# this via minutes_to_cycles(), so changing this doesn't silently change any
+# of the wall-clock durations they were tuned to (a fixed cycle count alone
+# would double every hold/smoothing time if this doubled, without anyone
+# intending that).
+UPDATE_INTERVAL_SECONDS = 60
+
+
+def _minutes_to_cycles(minutes: float) -> int:
+    return max(int(round(minutes * 60 / UPDATE_INTERVAL_SECONDS)), 1)
 
 CLIMATE_HVAC_MODE_OPTIONS = ["heat", "cool", "auto", "heat_cool", "dry", "fan_only"]
 # Sentinel shown in select entities for an optional field with no value
@@ -62,16 +73,19 @@ BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
 # long until tomorrow's threshold" once today's has passed).
 DAYTIME_PROJECTION_HORIZON_H = 1.0
 
-# Stability: how many coordinator cycles (30s each) must condition hold.
-# No switching action fires off a brief few-minute fluctuation — every
-# on/off decision needs at least 10 minutes of the condition holding
-# true, however low the priority or however tight the battery margin
-# looks. (The sensor-staleness correction elsewhere is a separate,
-# additional safeguard specifically for the cloud-polling-lag scenario,
-# not a substitute for this general floor.)
-STABLE_ON_CYCLES = 20   # 20 × 30s = 10 min before turning ON
-STABLE_OFF_CYCLES = 20   # 20 × 30s = 10 min minimum — used when there's no battery margin to spare
-STABLE_OFF_CYCLES_MAX = 40  # 40 × 30s = 20 min — used when margin is comfortable
+# Stability: how many coordinator cycles must the condition hold, expressed
+# as wall-clock minutes (via _minutes_to_cycles) rather than a fixed cycle
+# count — a fixed count would silently double every hold time below if
+# UPDATE_INTERVAL_SECONDS ever changes, which is not what changing the
+# update interval is supposed to do. No switching action fires off a brief
+# few-minute fluctuation — every on/off decision needs at least 10 minutes
+# of the condition holding true, however low the priority or however tight
+# the battery margin looks. (The sensor-staleness correction elsewhere is a
+# separate, additional safeguard specifically for the cloud-polling-lag
+# scenario, not a substitute for this general floor.)
+STABLE_ON_CYCLES = _minutes_to_cycles(10)   # 10 min before turning ON
+STABLE_OFF_CYCLES = _minutes_to_cycles(10)  # 10 min minimum — used when there's no battery margin to spare
+STABLE_OFF_CYCLES_MAX = _minutes_to_cycles(20)  # 20 min — used when margin is comfortable
 
 # Priority staggering: when several devices cross their off-threshold in the
 # same cycle (e.g. solar drops off a cliff at sunset), they'd otherwise all
@@ -82,8 +96,8 @@ STABLE_OFF_CYCLES_MAX = 40  # 40 × 30s = 20 min — used when margin is comfort
 # floor itself is still the 10-minute minimum above, not shorter — the
 # staggering only spreads out *when within that range* each priority
 # finishes waiting, it never drops any device below the general floor.
-STAGGER_CYCLES_PER_PRIORITY_STEP = 2  # 2 × 30s = 1 min less patience per rank
-OFF_CYCLES_FLOOR = 20  # 20 × 30s = 10 min minimum, however low the priority
+STAGGER_CYCLES_PER_PRIORITY_STEP = _minutes_to_cycles(1)  # 1 min less patience per rank
+OFF_CYCLES_FLOOR = _minutes_to_cycles(10)  # 10 min minimum, however low the priority
 
 # How long to keep using the pre-transition managed-power figure for
 # base_load AND battery-discharge attribution after a managed device's
@@ -116,9 +130,7 @@ MARGIN_FOR_MAX_PATIENCE_H = 4.0
 # the night" otherwise). Using the MEDIAN over a longer window ignores a spike
 # entirely as long as it's under half the window, while still tracking a real,
 # sustained change within roughly half the window's length.
-DISCHARGE_SMOOTHING_SAMPLES = 40  # 40 × 30s = 20 min rolling median
-
-UPDATE_INTERVAL_SECONDS = 30
+DISCHARGE_SMOOTHING_SAMPLES = _minutes_to_cycles(20)  # 20 min rolling median
 
 # Default monthly solar offsets (hours after sunrise until PV is useful)
 DEFAULT_SOLAR_OFFSETS = [3.5, 3.0, 2.5, 2.0, 2.0, 2.2, 2.2, 2.0, 2.5, 3.0, 3.5, 4.0]
@@ -134,10 +146,10 @@ STORAGE_VERSION = 1
 # — samples simply aren't touched while the device is off, since they're
 # only appended (and the oldest evicted) while it's on.
 POWER_HISTORY_ACTIVE_HOURS = 24
-MAX_SAMPLES_PER_DEVICE = int(POWER_HISTORY_ACTIVE_HOURS * 3600 / UPDATE_INTERVAL_SECONDS)  # 2880
-# Minimum samples before trusting the measured average over the configured estimate
-# (20 samples × 30s = 10 minutes of runtime)
-MIN_SAMPLES_FOR_MEASURED_AVG = 20
+MAX_SAMPLES_PER_DEVICE = int(POWER_HISTORY_ACTIVE_HOURS * 3600 / UPDATE_INTERVAL_SECONDS)
+# Minimum samples before trusting the measured average over the configured
+# estimate — 10 minutes of active runtime.
+MIN_SAMPLES_FOR_MEASURED_AVG = _minutes_to_cycles(10)
 # Delay (seconds) before persisting new samples to disk (debounced writes)
 POWER_STORE_SAVE_DELAY = 60
 

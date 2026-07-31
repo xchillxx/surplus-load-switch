@@ -164,6 +164,12 @@ dashboard below, which already includes them) and edit them the same way
 as any other number/select entity, including through automations or
 scripts if you want to change something on a schedule.
 
+Each configured device also has its own Home Assistant device (Settings →
+Devices & Services → Surplus Load Switch → the device's name), grouping
+all of its own entities — including the ones above — onto one page. The
+example dashboard's Einstellungen tab links straight there per device
+instead of duplicating every field across several cards.
+
 ## Example dashboard
 
 [`dashboard_diagnose.yaml`](dashboard_diagnose.yaml) is a diagnostics
@@ -182,7 +188,7 @@ one) via Settings → Dashboards → "Edit in YAML".
 
 ## How the decision logic works
 
-Every 30 seconds, for each switchable device (highest priority first):
+Every 60 seconds, for each switchable device (highest priority first):
 
 ```
 remaining_surplus = available_surplus - sum(power already reserved by higher-priority devices)

@@ -107,8 +107,9 @@ class PVGlobalSensorSelect(_PVSelectBase):
         return self._entry.data.get(self._field)
 
     async def async_select_option(self, option: str) -> None:
-        new_data = {**self._entry.data, self._field: option}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        async with self.coordinator.config_write_lock:
+            new_data = {**self._entry.data, self._field: option}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
 
 
 class _PVDeviceSelectBase(_PVSelectBase):
@@ -143,13 +144,14 @@ class _PVDeviceSelectBase(_PVSelectBase):
         return dev.get(self._field) if dev else None
 
     async def _async_write(self, value) -> None:
-        devices = self._entry.data.get(CONF_DEVICES, [])
-        new_devices = [
-            {**d, self._field: value} if d.get("_id") == self._device_id else d
-            for d in devices
-        ]
-        new_data = {**self._entry.data, CONF_DEVICES: new_devices}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        async with self.coordinator.config_write_lock:
+            devices = self._entry.data.get(CONF_DEVICES, [])
+            new_devices = [
+                {**d, self._field: value} if d.get("_id") == self._device_id else d
+                for d in devices
+            ]
+            new_data = {**self._entry.data, CONF_DEVICES: new_devices}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
 
     async def async_select_option(self, option: str) -> None:
         await self._async_write(option)
