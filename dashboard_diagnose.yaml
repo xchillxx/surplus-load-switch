@@ -47,7 +47,7 @@ views:
               {% set h_sol = states('sensor.surplus_load_switch_bis_solar_start') | float(0) %}
               {% set modus = states('sensor.surplus_load_switch_modus') %}
               {% set naechste = (states.sensor | selectattr('entity_id','search','_nachste_prufung$') | list | first) %}
-              {% set schwach = (states.binary_sensor | selectattr('attributes.peak_heute_kw', 'defined') | list | first) %}
+              {% set schwach = (states.binary_sensor | selectattr('attributes.soc_zuwachs_heute', 'defined') | list | first) %}
               {% set ns = namespace(rows=[]) %}
               {% for s in states.sensor if 'surplus_load_switch' in s.entity_id and s.entity_id.endswith('_o_leistung') %}
               {% set prio = state_attr(s.entity_id, 'prioritaet') | default(99) | float(99) %}
@@ -57,7 +57,7 @@ views:
               {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace(' Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% set cutoff = state_attr(eid, 'naechster_cutoff') %}{% set countdown = state_attr(eid, 'schalt_countdown_s') | default(0, true) | int %}{% set richtung = state_attr(eid, 'schalt_richtung') %}{% set fenster = ' · Zeitfenster bis ' ~ (cutoff | as_datetime | as_local).strftime('%H:%M') if cutoff else '' %}{% if aktiv == false %}⚪ {{ name }} (Prio {{ prio | int }}) deaktiviert{% elif korrekt %}{% if an %}🟢 {{ name }} (Prio {{ prio | int }}) läuft korrekt{{ fenster }}{% else %}🔴 {{ name }} (Prio {{ prio | int }}) aus — korrekt{{ fenster }}{% endif %}{% elif countdown > 0 %}⏳ {{ name }} (Prio {{ prio | int }}) wartet noch {{ (countdown // 60) }}:{{ '%02d' | format(countdown % 60) }} min bis {{ richtung }}{{ fenster }}{% else %}⚠️ {{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein{{ fenster }}{% endif %}<br>
               {% endfor %}
 
-              {{ modus }} · Überschuss {{ surplus | round(2) }} kW · Akku reicht {{ h_bat | round(1) if h_bat < 999 else '∞' }} h vs. bis Solar {{ h_sol | round(1) }} h{% if naechste %} · Nächste Prüfung {{ (naechste.state | as_datetime | as_local).strftime('%H:%M:%S') }}{% endif %}{% if schwach and schwach.state == 'on' %} · ⚠️ Schwacher Tag ({{ schwach.attributes.peak_heute_kw | round(2) }} von {{ schwach.attributes.referenz_peak_kw | round(2) }} kW üblich){% endif %}
+              {{ modus }} · Überschuss {{ surplus | round(2) }} kW · Akku reicht {{ h_bat | round(1) if h_bat < 999 else '∞' }} h vs. bis Solar {{ h_sol | round(1) }} h{% if naechste %} · Nächste Prüfung {{ (naechste.state | as_datetime | as_local).strftime('%H:%M:%S') }}{% endif %}{% if schwach and schwach.state == 'on' %} · ⚠️ Schwacher Tag (Akku +{{ schwach.attributes.soc_zuwachs_heute | round(1) }}% von üblich +{{ schwach.attributes.referenz_soc_zuwachs | round(1) }}%){% endif %}
 
           - type: entities
             title: Live-Werte (global)

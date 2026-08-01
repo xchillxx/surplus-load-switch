@@ -90,7 +90,8 @@ class PVWeakDayBinarySensor(CoordinatorEntity[PVSurplusCoordinator], BinarySenso
     """Whether today counts as a weak-production day compared to the
     calibrated normal for this time of year — see coordinator._async_
     update_data and the WEAK_DAY_* constants. Off (and available) even
-    with no reference peak calibrated yet — the attributes explain why."""
+    with no reference SOC gain calibrated yet — the attributes explain
+    why."""
 
     _attr_has_entity_name = True
     _attr_name = "Schwacher Tag"
@@ -119,6 +120,6 @@ class PVWeakDayBinarySensor(CoordinatorEntity[PVSurplusCoordinator], BinarySenso
             return {}
         d = self.coordinator.data
         return {
-            "peak_heute_kw": round(d.today_peak_kw, 3),
-            "referenz_peak_kw": round(d.reference_peak_kw, 3) if d.reference_peak_kw else None,
+            "soc_zuwachs_heute": round(d.soc_gain_today, 1) if d.soc_gain_today is not None else None,
+            "referenz_soc_zuwachs": round(d.reference_soc_gain, 1) if d.reference_soc_gain else None,
         }

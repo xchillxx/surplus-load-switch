@@ -80,11 +80,21 @@ BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
 WALLBOX_IDLE_THRESHOLD_KW = 0.3
 
 # --- Weak-day detection ---
-# Today counts as "weak" once its peak solar power so far drops below this
-# fraction of the calibrated reference peak for this calendar month (see
-# SolarOffsetCalibrator.reference_peak_kw) — comparing against a learned
-# normal for the time of year, not a fixed kW value, so it works the same
-# on any system size and season.
+# Solar power (kW) above which today counts as "producing" for the purpose
+# of capturing the battery's baseline SOC at solar start — an absolute
+# value, not a fraction of today's own peak (unlike CALIBRATION_THRESHOLD_
+# RATIO above), since live tracking can't know today's peak in advance the
+# way the historical offset calibration can.
+SOLAR_START_MIN_KW = 0.3
+# Today counts as "weak" once the battery's SOC gain since solar start
+# drops below this fraction of the calibrated reference gain for this
+# calendar month (see SolarOffsetCalibrator.reference_soc_gain) —
+# comparing against a learned normal for the time of year, not a fixed kW
+# or %-SOC value. SOC gain (not raw solar power) is used because charging
+# naturally integrates production over time, so a brief sun break through
+# passing clouds barely moves it, and because it already reflects
+# whatever the house consumed along the way — both of which a simple
+# instantaneous solar-power peak or reading would misjudge.
 WEAK_DAY_RATIO_THRESHOLD = 0.6
 # Don't judge a day "weak" before this local hour — the morning peak may
 # simply not have happened yet, which would otherwise look identical to a
@@ -236,8 +246,8 @@ CALIBRATION_MIN_GOOD_DAYS = 5
 # the seasonal relationship isn't necessarily linear over that distance.
 CALIBRATION_MAX_INTERP_MONTHS = 2
 # How many recent complete calendar days to use for weak-day detection's
-# simple fallback reference peak, whenever the current month doesn't have
-# its own calibrated one yet (see SolarOffsetCalibrator.
-# effective_reference_peak_kw) — short enough to reflect current
+# simple fallback reference SOC gain, whenever the current month doesn't
+# have its own calibrated one yet (see SolarOffsetCalibrator.
+# effective_reference_soc_gain) — short enough to reflect current
 # conditions quickly, long enough to smooth out a single cloudy day.
-RECENT_PEAK_WINDOW_DAYS = 14
+RECENT_SOC_GAIN_WINDOW_DAYS = 14

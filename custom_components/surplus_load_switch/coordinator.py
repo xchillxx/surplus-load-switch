@@ -60,6 +60,7 @@ from .const import (
     STABLE_ON_CYCLES,
     STAGGER_CYCLES_PER_PRIORITY_STEP,
     STALENESS_MIN_REFRESHES,
+    SOLAR_START_MIN_KW,
     SURPLUS_OFF_THRESHOLD,
     SURPLUS_ON_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
@@ -139,8 +140,8 @@ class CoordinatorData:
     calibration: dict = field(default_factory=dict)
     active_solar_offset_h: float = 0.0
     next_cycle_at: datetime | None = None
-    today_peak_kw: float = 0.0
-    reference_peak_kw: float | None = None
+    soc_gain_today: float | None = None
+    reference_soc_gain: float | None = None
     is_weak_day: bool = False
 
 
@@ -195,10 +196,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # Consecutive cycles a wallbox's own power draw has been below the
         # idle threshold — see _wallbox_satisfied's idle-release check.
         self._wallbox_idle_counters: dict[str, int] = {}
-        # Today's highest solar reading so far, for weak-day detection —
-        # reset whenever the local calendar date changes.
+        # Battery SOC captured the moment solar production starts today
+        # (see SOLAR_START_MIN_KW), for weak-day detection — reset to None
+        # whenever the local calendar date changes, then set exactly once
+        # for the rest of that day.
         self._today_date: date | None = None
-        self._today_peak_kw: float = 0.0
+        self._today_solar_start_soc: float | None = None
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -216,7 +219,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # state history isn't meaningful to record anyway, only its current
         # (live-templated) attribute value is.
         self.log_entries: deque[dict] = deque(maxlen=1000)
-        self._calibrator = SolarOffsetCalibrator(hass, entry_id, config[CONF_SOLAR_SENSOR])
+        self._calibrator = SolarOffsetCalibrator(
+            hass, entry_id, config[CONF_SOLAR_SENSOR], config[CONF_SOC_SENSOR]
+        )
         self._last_offset_h = 0.0
         for dev in config.get(CONF_DEVICES, []):
             device_id = dev["_id"]
@@ -689,31 +694,40 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._require_valid(self._config[sensor_key])
 
         solar = self._get_float(self._config[CONF_SOLAR_SENSOR])
-
-        # Weak-day detection: track today's peak solar reading so far and
-        # compare it against the calibrated "normal" peak for this month,
-        # once it's late enough that a genuinely strong morning would
-        # already have shown it (see WEAK_DAY_EARLIEST_CHECK_HOUR — before
-        # that, a low peak-so-far just means the sun hasn't gotten going
-        # yet, not that today is weak).
-        local_now = dt_util.now()
-        if self._today_date != local_now.date():
-            self._today_date = local_now.date()
-            self._today_peak_kw = 0.0
-        self._today_peak_kw = max(self._today_peak_kw, solar)
-        reference_peak_kw = self._calibrator.effective_reference_peak_kw(local_now.month)
-        is_weak_day = (
-            reference_peak_kw is not None
-            and reference_peak_kw > 0
-            and local_now.hour >= WEAK_DAY_EARLIEST_CHECK_HOUR
-            and self._today_peak_kw < WEAK_DAY_RATIO_THRESHOLD * reference_peak_kw
-        )
-
         load = self._get_float(self._config[CONF_LOAD_SENSOR])
         soc = self._get_float(self._config[CONF_SOC_SENSOR])
         batt = self._get_float(self._config[CONF_BATT_SENSOR])
         battery_kwh = self._config.get(CONF_BATTERY_CAPACITY_KWH, 13.8)
         min_soc = self._config.get(CONF_MIN_SOC, 20.0)
+
+        # Weak-day detection: capture the battery's SOC the moment solar
+        # production starts today (see SOLAR_START_MIN_KW), then compare
+        # how much it's gained since against the calibrated "normal" gain
+        # for this month, once it's late enough that a genuinely strong
+        # morning would already have shown it (see
+        # WEAK_DAY_EARLIEST_CHECK_HOUR — before that, a low gain-so-far
+        # just means the sun hasn't gotten going yet, not that today is
+        # weak). SOC gain (not raw solar power) is used so a brief sun
+        # break through passing clouds doesn't swing the reading, and so
+        # household consumption along the way is naturally accounted for.
+        local_now = dt_util.now()
+        if self._today_date != local_now.date():
+            self._today_date = local_now.date()
+            self._today_solar_start_soc = None
+        if self._today_solar_start_soc is None and solar >= SOLAR_START_MIN_KW:
+            self._today_solar_start_soc = soc
+        soc_gain_today = (
+            soc - self._today_solar_start_soc
+            if self._today_solar_start_soc is not None else None
+        )
+        reference_soc_gain = self._calibrator.effective_reference_soc_gain(local_now.month)
+        is_weak_day = (
+            soc_gain_today is not None
+            and reference_soc_gain is not None
+            and reference_soc_gain > 0
+            and local_now.hour >= WEAK_DAY_EARLIEST_CHECK_HOUR
+            and soc_gain_today < WEAK_DAY_RATIO_THRESHOLD * reference_soc_gain
+        )
 
         discharge = max(-batt, 0.0)
         self._discharge_samples.append(discharge)
@@ -758,8 +772,8 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             calibration=self._calibrator.diagnostics,
             active_solar_offset_h=self._last_offset_h,
             next_cycle_at=dt_util.utcnow() + timedelta(seconds=UPDATE_INTERVAL_SECONDS),
-            today_peak_kw=self._today_peak_kw,
-            reference_peak_kw=reference_peak_kw,
+            soc_gain_today=soc_gain_today,
+            reference_soc_gain=reference_soc_gain,
             is_weak_day=is_weak_day,
         )
 
@@ -1079,8 +1093,8 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     "deaktiviert" if not device_enabled
                     else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
                     else (
-                        f"schwacher Tag ({data.today_peak_kw:.2f} kW von normal "
-                        f"{data.reference_peak_kw:.2f} kW bisher, Akku noch nicht voll)"
+                        f"schwacher Tag (Akku seit Solarstart +{data.soc_gain_today:.1f}% "
+                        f"von normal +{data.reference_soc_gain:.1f}%, noch nicht voll)"
                     ) if weak_day_block
                     else "außerhalb des Zeitfensters"
                 )

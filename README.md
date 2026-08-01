@@ -123,16 +123,20 @@ cloud passes over or another appliance briefly kicks in.
   and a "next check" timestamp sensor shows when the coordinator will
   re-evaluate everything — so a device that's still holding out its
   stability buffer reads as "waiting X minutes", not as a stuck deviation.
-- **Weak-day detection** — compares today's peak solar power so far
-  against the solar-start calibration's learned normal peak for this time
-  of year (once late enough in the morning that a strong day would
-  already show it). A wallbox can be given an effective priority "for
-  weak days only" even though it's never itself switched or ranked
-  otherwise — on a day running well below normal, any device with a
-  worse priority than that gets held back entirely until the battery's
-  nearly full, so a car that still needs it gets first claim on a scarce
-  day. Optional and off by default; needs the calibration to actually
-  have a reference peak for the current month.
+- **Weak-day detection** — compares the battery's SOC gain since solar
+  start today against the solar-start calibration's learned normal gain
+  for this time of year (once late enough in the morning that a strong
+  day would already show it), falling back to a simple median of the
+  last 14 days whenever the current month isn't calibrated yet. SOC gain
+  (not raw solar power) is used since it's naturally smoothed by the
+  battery's own charging — a brief sun break through passing clouds
+  barely moves it — and it already accounts for household consumption
+  along the way. A wallbox can be given an effective priority "for weak
+  days only" even though it's never itself switched or ranked otherwise
+  — on a day running well below normal, any device at or worse than that
+  priority gets held back entirely until the battery's nearly full, so a
+  car that still needs it gets first claim on a scarce day. Optional and
+  off by default.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
   Devices & Services, nested under the integration's hub device, instead of
