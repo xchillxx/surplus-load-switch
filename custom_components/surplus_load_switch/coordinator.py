@@ -18,6 +18,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -55,12 +56,14 @@ from .const import (
     MIN_RUNTIME_FORCE_AFTER_HOUR,
     MIN_SAMPLES_FOR_MEASURED_AVG,
     OFF_CYCLES_FLOOR,
+    POWER_STORE_SAVE_DELAY,
     STABLE_OFF_CYCLES,
     STABLE_OFF_CYCLES_MAX,
     STABLE_ON_CYCLES,
     STAGGER_CYCLES_PER_PRIORITY_STEP,
     STALENESS_MIN_REFRESHES,
     SOLAR_START_MIN_KW,
+    STORAGE_VERSION,
     SURPLUS_OFF_THRESHOLD,
     SURPLUS_ON_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
@@ -211,6 +214,18 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # within a day on its own). Reset alongside _today_solar_start_soc.
         self._today_peak_soc_gain: float = 0.0
         self._today_peak_soc: float = 0.0
+        # Persists the four values above across restarts/reloads — in-
+        # memory-only tracking meant "already proved itself today" got
+        # silently forgotten by every restart during that same day (e.g. a
+        # round of updates), re-exposing devices to a weak-day block a
+        # battery that actually topped up hours earlier no longer
+        # deserved. Loaded once via async_load_daily_state() (called from
+        # __init__.py before the first refresh); only trusted if the
+        # stored date is still today, so a restart on a genuinely new day
+        # starts fresh exactly like before.
+        self._daily_state_store: Store = Store(
+            hass, STORAGE_VERSION, f"surplus_load_switch_daily_{entry_id}"
+        )
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -240,8 +255,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """Load persisted per-device state: power samples (only if a power
         sensor is configured) and today's accumulated runtime (always, so
         the minimum daily runtime feature has history even if it's enabled
-        later). Also loads the last computed solar-offset calibration."""
+        later). Also loads the last computed solar-offset calibration and
+        today's weak-day peak-tracking state."""
         await self._calibrator.async_load()
+        await self._async_load_daily_state()
         for dev in self._config.get(CONF_DEVICES, []):
             if dev.get(CONF_DEVICE_IS_WALLBOX, False):
                 continue
@@ -256,6 +273,34 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             runtime_tracker = DailyRuntimeTracker(self.hass, self._entry_id, device_id)
             await runtime_tracker.async_load()
             self._runtime_trackers[device_id] = runtime_tracker
+
+    async def _async_load_daily_state(self) -> None:
+        data = await self._daily_state_store.async_load()
+        if not data:
+            return
+        stored_date = data.get("date")
+        if stored_date != dt_util.now().date().isoformat():
+            # Stale from a previous day — today starts fresh exactly like
+            # a first-ever run would, via the normal date-change reset in
+            # _async_update_data.
+            return
+        self._today_date = dt_util.now().date()
+        self._today_solar_start_soc = data.get("solar_start_soc")
+        self._today_peak_soc_gain = data.get("peak_soc_gain", 0.0)
+        self._today_peak_soc = data.get("peak_soc", 0.0)
+
+    def _save_daily_state(self) -> None:
+        if self._today_date is None:
+            return
+        self._daily_state_store.async_delay_save(
+            lambda: {
+                "date": self._today_date.isoformat(),
+                "solar_start_soc": self._today_solar_start_soc,
+                "peak_soc_gain": self._today_peak_soc_gain,
+                "peak_soc": self._today_peak_soc,
+            },
+            POWER_STORE_SAVE_DELAY,
+        )
 
     @property
     def devices(self) -> list[dict]:
@@ -734,6 +779,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._today_peak_soc = max(self._today_peak_soc, soc)
         if soc_gain_today is not None:
             self._today_peak_soc_gain = max(self._today_peak_soc_gain, soc_gain_today)
+        self._save_daily_state()
         reference_soc_gain = self._calibrator.effective_reference_soc_gain(local_now.month)
         # Decided from today's *peak* gain/SOC, not the live values — SOC
         # gain naturally falls again once the battery starts discharging
