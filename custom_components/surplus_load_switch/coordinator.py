@@ -141,6 +141,7 @@ class CoordinatorData:
     active_solar_offset_h: float = 0.0
     next_cycle_at: datetime | None = None
     soc_gain_today: float | None = None
+    peak_soc_gain_today: float = 0.0
     reference_soc_gain: float | None = None
     is_weak_day: bool = False
 
@@ -202,6 +203,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # for the rest of that day.
         self._today_date: date | None = None
         self._today_solar_start_soc: float | None = None
+        # Highest SOC gain (and highest raw SOC) seen so far today — weak-
+        # day status is decided from these peaks, not the live/current
+        # values, so it can't flap back to "weak" once disproven just
+        # because the battery is discharging again in the evening (SOC
+        # gain, unlike the old peak-solar-kW metric, isn't monotonic
+        # within a day on its own). Reset alongside _today_solar_start_soc.
+        self._today_peak_soc_gain: float = 0.0
+        self._today_peak_soc: float = 0.0
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -714,19 +723,28 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if self._today_date != local_now.date():
             self._today_date = local_now.date()
             self._today_solar_start_soc = None
+            self._today_peak_soc_gain = 0.0
+            self._today_peak_soc = 0.0
         if self._today_solar_start_soc is None and solar >= SOLAR_START_MIN_KW:
             self._today_solar_start_soc = soc
         soc_gain_today = (
             soc - self._today_solar_start_soc
             if self._today_solar_start_soc is not None else None
         )
+        self._today_peak_soc = max(self._today_peak_soc, soc)
+        if soc_gain_today is not None:
+            self._today_peak_soc_gain = max(self._today_peak_soc_gain, soc_gain_today)
         reference_soc_gain = self._calibrator.effective_reference_soc_gain(local_now.month)
+        # Decided from today's *peak* gain/SOC, not the live values — SOC
+        # gain naturally falls again once the battery starts discharging
+        # in the evening, and a day that already proved itself strong
+        # (or the battery topped up) earlier on shouldn't flip back to
+        # "weak" just because it's evening now.
         is_weak_day = (
-            soc_gain_today is not None
-            and reference_soc_gain is not None
+            reference_soc_gain is not None
             and reference_soc_gain > 0
             and local_now.hour >= WEAK_DAY_EARLIEST_CHECK_HOUR
-            and soc_gain_today < WEAK_DAY_RATIO_THRESHOLD * reference_soc_gain
+            and self._today_peak_soc_gain < WEAK_DAY_RATIO_THRESHOLD * reference_soc_gain
         )
 
         discharge = max(-batt, 0.0)
@@ -773,6 +791,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             active_solar_offset_h=self._last_offset_h,
             next_cycle_at=dt_util.utcnow() + timedelta(seconds=UPDATE_INTERVAL_SECONDS),
             soc_gain_today=soc_gain_today,
+            peak_soc_gain_today=self._today_peak_soc_gain,
             reference_soc_gain=reference_soc_gain,
             is_weak_day=is_weak_day,
         )
@@ -1068,12 +1087,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # scarce surplus on low-priority devices while today's
             # production is running well below normal for the season,
             # unless the battery's already basically full anyway (then
-            # there's nothing left to protect it for).
+            # there's nothing left to protect it for) — checked against
+            # today's *peak* SOC, not the live value, so a battery that
+            # topped up earlier and is now discharging in the evening
+            # doesn't reopen the block it already earned its way out of.
             weak_day_block = (
                 data.is_weak_day
                 and weak_day_priority_threshold is not None
                 and diag.priority >= weak_day_priority_threshold
-                and data.soc < WEAK_DAY_BATTERY_FULL_SOC
+                and self._today_peak_soc < WEAK_DAY_BATTERY_FULL_SOC
             )
 
             # A configured time window, or an unmet prerequisite device, is
@@ -1100,8 +1122,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 hard_off_reason = (
                     "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
                     else (
-                        f"schwacher Tag (Akku seit Solarstart +{data.soc_gain_today:.1f}% "
-                        f"von normal +{data.reference_soc_gain:.1f}%, noch nicht voll)"
+                        f"schwacher Tag (bester Akku-Zuwachs heute +{data.peak_soc_gain_today:.1f}% "
+                        f"von normal +{data.reference_soc_gain:.1f}%, Akku heute nie über "
+                        f"{WEAK_DAY_BATTERY_FULL_SOC:.0f}%)"
                     ) if weak_day_block
                     else "außerhalb des Zeitfensters"
                 )

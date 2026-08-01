@@ -121,5 +121,6 @@ class PVWeakDayBinarySensor(CoordinatorEntity[PVSurplusCoordinator], BinarySenso
         d = self.coordinator.data
         return {
             "soc_zuwachs_heute": round(d.soc_gain_today, 1) if d.soc_gain_today is not None else None,
+            "bester_soc_zuwachs_heute": round(d.peak_soc_gain_today, 1),
             "referenz_soc_zuwachs": round(d.reference_soc_gain, 1) if d.reference_soc_gain else None,
         }
