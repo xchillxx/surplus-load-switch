@@ -1153,11 +1153,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # today's *peak* SOC, not the live value, so a battery that
             # topped up earlier and is now discharging in the evening
             # doesn't reopen the block it already earned its way out of.
+            # Also only while the sun's actually up: the whole point is
+            # protecting surplus for the wallbox, and overnight there's no
+            # surplus at all for it to compete over — holding a device
+            # back after dark wouldn't save anything for the car, only
+            # cost the device a night's runtime for nothing.
             weak_day_block = (
                 data.is_weak_day
                 and weak_day_priority_threshold is not None
                 and diag.priority >= weak_day_priority_threshold
                 and self._today_peak_soc < WEAK_DAY_BATTERY_FULL_SOC
+                and data.sun_above_horizon
             )
 
             # A configured time window, or an unmet prerequisite device, is
