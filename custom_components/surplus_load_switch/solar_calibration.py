@@ -100,6 +100,16 @@ class SolarOffsetCalibrator:
         self._recent_soc_gain = data.get("recent_soc_gain")
         last = data.get("last_calibrated")
         self._last_calibrated = dt_util.parse_datetime(last) if last else None
+        # Storage written by a pre-SOC-gain version of this integration has
+        # no "reference_soc_gains" key at all (not just an empty one) —
+        # treat that the same as never having calibrated, so a version
+        # upgrade recalibrates on its very next cycle instead of silently
+        # running on stale/absent weak-day data for up to the normal 24h
+        # interval. A fresh install's empty Store never reaches this line
+        # (caught by "if not data: return" above), so this can't misfire
+        # there.
+        if "reference_soc_gains" not in data:
+            self._last_calibrated = None
 
     def reference_soc_gain(self, month: int) -> float | None:
         """This month's typical good-day SOC gain from solar start to
