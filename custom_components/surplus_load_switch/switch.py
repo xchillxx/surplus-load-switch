@@ -87,12 +87,11 @@ class PVDeviceSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
 
 class PVDeviceEnabledSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
     """Enable/disable a device entirely. While disabled, the coordinator
-    forces it off immediately and never reserves cascade budget for it —
-    the same hard-cutoff treatment as being outside a time window — but
-    its configuration, historical power average, and daily-runtime data
-    are untouched, so it picks up right where it left off once
-    re-enabled. Meant for e.g. going on vacation and wanting a device to
-    just stay off without deleting its setup.
+    is hands-off: it never reserves cascade budget for the device and
+    never actuates it either way, leaving it exactly as it is for manual
+    or other-automation control — its configuration, historical power
+    average, and daily-runtime data stay untouched, so it picks up right
+    where it left off once re-enabled.
 
     Reads/writes the config entry directly rather than coordinator.data,
     since toggling it changes what the coordinator computes rather than

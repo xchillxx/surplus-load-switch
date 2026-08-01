@@ -104,11 +104,11 @@ cloud passes over or another appliance briefly kicks in.
   prerequisite is also on, so it never wastes a cascade reservation or
   dilutes its own power measurement with idle-but-"on" time.
 - **Per-device enable switch** — each device gets an "Aktiviert" switch
-  entity. Turning it off forces that device off immediately (same as being
-  outside its time window) and takes it out of the cascade entirely, without
-  touching its configuration, historical power average, or daily-runtime
-  data — it picks up right where it left off once re-enabled. For e.g. going
-  on vacation and wanting one device to just stay off.
+  entity. Turning it off takes the device out of the cascade entirely and
+  makes the integration hands-off for it — no forced on or off, so it's
+  free for manual or other-automation control — without touching its
+  configuration, historical power average, or daily-runtime data. It picks
+  up right where it left off once re-enabled.
 - **Decision log** — every cascade cycle, for every device, the integration
   records the real reasoning behind that cycle's decision (outside its
   time window, an unmet dependency, disabled, minimum runtime being

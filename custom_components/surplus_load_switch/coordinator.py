@@ -1028,11 +1028,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             diag.dependency_met = dependency_met
 
             # A device can be disabled entirely via its "— Aktiviert" switch
-            # (e.g. going on vacation and wanting the boiler to just stay
-            # off) — treated the same as a hard window/dependency cutoff:
-            # forced off immediately, never reserved by the cascade. Config
-            # and historical power/runtime data are untouched, so the
-            # device picks up right where it left off once re-enabled.
+            # — hands-off: the cascade never reserves budget for it and
+            # never actuates it either way, leaving it exactly as it is for
+            # manual or other-automation control. Config and historical
+            # power/runtime data are untouched, so the device picks up
+            # right where it left off once re-enabled.
             device_enabled = dev.get(CONF_DEVICE_ENABLED, True)
             diag.enabled = device_enabled
 
@@ -1047,6 +1047,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             tracker = self._device_trackers.setdefault(
                 device_id, DeviceState(device_id=device_id)
             )
+
+            if not device_enabled:
+                tracker.on_counter = 0
+                tracker.off_counter = 0
+                diag.should_be_on = False
+                await self._log_decision(
+                    dev, False, "Deaktiviert",
+                    "deaktiviert — wird nicht angesteuert (manuelle/andere Steuerung)",
+                )
+                continue
 
             # On a detected weak day (see _async_update_data), a device at
             # or worse than a wallbox's configured weak-day priority is
@@ -1074,8 +1084,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # behaves like a window that's always closed, for backward
             # compatibility.
             if (
-                not device_enabled
-                or in_window is False
+                in_window is False
                 or (in_window is None and legacy_off_only)
                 or not dependency_met
                 or weak_day_block
@@ -1084,14 +1093,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 tracker.off_counter = 0
                 diag.should_be_on = False
                 hard_off_titel = (
-                    "Deaktiviert" if not device_enabled
-                    else "Abhängigkeit nicht erfüllt" if not dependency_met
+                    "Abhängigkeit nicht erfüllt" if not dependency_met
                     else "Schwacher Tag" if weak_day_block
                     else "Außerhalb Zeitfenster"
                 )
                 hard_off_reason = (
-                    "deaktiviert" if not device_enabled
-                    else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
+                    "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
                     else (
                         f"schwacher Tag (Akku seit Solarstart +{data.soc_gain_today:.1f}% "
                         f"von normal +{data.reference_soc_gain:.1f}%, noch nicht voll)"
