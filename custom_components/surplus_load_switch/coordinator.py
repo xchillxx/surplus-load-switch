@@ -1071,6 +1071,22 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
+                if is_on:
+                    # Hands-off, but still actually running right now
+                    # (manual or another automation) — its current draw is
+                    # already excluded from base_discharge_kw like any
+                    # other running device (see managed_power_kw above),
+                    # but the forward-looking battery projection has no
+                    # way to know it'll stop unless we tell it: without
+                    # this, a device left running past its usual schedule
+                    # window reads as a permanent addition to the
+                    # unavoidable load for the rest of the night instead
+                    # of dropping off at its own configured cutoff, same
+                    # as it would if the cascade still controlled it. This
+                    # only feeds the projection — the device itself is
+                    # still never touched here.
+                    own_cutoff = self._effective_cutoff(dev, now_dt, devices_by_id)
+                    committed_segments.append((predicted_power, own_cutoff))
                 await self._log_decision(
                     dev, False, "Deaktiviert",
                     "deaktiviert — wird nicht angesteuert (manuelle/andere Steuerung)",
