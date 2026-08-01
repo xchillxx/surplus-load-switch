@@ -244,6 +244,11 @@ class SolarOffsetCalibrator:
 
         solar_points = result.get(self._solar_entity_id, [])
         soc_points = result.get(self._soc_entity_id, [])
+        _LOGGER.warning(
+            "Solar offset calibration: query returned %d solar point(s), %d SOC "
+            "point(s) (%s to %s)",
+            len(solar_points), len(soc_points), start, end,
+        )
         if not solar_points or not soc_points:
             # Doesn't set _last_calibrated to a value that blocks the normal
             # 24h cadence — an empty result right after startup (recorder
@@ -416,16 +421,17 @@ class SolarOffsetCalibrator:
             if len(vals) >= CALIBRATION_MIN_GOOD_DAYS
         }
 
-        _LOGGER.info(
-            "Solar offset calibration detail: %d day(s) with data, %d good day(s) "
-            "(%d rejected: too few neighbouring days with data, %d rejected: too "
-            "cloudy vs. neighbours), %d rejected (no hour reached the start "
-            "threshold), %d rejected (sunrise lookup failed) -- %d month(s) got a "
-            "calibrated offset, %d month(s) got a reference SOC gain, %d recent "
-            "day(s) used for the fallback reference",
-            len(days), len(good_days), rejected_no_neighbors, rejected_too_cloudy,
-            rejected_no_threshold_hour, rejected_no_sunrise, len(offsets), len(reference_soc_gains),
-            len(recent_gains),
+        _LOGGER.warning(
+            "Solar offset calibration detail: %d day(s) with solar data, %d day(s) "
+            "with an SOC gain computed, %d good day(s) (%d rejected: too few "
+            "neighbouring days with data, %d rejected: too cloudy vs. neighbours), "
+            "%d rejected (no hour reached the start threshold), %d rejected "
+            "(sunrise lookup failed) -- %d month(s) got a calibrated offset, %d "
+            "month(s) got a reference SOC gain, %d recent day(s) used for the "
+            "fallback reference (%d available)",
+            len(days), len(day_soc_gain), len(good_days), rejected_no_neighbors,
+            rejected_too_cloudy, rejected_no_threshold_hour, rejected_no_sunrise,
+            len(offsets), len(reference_soc_gains), len(recent_gains), len(recent_days),
         )
 
         return offsets, good_counts, reference_soc_gains, recent_soc_gain
