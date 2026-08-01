@@ -58,10 +58,11 @@ CONF_WALLBOX_SATISFIED_KW = "wallbox_satisfied_kw"
 # A wallbox is never itself ranked/switched by the cascade, but on a
 # detected weak day (see WEAK_DAY_* below) it still needs an effective
 # priority to compare other devices against: any candidate device whose
-# own priority is worse (a higher number) than this gets held off
-# entirely until the battery's nearly full — the car gets first claim on
-# a scarce day, everything behind it waits. 0/unset disables the feature
-# for this wallbox.
+# own priority is this number or worse (higher) gets held off entirely
+# until the battery's nearly full — the wallbox takes over that priority
+# slot for the day, the car gets first claim on a scarce day and
+# everything from there on down waits. 0/unset disables the feature for
+# this wallbox.
 CONF_WALLBOX_WEAK_DAY_PRIORITY = "wallbox_weak_day_priority"
 # Per-device "enabled" toggle — exposed as a live switch entity (switch.py),
 # not a config-flow field, since it's meant for a quick vacation-style
@@ -234,3 +235,9 @@ CALIBRATION_MIN_GOOD_DAYS = 5
 # than the static default, but a gap wider than this isn't trusted since
 # the seasonal relationship isn't necessarily linear over that distance.
 CALIBRATION_MAX_INTERP_MONTHS = 2
+# How many recent complete calendar days to use for weak-day detection's
+# simple fallback reference peak, whenever the current month doesn't have
+# its own calibrated one yet (see SolarOffsetCalibrator.
+# effective_reference_peak_kw) — short enough to reflect current
+# conditions quickly, long enough to smooth out a single cloudy day.
+RECENT_PEAK_WINDOW_DAYS = 14

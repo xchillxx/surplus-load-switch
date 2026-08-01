@@ -43,6 +43,7 @@ from .const import (
     CALIBRATION_MIN_GOOD_DAYS,
     CALIBRATION_RETRY_INTERVAL,
     CALIBRATION_THRESHOLD_RATIO,
+    RECENT_PEAK_WINDOW_DAYS,
     STORAGE_VERSION,
 )
 
@@ -68,6 +69,14 @@ class SolarOffsetCalibrator:
         # this class exists for, but computed from the exact same good-day
         # data so it made no sense to duplicate the query/filtering.
         self._reference_peaks_kw: dict[int, float] = {}
+        # Median peak over the last RECENT_PEAK_WINDOW_DAYS calendar days,
+        # unfiltered (no cloud/good-day logic) — a much simpler, always-
+        # available fallback reference for weak-day detection whenever the
+        # current month doesn't have its own calibrated reference yet
+        # (e.g. right after install, or a system too young for a full
+        # month of good-day data). Computed from the exact same query as
+        # the calibration above, just without its filtering.
+        self._recent_peak_kw: float | None = None
         self._last_calibrated: datetime | None = None
         self._last_sources: dict[int, str] = {}
         self._last_query_empty = False
@@ -81,6 +90,7 @@ class SolarOffsetCalibrator:
         self._reference_peaks_kw = {
             int(k): v for k, v in data.get("reference_peaks_kw", {}).items()
         }
+        self._recent_peak_kw = data.get("recent_peak_kw")
         last = data.get("last_calibrated")
         self._last_calibrated = dt_util.parse_datetime(last) if last else None
 
@@ -88,6 +98,12 @@ class SolarOffsetCalibrator:
         """This month's typical good-day peak solar power, or None if it
         hasn't been calibrated yet."""
         return self._reference_peaks_kw.get(month)
+
+    def effective_reference_peak_kw(self, month: int) -> float | None:
+        """The calibrated monthly reference if there is one, otherwise the
+        simple last-N-days fallback — whichever is available. What weak-
+        day detection should actually call."""
+        return self._reference_peaks_kw.get(month) or self._recent_peak_kw
 
     def offsets_for(self, configured_defaults: list[float]) -> list[float]:
         """12-element list (Jan..Dec).
@@ -165,6 +181,7 @@ class SolarOffsetCalibrator:
             "gute_tage_pro_monat": dict(self._good_day_counts),
             "quelle_pro_monat": dict(self._last_sources),
             "referenz_peak_kw_pro_monat": dict(self._reference_peaks_kw),
+            "referenz_peak_kw_letzte_14_tage": self._recent_peak_kw,
             "zuletzt_kalibriert": self._last_calibrated.isoformat() if self._last_calibrated else None,
         }
 
@@ -219,7 +236,7 @@ class SolarOffsetCalibrator:
             return
 
         try:
-            offsets, good_counts, reference_peaks = await self._hass.async_add_executor_job(
+            offsets, good_counts, reference_peaks, recent_peak = await self._hass.async_add_executor_job(
                 self._compute, points
             )
         except Exception:  # noqa: BLE001 — same: never let this break the coordinator
@@ -229,22 +246,26 @@ class SolarOffsetCalibrator:
         self._offsets = offsets
         self._good_day_counts = good_counts
         self._reference_peaks_kw = reference_peaks
+        self._recent_peak_kw = recent_peak
         self._last_calibrated = dt_util.utcnow()
         self._last_query_empty = False
         await self._store.async_save({
             "offsets": self._offsets,
             "good_day_counts": self._good_day_counts,
             "reference_peaks_kw": self._reference_peaks_kw,
+            "recent_peak_kw": self._recent_peak_kw,
             "last_calibrated": self._last_calibrated.isoformat(),
         })
         _LOGGER.info(
-            "Solar offset calibration: %d month(s) calibrated from %d good day(s) total",
+            "Solar offset calibration: %d month(s) calibrated from %d good day(s) total, "
+            "recent-14-day reference peak %s",
             len(self._offsets), sum(good_counts.values()),
+            f"{recent_peak:.2f} kW" if recent_peak is not None else "not enough data yet",
         )
 
     def _compute(
         self, points: list[dict]
-    ) -> tuple[dict[int, float], dict[int, int], dict[int, float]]:
+    ) -> tuple[dict[int, float], dict[int, int], dict[int, float], float | None]:
         """CPU-bound: sunrise lookup + day grouping + the cloud filter.
         Must run in the executor, not the event loop."""
         from astral import LocationInfo
@@ -266,6 +287,17 @@ class SolarOffsetCalibrator:
 
         days = sorted(by_day.keys())
         peaks = {d: max(v for _, v in by_day[d]) for d in days}
+
+        # Simple recent-days fallback reference — no cloud/good-day
+        # filtering, just the last RECENT_PEAK_WINDOW_DAYS *complete*
+        # calendar days (today's excluded: it isn't over yet, and its
+        # peak-so-far would drag the reference down for no real reason).
+        today = dt_util.now(tz).date()
+        recent_days = [d for d in days if d < today][-RECENT_PEAK_WINDOW_DAYS:]
+        recent_peak = (
+            round(statistics.median([peaks[d] for d in recent_days]), 3)
+            if len(recent_days) >= 5 else None
+        )
 
         good_days: list[date] = []
         rejected_no_neighbors = 0
@@ -320,9 +352,11 @@ class SolarOffsetCalibrator:
             "(%d rejected: too few neighbouring days with data, %d rejected: too "
             "cloudy vs. neighbours), %d rejected (no hour reached the start "
             "threshold), %d rejected (sunrise lookup failed) -- %d month(s) got a "
-            "calibrated offset, %d month(s) got a reference peak",
+            "calibrated offset, %d month(s) got a reference peak, %d recent day(s) "
+            "used for the fallback reference",
             len(days), len(good_days), rejected_no_neighbors, rejected_too_cloudy,
             rejected_no_threshold_hour, rejected_no_sunrise, len(offsets), len(reference_peaks),
+            len(recent_days),
         )
 
-        return offsets, good_counts, reference_peaks
+        return offsets, good_counts, reference_peaks, recent_peak

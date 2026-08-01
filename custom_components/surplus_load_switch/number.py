@@ -283,10 +283,12 @@ class PVWallboxWeakDayPriorityNumber(_PVDeviceNumberBase):
     """Only meaningful on a wallbox device: this wallbox's effective
     priority on a detected weak day, even though it's never itself
     switched or ranked by the cascade otherwise. Any candidate device
-    whose own priority is worse (a higher number) than this gets held
-    off entirely on that day, until the battery's nearly full — the car
-    gets first claim on a scarce day, everything behind it waits. 0
-    ("not set") disables this for the wallbox; it needs the solar-start
+    whose own priority is this number or worse (higher) gets held off
+    entirely on that day, until the battery's nearly full — the wallbox
+    takes over that priority slot for the day (a device at the *same*
+    priority number counts as behind it, not tied with it), the car gets
+    first claim on a scarce day and everything from there on down waits.
+    0 ("not set") disables this for the wallbox; it needs the solar-start
     calibration to actually have a reference peak for the current month
     before it can do anything either way, so it's off by default even
     once set on a fresh or not-yet-calibrated install."""

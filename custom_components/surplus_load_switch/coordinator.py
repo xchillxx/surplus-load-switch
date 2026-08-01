@@ -701,7 +701,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._today_date = local_now.date()
             self._today_peak_kw = 0.0
         self._today_peak_kw = max(self._today_peak_kw, solar)
-        reference_peak_kw = self._calibrator.reference_peak_kw(local_now.month)
+        reference_peak_kw = self._calibrator.effective_reference_peak_kw(local_now.month)
         is_weak_day = (
             reference_peak_kw is not None
             and reference_peak_kw > 0
@@ -1034,17 +1034,21 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 device_id, DeviceState(device_id=device_id)
             )
 
-            # On a detected weak day (see _async_update_data), a device
-            # worse than a wallbox's configured weak-day priority is held
-            # back the same hard way — no point spending scarce surplus on
-            # low-priority devices while today's production is running
-            # well below normal for the season, unless the battery's
-            # already basically full anyway (then there's nothing left to
-            # protect it for).
+            # On a detected weak day (see _async_update_data), a device at
+            # or worse than a wallbox's configured weak-day priority is
+            # held back the same hard way — the wallbox effectively takes
+            # over that priority slot for the day (a device configured
+            # with the *same* priority number as the wallbox's weak-day
+            # value counts as behind it, not tied with it), pushing
+            # everything from there on down behind it. No point spending
+            # scarce surplus on low-priority devices while today's
+            # production is running well below normal for the season,
+            # unless the battery's already basically full anyway (then
+            # there's nothing left to protect it for).
             weak_day_block = (
                 data.is_weak_day
                 and weak_day_priority_threshold is not None
-                and diag.priority > weak_day_priority_threshold
+                and diag.priority >= weak_day_priority_threshold
                 and data.soc < WEAK_DAY_BATTERY_FULL_SOC
             )
 

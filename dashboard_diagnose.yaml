@@ -124,14 +124,17 @@ views:
               - entity: sensor.surplus_load_switch_modus
                 name: Modus
                 icon: mdi:information-outline
-              # "Nächste Prüfung" isn't listed here as a static row -- its
-              # entity_id depends on your hub device's area assignment and
-              # can't be guessed generically the way the others above can.
-              # It's already shown at the bottom of the Status card above
-              # (found dynamically there); add it here too if you want by
-              # finding it in Developer Tools -> States (search
-              # "nachste_prufung") and pasting its real entity_id.
-                icon: mdi:timer-refresh-outline
+              # "Nächste Prüfung" and "Schwacher Tag" aren't listed here as
+              # static rows -- their entity_id depends on your hub
+              # device's area assignment and can't be guessed generically
+              # the way the others above can. Both are already shown in
+              # the Status card above (found dynamically there); add them
+              # here too if you want by finding them in Developer Tools ->
+              # States (search "nachste_prufung" / "schwacher_tag") and
+              # pasting the real entity_id, e.g.:
+              # - entity: binary_sensor.YOUR_PREFIX_sls_schwacher_tag
+              #   name: Schwacher Tag
+              #   icon: mdi:weather-partly-cloudy
 
       - type: vertical-stack
         cards:
