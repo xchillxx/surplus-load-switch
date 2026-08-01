@@ -244,14 +244,10 @@ class SolarOffsetCalibrator:
 
         solar_points = result.get(self._solar_entity_id, [])
         soc_points = result.get(self._soc_entity_id, [])
-        solar_with_mean = sum(1 for p in solar_points if p.get("mean") is not None)
-        soc_with_mean = sum(1 for p in soc_points if p.get("mean") is not None)
-        _LOGGER.warning(
-            "Solar offset calibration: query returned %d solar point(s) (%d with a "
-            "mean value), %d SOC point(s) (%d with a mean value) (%s to %s) -- "
-            "sample solar: %s -- sample SOC: %s",
-            len(solar_points), solar_with_mean, len(soc_points), soc_with_mean,
-            start, end, solar_points[:3], soc_points[:3],
+        _LOGGER.debug(
+            "Solar offset calibration: query returned %d solar point(s), %d SOC "
+            "point(s) (%s to %s)",
+            len(solar_points), len(soc_points), start, end,
         )
         if not solar_points or not soc_points:
             # Doesn't set _last_calibrated to a value that blocks the normal
@@ -323,7 +319,16 @@ class SolarOffsetCalibrator:
             mean = p.get("mean")
             if mean is None:
                 continue
-            start_dt = dt_util.utc_from_timestamp(p["start"] / 1000).astimezone(tz)
+            # statistics_during_period() (the internal recorder function
+            # called here) returns "start"/"end" as Unix seconds -- NOT
+            # milliseconds like the websocket API's JSON representation
+            # of the same data. Dividing by 1000 (a leftover from testing
+            # against the websocket API instead of this function) crushed
+            # every hourly point into a ~3.6-second span, merging what
+            # should be many calendar days into one -- the actual root
+            # cause of "0/12 months calibrated" since this feature's
+            # start, not a lack of good-quality data as long assumed.
+            start_dt = dt_util.utc_from_timestamp(p["start"]).astimezone(tz)
             by_day[start_dt.date()].append((start_dt, mean))
 
         by_day_soc: dict[date, list[tuple[datetime, float]]] = defaultdict(list)
@@ -331,7 +336,7 @@ class SolarOffsetCalibrator:
             mean = p.get("mean")
             if mean is None:
                 continue
-            start_dt = dt_util.utc_from_timestamp(p["start"] / 1000).astimezone(tz)
+            start_dt = dt_util.utc_from_timestamp(p["start"]).astimezone(tz)
             by_day_soc[start_dt.date()].append((start_dt, mean))
 
         days = sorted(by_day.keys())
@@ -425,7 +430,7 @@ class SolarOffsetCalibrator:
             if len(vals) >= CALIBRATION_MIN_GOOD_DAYS
         }
 
-        _LOGGER.warning(
+        _LOGGER.info(
             "Solar offset calibration detail: %d day(s) with solar data, %d day(s) "
             "with an SOC gain computed, %d good day(s) (%d rejected: too few "
             "neighbouring days with data, %d rejected: too cloudy vs. neighbours), "
