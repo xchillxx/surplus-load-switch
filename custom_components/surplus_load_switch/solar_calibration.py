@@ -244,10 +244,14 @@ class SolarOffsetCalibrator:
 
         solar_points = result.get(self._solar_entity_id, [])
         soc_points = result.get(self._soc_entity_id, [])
+        solar_with_mean = sum(1 for p in solar_points if p.get("mean") is not None)
+        soc_with_mean = sum(1 for p in soc_points if p.get("mean") is not None)
         _LOGGER.warning(
-            "Solar offset calibration: query returned %d solar point(s), %d SOC "
-            "point(s) (%s to %s)",
-            len(solar_points), len(soc_points), start, end,
+            "Solar offset calibration: query returned %d solar point(s) (%d with a "
+            "mean value), %d SOC point(s) (%d with a mean value) (%s to %s) -- "
+            "sample solar: %s -- sample SOC: %s",
+            len(solar_points), solar_with_mean, len(soc_points), soc_with_mean,
+            start, end, solar_points[:3], soc_points[:3],
         )
         if not solar_points or not soc_points:
             # Doesn't set _last_calibrated to a value that blocks the normal
