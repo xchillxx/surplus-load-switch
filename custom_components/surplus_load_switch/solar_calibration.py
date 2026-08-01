@@ -239,17 +239,24 @@ class SolarOffsetCalibrator:
 
         solar_points = result.get(self._solar_entity_id, [])
         soc_points = result.get(self._soc_entity_id, [])
-        if not solar_points:
+        if not solar_points or not soc_points:
             # Doesn't set _last_calibrated to a value that blocks the normal
             # 24h cadence — an empty result right after startup (recorder
             # or its statistics index not fully ready yet) should be
             # retried soon, not locked out for a full day. Once a real
-            # result comes back (even with 0 calibrated months from too
-            # little good data), the normal cadence takes over.
+            # result comes back for *both* entities (even with 0
+            # calibrated months from too little good data), the normal
+            # cadence takes over. Checking both, not just the solar one —
+            # a query landing right at startup has been seen to return the
+            # solar sensor's statistics but not yet the SOC sensor's,
+            # which would otherwise silently lock in an empty weak-day
+            # reference for a full day.
             _LOGGER.warning(
                 "Solar offset calibration: no statistics returned for %s "
-                "(queried %s to %s, result had keys: %s) — will retry sooner than the normal 24h cadence",
-                self._solar_entity_id, start, end, list(result.keys()),
+                "(queried %s to %s, solar points: %d, SOC points: %d) — "
+                "will retry sooner than the normal 24h cadence",
+                self._solar_entity_id if not solar_points else self._soc_entity_id,
+                start, end, len(solar_points), len(soc_points),
             )
             self._last_calibrated = dt_util.utcnow()
             self._last_query_empty = True
