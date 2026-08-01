@@ -46,6 +46,14 @@ CONF_DEVICE_WINDOW_END = "window_end"
 CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes priority over window_start/end
 CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
 CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that must be ON first
+# Wallbox-only fields: a wallbox is never itself switched by the cascade
+# (it runs its own PV-surplus charging logic) — these let OTHER devices
+# depend on it anyway, using "is the car satisfied" instead of "is it on"
+# (a wallbox has no useful on/off state for that purpose). Optional; if
+# none of the three are set, depending on that wallbox never blocks.
+CONF_WALLBOX_SOC_SENSOR = "wallbox_soc_sensor"
+CONF_WALLBOX_TARGET_SOC_SENSOR = "wallbox_target_soc_sensor"
+CONF_WALLBOX_SATISFIED_KW = "wallbox_satisfied_kw"
 # Per-device "enabled" toggle — exposed as a live switch entity (switch.py),
 # not a config-flow field, since it's meant for a quick vacation-style
 # on/off rather than something you configure once at setup. Absent/True

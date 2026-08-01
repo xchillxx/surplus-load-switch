@@ -23,6 +23,7 @@ from .const import (
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_PRIORITY,
     CONF_MIN_SOC,
+    CONF_WALLBOX_SATISFIED_KW,
     DOMAIN,
 )
 from .coordinator import PVSurplusCoordinator
@@ -39,6 +40,7 @@ async def async_setup_entry(
     ]
     for dev in entry.data.get(CONF_DEVICES, []):
         if dev.get(CONF_DEVICE_IS_WALLBOX, False):
+            entities.append(PVWallboxSatisfiedKwNumber(coordinator, entry, dev))
             continue
         entities.append(PVDevicePriorityNumber(coordinator, entry, dev))
         entities.append(PVDevicePowerEstimateNumber(coordinator, entry, dev))
@@ -237,6 +239,38 @@ class PVDeviceMinRuntimeNumber(_PVDeviceNumberBase):
     def native_value(self) -> float:
         dev = self._device
         return (dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H) or 0) if dev else 0
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._async_write(value if value > 0 else None)
+
+
+class PVWallboxSatisfiedKwNumber(_PVDeviceNumberBase):
+    """Only meaningful on a wallbox device: once its own charging power
+    reaches this, another device may depend on it being "satisfied" even
+    if the car's target SOC isn't reached yet — the car isn't being
+    starved, so there's no reason to keep holding a lower-priority device
+    back purely because of that. 0 means "not set" (only the SOC/target
+    comparison, if configured, applies)."""
+
+    _field = CONF_WALLBOX_SATISFIED_KW
+    _attr_name = "Ausreichende Ladeleistung (0 = aus)"
+    _attr_icon = "mdi:ev-station"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 22
+    _attr_native_step = 0.5
+    _attr_native_unit_of_measurement = "kW"
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_satisfied_kw"
+
+    @property
+    def native_value(self) -> float:
+        dev = self._device
+        return (dev.get(CONF_WALLBOX_SATISFIED_KW) or 0) if dev else 0
 
     async def async_set_native_value(self, value: float) -> None:
         await self._async_write(value if value > 0 else None)

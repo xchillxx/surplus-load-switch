@@ -46,16 +46,17 @@ views:
               {% set h_bat = states('sensor.surplus_load_switch_akku_reicht') | float(999) %}
               {% set h_sol = states('sensor.surplus_load_switch_bis_solar_start') | float(0) %}
               {% set modus = states('sensor.surplus_load_switch_modus') %}
+              {% set naechste = (states.sensor | selectattr('entity_id','search','surplus_load_switch') | selectattr('attributes.device_class','defined') | selectattr('attributes.device_class','eq','timestamp') | list | first) %}
               {% set ns = namespace(rows=[]) %}
               {% for s in states.sensor if 'surplus_load_switch' in s.entity_id and s.entity_id.endswith('_o_leistung') %}
               {% set prio = state_attr(s.entity_id, 'prioritaet') | default(99) | float(99) %}
               {% set ns.rows = ns.rows + [(prio, s.entity_id)] %}
               {% endfor %}
 
-              {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace(' Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% set cutoff = state_attr(eid, 'naechster_cutoff') %}{% set fenster = ' · Zeitfenster bis ' ~ (cutoff | as_datetime | as_local).strftime('%H:%M') if cutoff else '' %}{% if aktiv == false %}⚪ {{ name }} (Prio {{ prio | int }}) deaktiviert{% elif korrekt %}{% if an %}🟢 {{ name }} (Prio {{ prio | int }}) läuft korrekt{{ fenster }}{% else %}🔴 {{ name }} (Prio {{ prio | int }}) aus — korrekt{{ fenster }}{% endif %}{% else %}⚠️ {{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein{{ fenster }}{% endif %}<br>
+              {% for prio, eid in ns.rows | sort %}{% set name = (state_attr(eid, 'friendly_name') | default('')).replace(' Ø Leistung', '') %}{% set an = state_attr(eid, 'ist_an') %}{% set soll = state_attr(eid, 'sollte_an_sein') %}{% set korrekt = state_attr(eid, 'korrekt_geschaltet') %}{% set aktiv = state_attr(eid, 'aktiviert') %}{% set cutoff = state_attr(eid, 'naechster_cutoff') %}{% set countdown = state_attr(eid, 'schalt_countdown_s') | default(0, true) | int %}{% set richtung = state_attr(eid, 'schalt_richtung') %}{% set fenster = ' · Zeitfenster bis ' ~ (cutoff | as_datetime | as_local).strftime('%H:%M') if cutoff else '' %}{% if aktiv == false %}⚪ {{ name }} (Prio {{ prio | int }}) deaktiviert{% elif korrekt %}{% if an %}🟢 {{ name }} (Prio {{ prio | int }}) läuft korrekt{{ fenster }}{% else %}🔴 {{ name }} (Prio {{ prio | int }}) aus — korrekt{{ fenster }}{% endif %}{% elif countdown > 0 %}⏳ {{ name }} (Prio {{ prio | int }}) wartet noch {{ (countdown // 60) }}:{{ '%02d' | format(countdown % 60) }} min bis {{ richtung }}{{ fenster }}{% else %}⚠️ {{ name }} (Prio {{ prio | int }}) Abweichung: ist {{ 'AN' if an else 'AUS' }}, sollte {{ 'AN' if soll else 'AUS' }} sein{{ fenster }}{% endif %}<br>
               {% endfor %}
 
-              {{ modus }} · Überschuss {{ surplus | round(2) }} kW · Akku reicht {{ h_bat | round(1) if h_bat < 999 else '∞' }} h vs. bis Solar {{ h_sol | round(1) }} h
+              {{ modus }} · Überschuss {{ surplus | round(2) }} kW · Akku reicht {{ h_bat | round(1) if h_bat < 999 else '∞' }} h vs. bis Solar {{ h_sol | round(1) }} h{% if naechste %} · Nächste Prüfung {{ (naechste.state | as_datetime | as_local).strftime('%H:%M:%S') }}{% endif %}
 
           - type: entities
             title: Live-Werte (global)
@@ -122,6 +123,9 @@ views:
               - entity: sensor.surplus_load_switch_modus
                 name: Modus
                 icon: mdi:information-outline
+              - entity: sensor.surplus_load_switch_nachste_prufung
+                name: Nächste Prüfung
+                icon: mdi:timer-refresh-outline
 
       - type: vertical-stack
         cards:
@@ -136,7 +140,23 @@ views:
               include:
                 - entity_id: "sensor.*surplus_load_switch*_o_leistung"
                 - entity_id: "sensor.*surplus_load_switch*_abschalt_puffer"
+                - entity_id: "sensor.*_schalt_countdown"
                 - entity_id: "switch.*surplus_load_switch*_aktiviert"
+            sort:
+              method: attribute
+              attribute: prioritaet
+              numeric: true
+
+          - type: custom:auto-entities
+            card:
+              type: history-graph
+              title: Geräte-Verlauf (48h) — wann welches Gerät an/aus war
+              hours_to_show: 48
+            filter:
+              include:
+                - entity_id: "switch.*surplus_load_switch*_prio_*"
+                - entity_id: "switch.*_kaskaden_status"
+                - entity_id: "switch.*_ein_aus"
             sort:
               method: attribute
               attribute: prioritaet
@@ -155,7 +175,6 @@ views:
                 - entity_id: "switch.*surplus_load_switch*_prio_*"
                 - entity_id: "switch.*_kaskaden_status"
                 - entity_id: "switch.*_ein_aus"
-                - entity_id: "binary_sensor.*surplus_load_switch*"
             sort:
               method: entity_id
 
@@ -191,19 +210,29 @@ views:
             card_mod:
               style: "ha-markdown { line-height: 1.6 !important; }"
             content: >-
-              {% set ns = namespace(rows=[]) %}
+              {% set ns = namespace(rows=[], seen=[]) %}
               {% for s in states.sensor if 'surplus_load_switch' in s.entity_id and s.entity_id.endswith('_o_leistung') %}
               {% set did = device_id(s.entity_id) %}
               {% set prio = state_attr(s.entity_id, 'prioritaet') | default(99) | float(99) %}
               {% set ns.rows = ns.rows + [(prio, device_attr(did, 'name'), did)] %}
+              {% set ns.seen = ns.seen + [did] %}
+              {% endfor %}
+              {% for s in states.number if 'surplus_load_switch' in s.entity_id and s.entity_id.endswith('_wallbox_satisfied_kw') %}
+              {% set did = device_id(s.entity_id) %}
+              {% if did not in ns.seen %}
+              {% set ns.rows = ns.rows + [(999, device_attr(did, 'name') ~ ' (Wallbox)', did)] %}
+              {% set ns.seen = ns.seen + [did] %}
+              {% endif %}
               {% endfor %}
 
-              {% for prio, name, did in ns.rows | sort %}**[{{ name }} (Prio {{ prio | int }})](/config/devices/device/{{ did }})**<br>
+              {% for prio, name, did in ns.rows | sort %}**[{{ name }}{{ ' (Prio ' ~ (prio | int) ~ ')' if prio < 999 else '' }}](/config/devices/device/{{ did }})**<br>
               {% endfor %}
 
               Klick auf ein Gerät öffnet dessen eigene Seite mit Priorität, Leistung,
               Mindest-Laufzeit, Steuerungs-Entität, Leistungssensor, Zeitplan-Helfer,
               Abhängigkeit und dem Aktiviert-Schalter — alles an einem Ort, direkt bearbeitbar.
+              Wallboxen zeigen stattdessen Auto-SOC-/Ziel-SOC-Sensor und die
+              Ausreichende-Ladeleistung-Schwelle, die andere Geräte als Abhängigkeit nutzen können.
 
   - title: Logs
     path: logs

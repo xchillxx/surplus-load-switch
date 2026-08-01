@@ -44,6 +44,9 @@ from .const import (
     CONF_SOC_SENSOR,
     CONF_SOLAR_OFFSETS,
     CONF_SOLAR_SENSOR,
+    CONF_WALLBOX_SATISFIED_KW,
+    CONF_WALLBOX_SOC_SENSOR,
+    CONF_WALLBOX_TARGET_SOC_SENSOR,
     DAYTIME_PROJECTION_HORIZON_H,
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
@@ -91,6 +94,7 @@ class DeviceDiagnostics:
     off_counter: int = 0
     required_off_cycles: int = 0
     on_counter: int = 0
+    required_on_cycles: int = 0
     runtime_hours_today: float = 0.0
     force_runtime: bool = False
     effective_cutoff: str | None = None
@@ -131,6 +135,7 @@ class CoordinatorData:
     device_diagnostics: dict[str, DeviceDiagnostics] = field(default_factory=dict)
     calibration: dict = field(default_factory=dict)
     active_solar_offset_h: float = 0.0
+    next_cycle_at: datetime | None = None
 
 
 class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
@@ -174,6 +179,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # system-log entry is written only on the transition (goes
         # unavailable / comes back), not every cycle it stays that way.
         self._last_sensor_valid: dict[str, bool] = {}
+        # The should_be_on target last pushed to the native HA logbook per
+        # device — the log table (self.log_entries) gets every cycle
+        # unconditionally, but the native logbook (and anything built on
+        # it, like the Diagnose tab's Schaltvorgänge column) should only
+        # ever show real transitions, not a repeated "still on" every
+        # cycle.
+        self._last_should_be_on: dict[str, bool] = {}
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -291,18 +303,28 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             "details": details,
         })
 
-    async def _log_decision(self, dev: dict, titel: str, details: str) -> None:
-        """Write one entry (both to the logbook and the log table) for a
-        device's cascade decision this cycle — every cycle, not just when
-        the target changes, since the user wants to see every calculation,
-        not only transitions. Attributed to the device's own managed
-        switch, not its power sensor — Home Assistant's logbook UI
-        silently drops logbook.log entries for the "sensor" domain, so
-        attributing this to a sensor entity meant the entry existed via the
-        API but never rendered anywhere in the frontend."""
+    async def _log_decision(self, dev: dict, should_be_on: bool, titel: str, details: str) -> None:
+        """Record a device's cascade decision this cycle — every cycle, not
+        just when the target changes, into the log table (self.log_entries,
+        what the Logs tab's table reads) since the user wants to see every
+        calculation there. The native HA logbook is different: it only gets
+        an entry when should_be_on actually flips, since anything built on
+        top of the logbook (the Diagnose tab's Schaltvorgänge column, HA's
+        own Logbook page) is meant to show real transitions, not a repeated
+        "still on" every cycle. Attributed to the device's own managed
+        switch, not its power sensor — Home Assistant's logbook UI silently
+        drops logbook.log entries for the "sensor" domain, so attributing
+        this to a sensor entity meant the entry existed via the API but
+        never rendered anywhere in the frontend."""
         device_id = dev["_id"]
         name = dev.get(CONF_DEVICE_NAME, device_id)
         self._record(name, titel, details)
+
+        changed = self._last_should_be_on.get(device_id) != should_be_on
+        self._last_should_be_on[device_id] = should_be_on
+        if not changed:
+            return
+
         entity_id = er.async_get(self.hass).async_get_entity_id(
             "switch", DOMAIN, f"{self._entry_id}_{device_id}_managed"
         )
@@ -347,6 +369,38 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         diag.predicted_power_kw = configured
         return configured, diag
+
+    def _wallbox_satisfied(self, wallbox_dev: dict) -> bool:
+        """Whether a wallbox's own charging currently needs no help from
+        the cascade holding lower-priority devices back for it — either
+        its car has already reached its configured target SOC, or the
+        wallbox is already drawing enough power on its own that a device
+        behind it in priority isn't meaningfully taking anything away from
+        it. Only meaningful when another device's "depends on" points at a
+        wallbox (a wallbox is never itself switched by the cascade, so
+        "is it on" doesn't apply to it the way it does for a normal
+        dependency). Fails open (True — never blocks) if none of the three
+        optional fields below are configured for this wallbox.
+        """
+        soc_sensor = wallbox_dev.get(CONF_WALLBOX_SOC_SENSOR)
+        target_sensor = wallbox_dev.get(CONF_WALLBOX_TARGET_SOC_SENSOR)
+        satisfied_kw = wallbox_dev.get(CONF_WALLBOX_SATISFIED_KW)
+
+        if not soc_sensor and not target_sensor and not satisfied_kw:
+            return True
+
+        if soc_sensor and target_sensor:
+            soc = self._get_float(soc_sensor, default=100.0)
+            target = self._get_float(target_sensor, default=0.0)
+            if soc >= target:
+                return True
+
+        if satisfied_kw:
+            power_sensor = wallbox_dev.get(CONF_DEVICE_POWER_SENSOR)
+            if self._get_power_kw(power_sensor) >= satisfied_kw:
+                return True
+
+        return False
 
     def _in_window(self, dev: dict) -> bool | None:
         """True/False if this device is restricted to a schedule, else None
@@ -664,6 +718,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             min_soc=min_soc,
             calibration=self._calibrator.diagnostics,
             active_solar_offset_h=self._last_offset_h,
+            next_cycle_at=dt_util.utcnow() + timedelta(seconds=UPDATE_INTERVAL_SECONDS),
         )
 
         await self._evaluate_devices(data)
@@ -880,8 +935,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # command such a device "on" for nothing (wasting its reserved
             # cascade budget) and its power samples would be diluted by long
             # idle-but-"on" stretches, dragging down the measured average.
+            #
+            # A wallbox is a special case: it's never itself switched by
+            # the cascade (see candidate_devices above), so "is it on"
+            # means nothing for it — depending on one instead means "is the
+            # car satisfied" (see _wallbox_satisfied). This is what lets a
+            # lower-priority device like a pool heat pump hold back while a
+            # car still badly needs the surplus, without giving the wallbox
+            # its own cascade priority or switching it.
             depends_on_id = dev.get(CONF_DEVICE_DEPENDS_ON)
-            dependency_met = depends_on_id is None or device_is_on.get(depends_on_id, False)
+            depends_on_dev = devices_by_id.get(depends_on_id) if depends_on_id else None
+            if depends_on_dev is not None and depends_on_dev.get(CONF_DEVICE_IS_WALLBOX, False):
+                dependency_met = self._wallbox_satisfied(depends_on_dev)
+            else:
+                dependency_met = depends_on_id is None or device_is_on.get(depends_on_id, False)
             diag.dependency_met = dependency_met
 
             # A device can be disabled entirely via its "— Aktiviert" switch
@@ -931,7 +998,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
                     else "außerhalb des Zeitfensters"
                 )
-                await self._log_decision(dev, hard_off_titel, hard_off_reason)
+                await self._log_decision(dev, False, hard_off_titel, hard_off_reason)
                 if is_on:
                     _LOGGER.info(
                         "PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), hard_off_reason,
@@ -970,6 +1037,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             battery_would_last = data.avail_kwh > energy_needed_kwh and data.soc > data.min_soc
             required_off_cycles = self._required_off_cycles(data, priority_rank)
             diag.required_off_cycles = required_off_cycles
+            diag.required_on_cycles = STABLE_ON_CYCLES
 
             should_on = (
                 force_runtime
@@ -1005,20 +1073,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                         f"Überschuss ausreichend ({remaining_surplus:.2f} kW verfügbar, "
                         f"{predicted_power:.2f} kW benötigt)"
                     )
-                await self._log_decision(dev, decision_titel, decision_reason)
+                await self._log_decision(dev, True, decision_titel, decision_reason)
             elif should_off:
                 decision_reason = (
                     f"Überschuss/Akku reichen nicht ({remaining_surplus:.2f} kW verfügbar, "
                     f"{predicted_power:.2f} kW benötigt, Akku würde nicht bis Solar-Start reichen)"
                 )
-                await self._log_decision(dev, "Ausschalten — Überschuss/Akku reichen nicht", decision_reason)
+                await self._log_decision(dev, False, "Ausschalten — Überschuss/Akku reichen nicht", decision_reason)
             else:
                 stable_titel = "Bleibt an — Hysterese" if is_on else "Bleibt aus — Hysterese"
                 decision_reason = (
                     f"im Hysterese-Bereich ({remaining_surplus:.2f} kW Überschuss, "
                     f"{predicted_power:.2f} kW benötigt) — Zustand unverändert"
                 )
-                await self._log_decision(dev, stable_titel, decision_reason)
+                await self._log_decision(dev, is_on, stable_titel, decision_reason)
 
             if should_on:
                 # Reserve this device's predicted share (and its cutoff, if

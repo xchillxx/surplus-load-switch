@@ -1,7 +1,7 @@
 """Diagnostic sensors: surplus, h_battery, h_to_solar, mode, per-device power."""
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
@@ -15,7 +15,7 @@ from .const import (
     DOMAIN,
     UPDATE_INTERVAL_SECONDS,
 )
-from .coordinator import PVSurplusCoordinator
+from .coordinator import DeviceDiagnostics, PVSurplusCoordinator
 from .device_control import hub_device_info, sub_device_info
 
 
@@ -33,6 +33,7 @@ async def async_setup_entry(
         PVSolarCalibrationSensor(coordinator, entry),
         PVActiveSolarOffsetSensor(coordinator, entry),
         PVLogTableSensor(coordinator, entry),
+        PVNextCycleSensor(coordinator, entry),
     ]
     # Wallbox devices aren't evaluated in the cascade, so there's no
     # predicted-power diagnostics for them — their own power_sensor already
@@ -40,7 +41,7 @@ async def async_setup_entry(
     for dev in entry.data.get(CONF_DEVICES, []):
         if not dev.get(CONF_DEVICE_IS_WALLBOX, False):
             entities.append(PVDevicePowerSensor(coordinator, entry, dev))
-            entities.append(PVDeviceOffTimerSensor(coordinator, entry, dev))
+            entities.append(PVDeviceSwitchCountdownSensor(coordinator, entry, dev))
     async_add_entities(entities)
 
 
@@ -283,6 +284,27 @@ class PVSolarCalibrationSensor(_PVSensorBase):
         return self.coordinator.data.calibration
 
 
+class PVNextCycleSensor(_PVSensorBase):
+    """When the coordinator will next re-evaluate everything — a plain
+    timestamp sensor, which Home Assistant renders as a live "in X Minuten"
+    countdown wherever it's shown, so it's obvious the system is still
+    actively checking even during a quiet stretch with nothing to log."""
+
+    _attr_name = "Nächste Prüfung"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:timer-refresh-outline"
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_next_cycle"
+
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.next_cycle_at
+
+
 class PVLogTableSensor(_PVSensorBase):
     """Every logged event (device decisions every cycle, plus system-level
     events), newest first, as a plain list attribute — lets the dashboard
@@ -337,6 +359,7 @@ class PVDevicePowerSensor(_PVDeviceSensorBase):
         diag = self._diagnostics
         if diag is None:
             return {}
+        countdown_s, richtung = _switch_countdown(diag)
         return {
             "datenquelle": "gemessen (24h aktiv)" if diag.is_measured else "geschätzt (Konfiguration)",
             "messwerte": diag.sample_count,
@@ -350,6 +373,8 @@ class PVDevicePowerSensor(_PVDeviceSensorBase):
             "aktiviert": diag.enabled,
             "prioritaet": diag.priority,
             "ist_an": diag.is_on,
+            "schalt_countdown_s": countdown_s,
+            "schalt_richtung": richtung,
         }
 
     @property
@@ -359,20 +384,34 @@ class PVDevicePowerSensor(_PVDeviceSensorBase):
         return self.coordinator.data.device_diagnostics.get(self._device_id)
 
 
-class PVDeviceOffTimerSensor(_PVDeviceSensorBase):
-    """Seconds remaining before this device would actually be switched off,
-    once an off-decision has started holding. There's a buffer on purpose —
-    a device isn't cut the instant the battery projection turns negative;
-    it has to hold for a few minutes up to ~12 (scaling with how much
-    battery margin is left) before we act, so a brief dip doesn't cause an
-    unnecessary switch. 0 while the device isn't currently counting down
-    toward being turned off (stable on, stable off, or being force-managed
-    by a window/dependency, which acts immediately with no buffer)."""
+def _switch_countdown(diag: DeviceDiagnostics) -> tuple[int, str | None]:
+    """Seconds remaining before this device's pending switch action (on or
+    off) actually fires, if current conditions keep holding, and which
+    direction that is — (0, None) while nothing is pending (stable on,
+    stable off, or being force-managed by a window/dependency, which acts
+    immediately with no buffer)."""
+    if diag.off_counter > 0:
+        remaining_cycles = max(diag.required_off_cycles - diag.off_counter, 0)
+        return remaining_cycles * UPDATE_INTERVAL_SECONDS, "ausschalten"
+    if diag.on_counter > 0:
+        remaining_cycles = max(diag.required_on_cycles - diag.on_counter, 0)
+        return remaining_cycles * UPDATE_INTERVAL_SECONDS, "einschalten"
+    return 0, None
 
-    _attr_name = "Abschalt-Puffer"
+
+class PVDeviceSwitchCountdownSensor(_PVDeviceSensorBase):
+    """Seconds remaining before this device's pending switch action (on or
+    off) actually fires, if current conditions hold — the direct answer to
+    "why hasn't it switched yet": it's not stuck, it's still holding out
+    the stability buffer (a device isn't switched the instant a
+    surplus/battery decision flips; it has to hold for several minutes so
+    a brief dip or spike doesn't cause an unnecessary switch). 0 while
+    nothing is pending."""
+
+    _attr_name = "Schalt-Countdown"
     _attr_native_unit_of_measurement = "s"
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:timer-sand"
+    _attr_icon = "mdi:timer-outline"
 
     @property
     def unique_id(self):
@@ -381,19 +420,21 @@ class PVDeviceOffTimerSensor(_PVDeviceSensorBase):
     @property
     def native_value(self):
         diag = self._diagnostics
-        if diag is None or diag.off_counter <= 0:
+        if diag is None:
             return 0
-        remaining_cycles = max(diag.required_off_cycles - diag.off_counter, 0)
-        return remaining_cycles * UPDATE_INTERVAL_SECONDS
+        countdown_s, _ = _switch_countdown(diag)
+        return countdown_s
 
     @property
     def extra_state_attributes(self):
         diag = self._diagnostics
         if diag is None:
             return {}
+        _, richtung = _switch_countdown(diag)
         return {
-            "zyklen_gehalten": diag.off_counter,
-            "benoetigte_zyklen": diag.required_off_cycles,
+            "richtung": richtung,
+            "zyklen_gehalten": diag.off_counter if richtung == "ausschalten" else diag.on_counter,
+            "benoetigte_zyklen": diag.required_off_cycles if richtung == "ausschalten" else diag.required_on_cycles,
             "prioritaet": diag.priority,
         }
 

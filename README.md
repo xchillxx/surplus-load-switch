@@ -64,7 +64,10 @@ cloud passes over or another appliance briefly kicks in.
 - **Wallbox support** — wallboxes with their own PV-surplus charging logic
   are added as a separate device type: never switched, only their power is
   subtracted from the household load so they don't distort the surplus
-  calculation for other devices.
+  calculation for other devices. Optionally, other devices can depend on a
+  wallbox being "satisfied" (its car's SOC has reached its target, or the
+  wallbox is already drawing enough power on its own) — e.g. a pool heat
+  pump can hold back until the car is no longer the priority.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's
@@ -111,6 +114,11 @@ cloud passes over or another appliance briefly kicks in.
   it's possible to see *why* the cascade decided what it did every time it
   ran, not only when something changed. The example dashboard's Logs tab
   renders that table as Datum/Gerät/Titel/Details columns.
+- **Switch countdown** — a per-device sensor shows seconds remaining
+  before its next pending switch action actually fires (either direction),
+  and a "next check" timestamp sensor shows when the coordinator will
+  re-evaluate everything — so a device that's still holding out its
+  stability buffer reads as "waiting X minutes", not as a stuck deviation.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
   Devices & Services, nested under the integration's hub device, instead of
