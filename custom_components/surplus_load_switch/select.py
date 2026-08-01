@@ -33,8 +33,6 @@ from .const import (
     CONF_LOAD_SENSOR,
     CONF_SOC_SENSOR,
     CONF_SOLAR_SENSOR,
-    CONF_WALLBOX_SOC_SENSOR,
-    CONF_WALLBOX_TARGET_SOC_SENSOR,
     DOMAIN,
     SELECT_NONE,
 )
@@ -62,13 +60,9 @@ async def async_setup_entry(
         entities.append(PVDeviceScheduleSelect(coordinator, entry, dev))
         # Candidates include wallboxes too — a wallbox is never itself
         # switched by the cascade, but another device can still depend on
-        # it (see PVWallboxSocSensorSelect/_wallbox_satisfied): "don't run
-        # until the car's satisfied".
+        # it (see coordinator._wallbox_satisfied): "don't run until the
+        # car's satisfied or the wallbox has been idle a while".
         entities.append(PVDeviceDependsOnSelect(coordinator, entry, dev, devices))
-    for dev in devices:
-        if dev.get(CONF_DEVICE_IS_WALLBOX, False):
-            entities.append(PVWallboxSocSensorSelect(coordinator, entry, dev))
-            entities.append(PVWallboxTargetSocSensorSelect(coordinator, entry, dev))
     async_add_entities(entities)
 
 
@@ -266,40 +260,6 @@ class PVDeviceScheduleSelect(_PVDeviceOptionalEntitySelect):
     ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_schedule_select"
-
-
-class PVWallboxSocSensorSelect(_PVDeviceOptionalEntitySelect):
-    """The car's own SOC sensor — only meaningful on a wallbox device, used
-    by _wallbox_satisfied() to decide whether another device may depend on
-    this wallbox being "satisfied" (see PVDeviceDependsOnSelect)."""
-
-    _field = CONF_WALLBOX_SOC_SENSOR
-    _domain = "sensor"
-    _attr_name = "Auto-SOC-Sensor"
-    _attr_icon = "mdi:car-electric"
-
-    def __init__(
-        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
-    ) -> None:
-        super().__init__(coordinator, entry, device)
-        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_soc_select"
-
-
-class PVWallboxTargetSocSensorSelect(_PVDeviceOptionalEntitySelect):
-    """The car's target/desired SOC — a sensor, number or input_number
-    entity, whichever the car's own integration (or a helper) exposes it
-    as."""
-
-    _field = CONF_WALLBOX_TARGET_SOC_SENSOR
-    _domain = ("sensor", "number", "input_number")
-    _attr_name = "Ziel-SOC-Sensor"
-    _attr_icon = "mdi:car-electric-outline"
-
-    def __init__(
-        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
-    ) -> None:
-        super().__init__(coordinator, entry, device)
-        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_target_soc_select"
 
 
 class PVDeviceDependsOnSelect(_PVDeviceSelectBase):

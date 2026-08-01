@@ -46,13 +46,14 @@ CONF_DEVICE_WINDOW_END = "window_end"
 CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes priority over window_start/end
 CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
 CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that must be ON first
-# Wallbox-only fields: a wallbox is never itself switched by the cascade
-# (it runs its own PV-surplus charging logic) — these let OTHER devices
-# depend on it anyway, using "is the car satisfied" instead of "is it on"
-# (a wallbox has no useful on/off state for that purpose). Optional; if
-# none of the three are set, depending on that wallbox never blocks.
-CONF_WALLBOX_SOC_SENSOR = "wallbox_soc_sensor"
-CONF_WALLBOX_TARGET_SOC_SENSOR = "wallbox_target_soc_sensor"
+# Wallbox-only, optional: a wallbox is never itself switched by the
+# cascade (it runs its own PV-surplus charging logic), so another device
+# depending on one uses this instead of "is it on" — see
+# PVSurplusCoordinator._wallbox_satisfied. Once its own power draw reaches
+# this, a dependent device may run too (the car's getting plenty, no need
+# to keep holding back for it). Entirely optional; the "idle" side of
+# _wallbox_satisfied (car not charging at all, sustained) needs no config
+# beyond the wallbox's own required power_sensor.
 CONF_WALLBOX_SATISFIED_KW = "wallbox_satisfied_kw"
 # Per-device "enabled" toggle — exposed as a live switch entity (switch.py),
 # not a config-flow field, since it's meant for a quick vacation-style
@@ -64,6 +65,10 @@ CONF_DEVICE_ENABLED = "enabled"
 SURPLUS_ON_THRESHOLD = 0.2    # kW: turn on when surplus > this
 SURPLUS_OFF_THRESHOLD = -0.2  # kW: turn off when surplus < this
 BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
+# Below this, a wallbox counts as "not really charging" for
+# _wallbox_satisfied's idle-release check — low enough that a genuinely
+# charging car is never mistaken for an idle one.
+WALLBOX_IDLE_THRESHOLD_KW = 0.3
 
 # h_to_solar ("hours until solar_start") is the time until the *next*
 # calibrated morning threshold — once today's has already passed, that's

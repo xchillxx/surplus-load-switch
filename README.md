@@ -65,9 +65,13 @@ cloud passes over or another appliance briefly kicks in.
   are added as a separate device type: never switched, only their power is
   subtracted from the household load so they don't distort the surplus
   calculation for other devices. Optionally, other devices can depend on a
-  wallbox being "satisfied" (its car's SOC has reached its target, or the
-  wallbox is already drawing enough power on its own) — e.g. a pool heat
-  pump can hold back until the car is no longer the priority.
+  wallbox being "satisfied": either its own power draw has reached a
+  configured threshold (it's already getting plenty), or — with no
+  configuration needed beyond its required power sensor — it's been
+  drawing near-zero power for the same hold time every other decision
+  uses, which reads the same whether the car's finished charging or isn't
+  even there. E.g. a pool heat pump can hold back until the car is no
+  longer the priority.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's

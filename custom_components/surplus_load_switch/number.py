@@ -246,11 +246,12 @@ class PVDeviceMinRuntimeNumber(_PVDeviceNumberBase):
 
 class PVWallboxSatisfiedKwNumber(_PVDeviceNumberBase):
     """Only meaningful on a wallbox device: once its own charging power
-    reaches this, another device may depend on it being "satisfied" even
-    if the car's target SOC isn't reached yet — the car isn't being
-    starved, so there's no reason to keep holding a lower-priority device
-    back purely because of that. 0 means "not set" (only the SOC/target
-    comparison, if configured, applies)."""
+    reaches this, another device may depend on it being "satisfied" —
+    it's getting plenty, no reason to keep holding a lower-priority
+    device back purely for it. Entirely optional: even with this left at
+    0 ("not set"), a device depending on a wallbox still gets released
+    once the wallbox has been idle (near-zero power) for the standard
+    hold time — see coordinator._wallbox_satisfied."""
 
     _field = CONF_WALLBOX_SATISFIED_KW
     _attr_name = "Ausreichende Ladeleistung (0 = aus)"

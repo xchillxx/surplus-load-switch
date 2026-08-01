@@ -45,8 +45,6 @@ from .const import (
     CONF_SOLAR_OFFSETS,
     CONF_SOLAR_SENSOR,
     CONF_WALLBOX_SATISFIED_KW,
-    CONF_WALLBOX_SOC_SENSOR,
-    CONF_WALLBOX_TARGET_SOC_SENSOR,
     DAYTIME_PROJECTION_HORIZON_H,
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
@@ -64,6 +62,7 @@ from .const import (
     SURPLUS_OFF_THRESHOLD,
     SURPLUS_ON_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
+    WALLBOX_IDLE_THRESHOLD_KW,
 )
 from .device_control import async_turn_off, async_turn_on, control_entity_id, is_device_on
 from .power_tracker import DevicePowerTracker
@@ -186,6 +185,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # ever show real transitions, not a repeated "still on" every
         # cycle.
         self._last_should_be_on: dict[str, bool] = {}
+        # Consecutive cycles a wallbox's own power draw has been below the
+        # idle threshold — see _wallbox_satisfied's idle-release check.
+        self._wallbox_idle_counters: dict[str, int] = {}
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -371,34 +373,40 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         return configured, diag
 
     def _wallbox_satisfied(self, wallbox_dev: dict) -> bool:
-        """Whether a wallbox's own charging currently needs no help from
-        the cascade holding lower-priority devices back for it — either
-        its car has already reached its configured target SOC, or the
-        wallbox is already drawing enough power on its own that a device
-        behind it in priority isn't meaningfully taking anything away from
-        it. Only meaningful when another device's "depends on" points at a
-        wallbox (a wallbox is never itself switched by the cascade, so
-        "is it on" doesn't apply to it the way it does for a normal
-        dependency). Fails open (True — never blocks) if none of the three
-        optional fields below are configured for this wallbox.
-        """
-        soc_sensor = wallbox_dev.get(CONF_WALLBOX_SOC_SENSOR)
-        target_sensor = wallbox_dev.get(CONF_WALLBOX_TARGET_SOC_SENSOR)
-        satisfied_kw = wallbox_dev.get(CONF_WALLBOX_SATISFIED_KW)
+        """Whether a device depending on this wallbox may run. A wallbox is
+        never itself switched by the cascade, so "is it on" doesn't apply
+        to it the way it does for a normal dependency — this checks its
+        own charging power instead, two ways:
 
-        if not soc_sensor and not target_sensor and not satisfied_kw:
+        - "Satisfied": its own power draw has already reached the
+          configured threshold, so it's getting plenty and a dependent
+          device isn't meaningfully taking anything away from it.
+        - "Idle": its power draw has been below a low threshold for the
+          same hold time every other decision uses — sustained near-zero
+          draw looks the same whether the car's unplugged/gone or it's
+          simply finished charging, and either way there's no reason left
+          to keep holding a dependent device back for it. This needs no
+          configuration beyond the wallbox's own required power_sensor,
+          unlike trying to compare SOC against a target (which can't tell
+          "car not here" from "car still charging" apart at all, since a
+          departed car keeps reporting whatever SOC it had).
+        """
+        satisfied_kw = wallbox_dev.get(CONF_WALLBOX_SATISFIED_KW)
+        wallbox_id = wallbox_dev["_id"]
+        power_sensor = wallbox_dev.get(CONF_DEVICE_POWER_SENSOR)
+        wallbox_power_kw = self._get_power_kw(power_sensor)
+
+        if satisfied_kw and wallbox_power_kw >= satisfied_kw:
+            self._wallbox_idle_counters[wallbox_id] = 0
             return True
 
-        if soc_sensor and target_sensor:
-            soc = self._get_float(soc_sensor, default=100.0)
-            target = self._get_float(target_sensor, default=0.0)
-            if soc >= target:
+        if wallbox_power_kw < WALLBOX_IDLE_THRESHOLD_KW:
+            counter = self._wallbox_idle_counters.get(wallbox_id, 0) + 1
+            self._wallbox_idle_counters[wallbox_id] = counter
+            if counter >= STABLE_ON_CYCLES:
                 return True
-
-        if satisfied_kw:
-            power_sensor = wallbox_dev.get(CONF_DEVICE_POWER_SENSOR)
-            if self._get_power_kw(power_sensor) >= satisfied_kw:
-                return True
+        else:
+            self._wallbox_idle_counters[wallbox_id] = 0
 
         return False
 
@@ -840,6 +848,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         data.base_load_kw = base_load
         data.surplus_kw = available_surplus
 
+        # Computed once per cycle, not per dependent device — several
+        # devices could depend on the same wallbox, and calling
+        # _wallbox_satisfied once per dependent would advance its idle
+        # hold-time counter faster than once per cycle.
+        wallbox_satisfied = {
+            wb["_id"]: self._wallbox_satisfied(wb) for wb in wallbox_devices
+        }
+
         # Battery discharge currently attributable to managed devices already
         # running is whatever part of their draw a *positive* surplus doesn't
         # cover — a negative surplus (base load alone exceeding solar) isn't
@@ -946,7 +962,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             depends_on_id = dev.get(CONF_DEVICE_DEPENDS_ON)
             depends_on_dev = devices_by_id.get(depends_on_id) if depends_on_id else None
             if depends_on_dev is not None and depends_on_dev.get(CONF_DEVICE_IS_WALLBOX, False):
-                dependency_met = self._wallbox_satisfied(depends_on_dev)
+                dependency_met = wallbox_satisfied.get(depends_on_id, True)
             else:
                 dependency_met = depends_on_id is None or device_is_on.get(depends_on_id, False)
             diag.dependency_met = dependency_met

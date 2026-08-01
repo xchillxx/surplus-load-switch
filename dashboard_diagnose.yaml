@@ -46,7 +46,7 @@ views:
               {% set h_bat = states('sensor.surplus_load_switch_akku_reicht') | float(999) %}
               {% set h_sol = states('sensor.surplus_load_switch_bis_solar_start') | float(0) %}
               {% set modus = states('sensor.surplus_load_switch_modus') %}
-              {% set naechste = (states.sensor | selectattr('entity_id','search','surplus_load_switch') | selectattr('attributes.device_class','defined') | selectattr('attributes.device_class','eq','timestamp') | list | first) %}
+              {% set naechste = (states.sensor | selectattr('entity_id','search','_nachste_prufung$') | list | first) %}
               {% set ns = namespace(rows=[]) %}
               {% for s in states.sensor if 'surplus_load_switch' in s.entity_id and s.entity_id.endswith('_o_leistung') %}
               {% set prio = state_attr(s.entity_id, 'prioritaet') | default(99) | float(99) %}
@@ -123,8 +123,13 @@ views:
               - entity: sensor.surplus_load_switch_modus
                 name: Modus
                 icon: mdi:information-outline
-              - entity: sensor.surplus_load_switch_nachste_prufung
-                name: Nächste Prüfung
+              # "Nächste Prüfung" isn't listed here as a static row -- its
+              # entity_id depends on your hub device's area assignment and
+              # can't be guessed generically the way the others above can.
+              # It's already shown at the bottom of the Status card above
+              # (found dynamically there); add it here too if you want by
+              # finding it in Developer Tools -> States (search
+              # "nachste_prufung") and pasting its real entity_id.
                 icon: mdi:timer-refresh-outline
 
       - type: vertical-stack
@@ -231,8 +236,8 @@ views:
               Klick auf ein Gerät öffnet dessen eigene Seite mit Priorität, Leistung,
               Mindest-Laufzeit, Steuerungs-Entität, Leistungssensor, Zeitplan-Helfer,
               Abhängigkeit und dem Aktiviert-Schalter — alles an einem Ort, direkt bearbeitbar.
-              Wallboxen zeigen stattdessen Auto-SOC-/Ziel-SOC-Sensor und die
-              Ausreichende-Ladeleistung-Schwelle, die andere Geräte als Abhängigkeit nutzen können.
+              Wallboxen zeigen stattdessen nur die optionale "Ausreichende Ladeleistung"-Schwelle —
+              andere Geräte können sie trotzdem als Abhängigkeit nutzen, auch ohne diese zu setzen.
 
   - title: Logs
     path: logs
