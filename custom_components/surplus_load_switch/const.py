@@ -55,6 +55,14 @@ CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that mus
 # _wallbox_satisfied (car not charging at all, sustained) needs no config
 # beyond the wallbox's own required power_sensor.
 CONF_WALLBOX_SATISFIED_KW = "wallbox_satisfied_kw"
+# A wallbox is never itself ranked/switched by the cascade, but on a
+# detected weak day (see WEAK_DAY_* below) it still needs an effective
+# priority to compare other devices against: any candidate device whose
+# own priority is worse (a higher number) than this gets held off
+# entirely until the battery's nearly full — the car gets first claim on
+# a scarce day, everything behind it waits. 0/unset disables the feature
+# for this wallbox.
+CONF_WALLBOX_WEAK_DAY_PRIORITY = "wallbox_weak_day_priority"
 # Per-device "enabled" toggle — exposed as a live switch entity (switch.py),
 # not a config-flow field, since it's meant for a quick vacation-style
 # on/off rather than something you configure once at setup. Absent/True
@@ -69,6 +77,23 @@ BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
 # _wallbox_satisfied's idle-release check — low enough that a genuinely
 # charging car is never mistaken for an idle one.
 WALLBOX_IDLE_THRESHOLD_KW = 0.3
+
+# --- Weak-day detection ---
+# Today counts as "weak" once its peak solar power so far drops below this
+# fraction of the calibrated reference peak for this calendar month (see
+# SolarOffsetCalibrator.reference_peak_kw) — comparing against a learned
+# normal for the time of year, not a fixed kW value, so it works the same
+# on any system size and season.
+WEAK_DAY_RATIO_THRESHOLD = 0.6
+# Don't judge a day "weak" before this local hour — the morning peak may
+# simply not have happened yet, which would otherwise look identical to a
+# genuinely overcast day for the first few hours of every single morning.
+WEAK_DAY_EARLIEST_CHECK_HOUR = 11
+# Battery SOC at/above which a weak day's extra caution no longer applies
+# — once the battery's essentially full, there's no reason to keep low-
+# priority devices held back purely because production is weak; the
+# battery doesn't need the surplus either way.
+WEAK_DAY_BATTERY_FULL_SOC = 95.0
 
 # h_to_solar ("hours until solar_start") is the time until the *next*
 # calibrated morning threshold — once today's has already passed, that's

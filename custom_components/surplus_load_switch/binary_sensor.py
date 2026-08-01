@@ -26,6 +26,7 @@ async def async_setup_entry(
     async_add_entities([
         PVSystemStatusBinarySensor(coordinator, entry),
         PVBattOkBinarySensor(coordinator, entry),
+        PVWeakDayBinarySensor(coordinator, entry),
     ])
 
 
@@ -83,3 +84,41 @@ class PVBattOkBinarySensor(CoordinatorEntity[PVSurplusCoordinator], BinarySensor
     @property
     def is_on(self) -> bool:
         return self.coordinator.data.batt_ok if self.coordinator.data else False
+
+
+class PVWeakDayBinarySensor(CoordinatorEntity[PVSurplusCoordinator], BinarySensorEntity):
+    """Whether today counts as a weak-production day compared to the
+    calibrated normal for this time of year — see coordinator._async_
+    update_data and the WEAK_DAY_* constants. Off (and available) even
+    with no reference peak calibrated yet — the attributes explain why."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Schwacher Tag"
+    _attr_icon = "mdi:weather-partly-cloudy"
+
+    def __init__(self, coordinator: PVSurplusCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_weak_day"
+
+    @property
+    def device_info(self):
+        return hub_device_info(self._entry.entry_id)
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.data.is_weak_day if self.coordinator.data else False
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        d = self.coordinator.data
+        return {
+            "peak_heute_kw": round(d.today_peak_kw, 3),
+            "referenz_peak_kw": round(d.reference_peak_kw, 3) if d.reference_peak_kw else None,
+        }

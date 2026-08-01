@@ -61,6 +61,13 @@ class SolarOffsetCalibrator:
         self._store: Store = Store(hass, STORAGE_VERSION, f"surplus_load_switch_calibration_{entry_id}")
         self._offsets: dict[int, float] = {}
         self._good_day_counts: dict[int, int] = {}
+        # Median good-day peak solar power per calendar month — a "how
+        # strong is a normal day this time of year" reference, used by the
+        # coordinator's weak-day detection (comparing today's peak so far
+        # against this) — otherwise unrelated to the solar-start offset
+        # this class exists for, but computed from the exact same good-day
+        # data so it made no sense to duplicate the query/filtering.
+        self._reference_peaks_kw: dict[int, float] = {}
         self._last_calibrated: datetime | None = None
         self._last_sources: dict[int, str] = {}
         self._last_query_empty = False
@@ -71,8 +78,16 @@ class SolarOffsetCalibrator:
             return
         self._offsets = {int(k): v for k, v in data.get("offsets", {}).items()}
         self._good_day_counts = {int(k): v for k, v in data.get("good_day_counts", {}).items()}
+        self._reference_peaks_kw = {
+            int(k): v for k, v in data.get("reference_peaks_kw", {}).items()
+        }
         last = data.get("last_calibrated")
         self._last_calibrated = dt_util.parse_datetime(last) if last else None
+
+    def reference_peak_kw(self, month: int) -> float | None:
+        """This month's typical good-day peak solar power, or None if it
+        hasn't been calibrated yet."""
+        return self._reference_peaks_kw.get(month)
 
     def offsets_for(self, configured_defaults: list[float]) -> list[float]:
         """12-element list (Jan..Dec).
@@ -149,6 +164,7 @@ class SolarOffsetCalibrator:
             "gelernte_werte_h": dict(self._offsets),
             "gute_tage_pro_monat": dict(self._good_day_counts),
             "quelle_pro_monat": dict(self._last_sources),
+            "referenz_peak_kw_pro_monat": dict(self._reference_peaks_kw),
             "zuletzt_kalibriert": self._last_calibrated.isoformat() if self._last_calibrated else None,
         }
 
@@ -203,18 +219,22 @@ class SolarOffsetCalibrator:
             return
 
         try:
-            offsets, good_counts = await self._hass.async_add_executor_job(self._compute, points)
+            offsets, good_counts, reference_peaks = await self._hass.async_add_executor_job(
+                self._compute, points
+            )
         except Exception:  # noqa: BLE001 — same: never let this break the coordinator
             _LOGGER.exception("Solar offset calibration: failed to compute offsets")
             return
 
         self._offsets = offsets
         self._good_day_counts = good_counts
+        self._reference_peaks_kw = reference_peaks
         self._last_calibrated = dt_util.utcnow()
         self._last_query_empty = False
         await self._store.async_save({
             "offsets": self._offsets,
             "good_day_counts": self._good_day_counts,
+            "reference_peaks_kw": self._reference_peaks_kw,
             "last_calibrated": self._last_calibrated.isoformat(),
         })
         _LOGGER.info(
@@ -222,7 +242,9 @@ class SolarOffsetCalibrator:
             len(self._offsets), sum(good_counts.values()),
         )
 
-    def _compute(self, points: list[dict]) -> tuple[dict[int, float], dict[int, int]]:
+    def _compute(
+        self, points: list[dict]
+    ) -> tuple[dict[int, float], dict[int, int], dict[int, float]]:
         """CPU-bound: sunrise lookup + day grouping + the cloud filter.
         Must run in the executor, not the event loop."""
         from astral import LocationInfo
@@ -246,25 +268,36 @@ class SolarOffsetCalibrator:
         peaks = {d: max(v for _, v in by_day[d]) for d in days}
 
         good_days: list[date] = []
+        rejected_no_neighbors = 0
+        rejected_too_cloudy = 0
         for i, d in enumerate(days):
             window = days[max(0, i - CALIBRATION_CLOUD_WINDOW_DAYS): i + CALIBRATION_CLOUD_WINDOW_DAYS + 1]
             window_peaks = sorted(peaks[wd] for wd in window if wd != d)
             if len(window_peaks) < 5 or peaks[d] <= 0:
+                rejected_no_neighbors += 1
                 continue
             reference = window_peaks[int(len(window_peaks) * 0.9)]
             if reference > 0 and peaks[d] >= CALIBRATION_CLOUD_GOOD_RATIO * reference:
                 good_days.append(d)
+            else:
+                rejected_too_cloudy += 1
 
         by_month: dict[int, list[float]] = defaultdict(list)
+        by_month_peaks: dict[int, list[float]] = defaultdict(list)
+        rejected_no_threshold_hour = 0
+        rejected_no_sunrise = 0
         for d in good_days:
+            by_month_peaks[d.month].append(peaks[d])
             entries = sorted(by_day[d])
             threshold = CALIBRATION_THRESHOLD_RATIO * peaks[d]
             first_above = next((t for t, v in entries if v >= threshold), None)
             if first_above is None:
+                rejected_no_threshold_hour += 1
                 continue
             try:
                 sunrise = sun(loc.observer, date=d, tzinfo=tz)["sunrise"]
             except Exception:  # noqa: BLE001 — polar day/night etc., just skip that day
+                rejected_no_sunrise += 1
                 continue
             offset_h = (first_above - sunrise).total_seconds() / 3600.0
             by_month[d.month].append(offset_h)
@@ -275,4 +308,21 @@ class SolarOffsetCalibrator:
             good_counts[m] = len(vals)
             if len(vals) >= CALIBRATION_MIN_GOOD_DAYS:
                 offsets[m] = round(statistics.median(vals), 2)
-        return offsets, good_counts
+
+        reference_peaks: dict[int, float] = {
+            m: round(statistics.median(vals), 3)
+            for m, vals in by_month_peaks.items()
+            if len(vals) >= CALIBRATION_MIN_GOOD_DAYS
+        }
+
+        _LOGGER.info(
+            "Solar offset calibration detail: %d day(s) with data, %d good day(s) "
+            "(%d rejected: too few neighbouring days with data, %d rejected: too "
+            "cloudy vs. neighbours), %d rejected (no hour reached the start "
+            "threshold), %d rejected (sunrise lookup failed) -- %d month(s) got a "
+            "calibrated offset, %d month(s) got a reference peak",
+            len(days), len(good_days), rejected_no_neighbors, rejected_too_cloudy,
+            rejected_no_threshold_hour, rejected_no_sunrise, len(offsets), len(reference_peaks),
+        )
+
+        return offsets, good_counts, reference_peaks

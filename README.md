@@ -123,6 +123,16 @@ cloud passes over or another appliance briefly kicks in.
   and a "next check" timestamp sensor shows when the coordinator will
   re-evaluate everything — so a device that's still holding out its
   stability buffer reads as "waiting X minutes", not as a stuck deviation.
+- **Weak-day detection** — compares today's peak solar power so far
+  against the solar-start calibration's learned normal peak for this time
+  of year (once late enough in the morning that a strong day would
+  already show it). A wallbox can be given an effective priority "for
+  weak days only" even though it's never itself switched or ranked
+  otherwise — on a day running well below normal, any device with a
+  worse priority than that gets held back entirely until the battery's
+  nearly full, so a car that still needs it gets first claim on a scarce
+  day. Optional and off by default; needs the calibration to actually
+  have a reference peak for the current month.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
   Devices & Services, nested under the integration's hub device, instead of

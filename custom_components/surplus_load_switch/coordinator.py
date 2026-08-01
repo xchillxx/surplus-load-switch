@@ -13,7 +13,7 @@ import logging
 import statistics
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -45,6 +45,7 @@ from .const import (
     CONF_SOLAR_OFFSETS,
     CONF_SOLAR_SENSOR,
     CONF_WALLBOX_SATISFIED_KW,
+    CONF_WALLBOX_WEAK_DAY_PRIORITY,
     DAYTIME_PROJECTION_HORIZON_H,
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
@@ -63,6 +64,9 @@ from .const import (
     SURPLUS_ON_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
     WALLBOX_IDLE_THRESHOLD_KW,
+    WEAK_DAY_BATTERY_FULL_SOC,
+    WEAK_DAY_EARLIEST_CHECK_HOUR,
+    WEAK_DAY_RATIO_THRESHOLD,
 )
 from .device_control import async_turn_off, async_turn_on, control_entity_id, is_device_on
 from .power_tracker import DevicePowerTracker
@@ -135,6 +139,9 @@ class CoordinatorData:
     calibration: dict = field(default_factory=dict)
     active_solar_offset_h: float = 0.0
     next_cycle_at: datetime | None = None
+    today_peak_kw: float = 0.0
+    reference_peak_kw: float | None = None
+    is_weak_day: bool = False
 
 
 class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
@@ -188,6 +195,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # Consecutive cycles a wallbox's own power draw has been below the
         # idle threshold — see _wallbox_satisfied's idle-release check.
         self._wallbox_idle_counters: dict[str, int] = {}
+        # Today's highest solar reading so far, for weak-day detection —
+        # reset whenever the local calendar date changes.
+        self._today_date: date | None = None
+        self._today_peak_kw: float = 0.0
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -678,6 +689,26 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._require_valid(self._config[sensor_key])
 
         solar = self._get_float(self._config[CONF_SOLAR_SENSOR])
+
+        # Weak-day detection: track today's peak solar reading so far and
+        # compare it against the calibrated "normal" peak for this month,
+        # once it's late enough that a genuinely strong morning would
+        # already have shown it (see WEAK_DAY_EARLIEST_CHECK_HOUR — before
+        # that, a low peak-so-far just means the sun hasn't gotten going
+        # yet, not that today is weak).
+        local_now = dt_util.now()
+        if self._today_date != local_now.date():
+            self._today_date = local_now.date()
+            self._today_peak_kw = 0.0
+        self._today_peak_kw = max(self._today_peak_kw, solar)
+        reference_peak_kw = self._calibrator.reference_peak_kw(local_now.month)
+        is_weak_day = (
+            reference_peak_kw is not None
+            and reference_peak_kw > 0
+            and local_now.hour >= WEAK_DAY_EARLIEST_CHECK_HOUR
+            and self._today_peak_kw < WEAK_DAY_RATIO_THRESHOLD * reference_peak_kw
+        )
+
         load = self._get_float(self._config[CONF_LOAD_SENSOR])
         soc = self._get_float(self._config[CONF_SOC_SENSOR])
         batt = self._get_float(self._config[CONF_BATT_SENSOR])
@@ -727,6 +758,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             calibration=self._calibrator.diagnostics,
             active_solar_offset_h=self._last_offset_h,
             next_cycle_at=dt_util.utcnow() + timedelta(seconds=UPDATE_INTERVAL_SECONDS),
+            today_peak_kw=self._today_peak_kw,
+            reference_peak_kw=reference_peak_kw,
+            is_weak_day=is_weak_day,
         )
 
         await self._evaluate_devices(data)
@@ -855,6 +889,18 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         wallbox_satisfied = {
             wb["_id"]: self._wallbox_satisfied(wb) for wb in wallbox_devices
         }
+
+        # The most protective (lowest/most-important) configured weak-day
+        # priority across all wallboxes — a candidate device worse than
+        # this gets held off entirely on a weak day (see the per-device
+        # loop below). None if no wallbox has this set.
+        wallbox_weak_day_priorities = [
+            wb[CONF_WALLBOX_WEAK_DAY_PRIORITY] for wb in wallbox_devices
+            if wb.get(CONF_WALLBOX_WEAK_DAY_PRIORITY)
+        ]
+        weak_day_priority_threshold = (
+            min(wallbox_weak_day_priorities) if wallbox_weak_day_priorities else None
+        )
 
         # Battery discharge currently attributable to managed devices already
         # running is whatever part of their draw a *positive* surplus doesn't
@@ -988,6 +1034,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 device_id, DeviceState(device_id=device_id)
             )
 
+            # On a detected weak day (see _async_update_data), a device
+            # worse than a wallbox's configured weak-day priority is held
+            # back the same hard way — no point spending scarce surplus on
+            # low-priority devices while today's production is running
+            # well below normal for the season, unless the battery's
+            # already basically full anyway (then there's nothing left to
+            # protect it for).
+            weak_day_block = (
+                data.is_weak_day
+                and weak_day_priority_threshold is not None
+                and diag.priority > weak_day_priority_threshold
+                and data.soc < WEAK_DAY_BATTERY_FULL_SOC
+            )
+
             # A configured time window, or an unmet prerequisite device, is
             # a hard boundary: the device may only ever be off, enforced
             # immediately (no hysteresis) — neither is a surplus/battery
@@ -1000,6 +1060,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 or in_window is False
                 or (in_window is None and legacy_off_only)
                 or not dependency_met
+                or weak_day_block
             ):
                 tracker.on_counter = 0
                 tracker.off_counter = 0
@@ -1007,11 +1068,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 hard_off_titel = (
                     "Deaktiviert" if not device_enabled
                     else "Abhängigkeit nicht erfüllt" if not dependency_met
+                    else "Schwacher Tag" if weak_day_block
                     else "Außerhalb Zeitfenster"
                 )
                 hard_off_reason = (
                     "deaktiviert" if not device_enabled
                     else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
+                    else (
+                        f"schwacher Tag ({data.today_peak_kw:.2f} kW von normal "
+                        f"{data.reference_peak_kw:.2f} kW bisher, Akku noch nicht voll)"
+                    ) if weak_day_block
                     else "außerhalb des Zeitfensters"
                 )
                 await self._log_decision(dev, False, hard_off_titel, hard_off_reason)
