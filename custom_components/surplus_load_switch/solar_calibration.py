@@ -100,15 +100,20 @@ class SolarOffsetCalibrator:
         self._recent_soc_gain = data.get("recent_soc_gain")
         last = data.get("last_calibrated")
         self._last_calibrated = dt_util.parse_datetime(last) if last else None
-        # Storage written by a pre-SOC-gain version of this integration has
-        # no "reference_soc_gains" key at all (not just an empty one) —
-        # treat that the same as never having calibrated, so a version
-        # upgrade recalibrates on its very next cycle instead of silently
-        # running on stale/absent weak-day data for up to the normal 24h
-        # interval. A fresh install's empty Store never reaches this line
-        # (caught by "if not data: return" above), so this can't misfire
-        # there.
-        if "reference_soc_gains" not in data:
+        # If there's genuinely no usable weak-day reference after loading
+        # — no calibrated month AND no recent-window fallback — treat that
+        # the same as never having calibrated, forcing a recalibration
+        # attempt on the very next cycle instead of waiting out whatever
+        # the stored "last_calibrated" interval says. This covers both a
+        # pre-SOC-gain version's storage (no keys at all) *and* a result
+        # saved by a version that ran the query but ended up with nothing
+        # usable (e.g. one entity's statistics not ready yet at query
+        # time) — checking the actual loaded state instead of just
+        # whether specific keys are present in the raw JSON is what makes
+        # this catch the second case too. A fresh install's empty Store
+        # never reaches this line (caught by "if not data: return" above),
+        # so this can't misfire there.
+        if not self._reference_soc_gains and self._recent_soc_gain is None:
             self._last_calibrated = None
 
     def reference_soc_gain(self, month: int) -> float | None:
