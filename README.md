@@ -78,7 +78,11 @@ cloud passes over or another appliance briefly kicks in.
   surplus (or battery margin) to cover it, so it won't cycle on/off just
   because the window is open. Point it at an existing `schedule.*` helper
   entity for multiple blocks per day / per-weekday schedules, or set a
-  simple start/end time directly if you don't need that.
+  simple start/end time directly if you don't need that. The stability
+  hold that normally delays switching on still runs *while the window is
+  still closed* — a device that's already had enough surplus/battery
+  margin for the full hold time before its window opens switches on the
+  moment it does, instead of waiting out a fresh hold from zero after.
 - **Priority-graduated shedding** — when there isn't enough surplus or
   battery margin for everything, the lowest-priority device is shed first
   instead of every device switching off together. Each device's own
