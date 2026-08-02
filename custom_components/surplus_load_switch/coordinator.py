@@ -1166,30 +1166,22 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 and data.sun_above_horizon
             )
 
-            # An unmet prerequisite device or a detected weak day are hard
-            # boundaries with no known future "opens at" moment — no point
-            # pre-charging the on-hold for either, so these still reset
-            # immediately and skip the rest of the evaluation entirely. A
-            # device with the legacy off_only flag and no window behaves
-            # like a window that's always closed, same as before.
-            if (
-                not dependency_met
-                or weak_day_block
-                or (in_window is None and legacy_off_only)
-            ):
+            # A detected weak day is a hard boundary with no known future
+            # "opens at" moment — no point pre-charging the on-hold for
+            # it, so it still resets immediately and skips the rest of
+            # the evaluation entirely. A device with the legacy off_only
+            # flag and no window behaves like a window that's always
+            # closed, same as before.
+            if weak_day_block or (in_window is None and legacy_off_only):
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
-                hard_off_titel = "Abhängigkeit nicht erfüllt" if not dependency_met else "Schwacher Tag"
                 hard_off_reason = (
-                    "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
-                    else (
-                        f"schwacher Tag (bester Akku-Zuwachs heute +{data.peak_soc_gain_today:.1f}% "
-                        f"von normal +{data.reference_soc_gain:.1f}%, Akku heute nie über "
-                        f"{WEAK_DAY_BATTERY_FULL_SOC:.0f}%)"
-                    )
+                    f"schwacher Tag (bester Akku-Zuwachs heute +{data.peak_soc_gain_today:.1f}% "
+                    f"von normal +{data.reference_soc_gain:.1f}%, Akku heute nie über "
+                    f"{WEAK_DAY_BATTERY_FULL_SOC:.0f}%)"
                 )
-                await self._log_decision(dev, False, hard_off_titel, hard_off_reason)
+                await self._log_decision(dev, False, "Schwacher Tag", hard_off_reason)
                 if is_on:
                     _LOGGER.info(
                         "PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), hard_off_reason,
@@ -1197,30 +1189,38 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     await async_turn_off(self.hass, dev)
                 continue
 
-            # A window that's closed while the device is still on is the
-            # same hard, immediate boundary as before — no hysteresis, it
-            # may simply never run outside its window.
+            # A closed window or an unmet prerequisite dependency is still
+            # a hard boundary for actually *running* the device — while
+            # it's on, either one is enforced immediately, no hysteresis,
+            # same as before.
             window_closed = in_window is False
-            if window_closed and is_on:
+            blocked = window_closed or not dependency_met
+            if blocked and is_on:
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
-                await self._log_decision(dev, False, "Außerhalb Zeitfenster", "außerhalb des Zeitfensters")
-                _LOGGER.info(
-                    "PV Surplus: turning OFF %s (außerhalb des Zeitfensters)", dev.get(CONF_DEVICE_NAME),
+                titel = "Außerhalb Zeitfenster" if window_closed else "Abhängigkeit nicht erfüllt"
+                reason = (
+                    "außerhalb des Zeitfensters" if window_closed
+                    else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)"
                 )
+                await self._log_decision(dev, False, titel, reason)
+                _LOGGER.info("PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), reason)
                 await async_turn_off(self.hass, dev)
                 continue
 
-            # A window that's closed but the device is already off is
-            # *not* a hard exit anymore: the surplus/battery judgement
-            # below still runs and on_counter still charges normally, so
-            # a device that's been qualifying the whole time the window
-            # was shut switches on the moment it opens instead of waiting
-            # out a fresh multi-minute hold from zero after the window's
-            # already open. Only the actual switch-on call and the
-            # cascade-budget reservation are suppressed while closed —
-            # see the two `not window_closed` guards below.
+            # Blocked (by window or dependency) but the device is already
+            # off is *not* a hard exit anymore: the surplus/battery
+            # judgement below still runs and on_counter still charges
+            # normally, so a device that's been qualifying the whole time
+            # switches on the instant the window opens or the dependency
+            # clears, instead of waiting out a fresh multi-minute hold
+            # from zero afterward. Only the actual switch-on call and the
+            # cascade-budget reservation are suppressed while blocked —
+            # see the two `not blocked` guards below. A weak-day block
+            # doesn't get this treatment (see above) since it has no
+            # equivalent discrete "clears at" moment worth pre-charging
+            # for.
 
             remaining_surplus = available_surplus - cumulative_committed
 
@@ -1268,19 +1268,22 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # In the small hysteresis dead zone between the on/off
             # thresholds, neither condition holds — the target is simply
             # "stay as you are", not a deviation either way. Forced to
-            # False while the window's still closed regardless of what
-            # the surplus/battery judgement says — the device genuinely
-            # isn't allowed to run yet, pre-charging on_counter below is
-            # just getting it ready for the moment it is.
-            diag.should_be_on = (should_on if (should_on or should_off) else is_on) and not window_closed
+            # False while blocked (window closed or dependency unmet)
+            # regardless of what the surplus/battery judgement says — the
+            # device genuinely isn't allowed to run yet, pre-charging
+            # on_counter below is just getting it ready for the moment
+            # it is.
+            diag.should_be_on = (should_on if (should_on or should_off) else is_on) and not blocked
 
-            if should_on and window_closed:
+            if should_on and blocked:
+                wartet_auf = "den Start des Zeitfensters" if window_closed else "die Abhängigkeit"
                 decision_reason = (
                     f"Überschuss/Akku würden bereits ausreichen ("
                     f"{remaining_surplus:.2f} kW verfügbar, {predicted_power:.2f} kW "
-                    f"benötigt) — wartet noch auf den Start des Zeitfensters"
+                    f"benötigt) — wartet noch auf {wartet_auf}"
                 )
-                await self._log_decision(dev, False, "Vorbereitet — wartet auf Zeitfenster", decision_reason)
+                titel = "Vorbereitet — wartet auf Zeitfenster" if window_closed else "Vorbereitet — wartet auf Abhängigkeit"
+                await self._log_decision(dev, False, titel, decision_reason)
             elif should_on:
                 if force_runtime:
                     decision_titel = "Einschalten — Mindest-Laufzeit"
@@ -1315,11 +1318,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 )
                 await self._log_decision(dev, is_on, stable_titel, decision_reason)
 
-            if should_on and not window_closed:
+            if should_on and not blocked:
                 # Reserve this device's predicted share (and its cutoff, if
                 # any) so lower-priority devices only see what's genuinely
                 # left over, and only for as long as this device actually
-                # keeps drawing it. Skipped while window_closed — a device
+                # keeps drawing it. Skipped while blocked — a device
                 # that's only pre-charging isn't actually drawing anything
                 # yet, so it has nothing to reserve.
                 cumulative_committed += predicted_power
@@ -1327,14 +1330,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
             if should_on and not is_on:
                 # Capped rather than incremented without bound: once
-                # pre-charged to the full hold while window_closed, there's
+                # pre-charged to the full hold while blocked, there's
                 # nothing more to gain from counting further cycles, and an
                 # uncapped counter would just be an ever-growing number
                 # that means the same thing as STABLE_ON_CYCLES already
                 # did.
                 tracker.on_counter = min(tracker.on_counter + 1, STABLE_ON_CYCLES)
                 tracker.off_counter = 0
-                if tracker.on_counter >= STABLE_ON_CYCLES and not window_closed:
+                if tracker.on_counter >= STABLE_ON_CYCLES and not blocked:
                     _LOGGER.info(
                         "PV Surplus: turning ON %s (remaining_surplus=%.2f, need=%.2f, "
                         "battery_would_last=%s, force_runtime=%s)",

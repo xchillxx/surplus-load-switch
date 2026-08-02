@@ -106,7 +106,10 @@ cloud passes over or another appliance briefly kicks in.
   only lets the compressor start while its pool pump is circulating water).
   Mark a device as depending on another; it's only ever turned on while the
   prerequisite is also on, so it never wastes a cascade reservation or
-  dilutes its own power measurement with idle-but-"on" time.
+  dilutes its own power measurement with idle-but-"on" time. Same
+  pre-charging as time windows: if surplus/battery margin already qualified
+  it while the prerequisite was still off, it switches on the instant the
+  prerequisite does instead of waiting out a fresh hold afterward.
 - **Per-device enable switch** — each device gets an "Aktiviert" switch
   entity. Turning it off takes the device out of the cascade entirely and
   makes the integration hands-off for it — no forced on or off, so it's
