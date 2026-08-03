@@ -51,6 +51,14 @@ class DevicePowerTracker:
         self._samples.append([dt_util.utcnow().isoformat(), power_kw])
         self._store.async_delay_save(self._data_to_save, POWER_STORE_SAVE_DELAY)
 
+    async def async_save_now(self) -> None:
+        """Force an immediate write, bypassing the debounce — see
+        DailyRuntimeTracker.async_save_now for why this matters: add_sample
+        fires every cycle while the device is on, which can keep the
+        debounce timer from ever finding a quiet window to fire on its own
+        for the entire day. Call before the integration unloads/reloads."""
+        await self._store.async_save(self._data_to_save())
+
     def _data_to_save(self) -> dict:
         return {"samples": list(self._samples)}
 

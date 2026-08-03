@@ -41,6 +41,15 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    coordinator: PVSurplusCoordinator = hass.data[DOMAIN][entry.entry_id]
+    # Every debounced Store (runtime/power trackers, weak-day peak state)
+    # re-triggers its own save timer on each coordinator cycle while
+    # active, so it can go the whole day without a quiet window to flush
+    # on its own — force a final write now, before unload, so today's
+    # tracking survives this reload instead of reverting to a stale disk
+    # copy (see PVSurplusCoordinator.async_flush_stores).
+    await coordinator.async_flush_stores()
+
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         hass.data[DOMAIN].pop(entry.entry_id)

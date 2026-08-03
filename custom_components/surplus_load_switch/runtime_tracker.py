@@ -42,6 +42,22 @@ class DailyRuntimeTracker:
             self._seconds_today += cycle_seconds
         self._store.async_delay_save(self._data_to_save, RUNTIME_STORE_SAVE_DELAY)
 
+    async def async_save_now(self) -> None:
+        """Force an immediate write, bypassing the debounce.
+
+        add_cycle's debounced save re-triggers its own timer on every
+        single call — while a device runs continuously, add_cycle fires
+        every coordinator cycle (~60s), which is the same as the debounce
+        delay, so the timer can go the entire day without ever finding a
+        quiet window to actually fire. The disk copy then silently stays
+        pinned at whatever was last flushed (possibly hours ago, or never
+        today), while the correct total only ever lives in memory. Call
+        this before the integration unloads/reloads — which every version
+        update triggers — so today's accumulated runtime survives instead
+        of reverting to that stale disk copy on the next load.
+        """
+        await self._store.async_save(self._data_to_save())
+
     def _data_to_save(self) -> dict:
         return {"date": self._date, "seconds_today": self._seconds_today}
 

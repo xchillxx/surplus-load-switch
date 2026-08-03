@@ -296,18 +296,39 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._today_peak_soc_gain = data.get("peak_soc_gain", 0.0)
         self._today_peak_soc = data.get("peak_soc", 0.0)
 
+    def _daily_state_to_save(self) -> dict:
+        return {
+            "date": self._today_date.isoformat(),
+            "solar_start_soc": self._today_solar_start_soc,
+            "peak_soc_gain": self._today_peak_soc_gain,
+            "peak_soc": self._today_peak_soc,
+        }
+
     def _save_daily_state(self) -> None:
         if self._today_date is None:
             return
         self._daily_state_store.async_delay_save(
-            lambda: {
-                "date": self._today_date.isoformat(),
-                "solar_start_soc": self._today_solar_start_soc,
-                "peak_soc_gain": self._today_peak_soc_gain,
-                "peak_soc": self._today_peak_soc,
-            },
+            self._daily_state_to_save,
             POWER_STORE_SAVE_DELAY,
         )
+
+    async def async_flush_stores(self) -> None:
+        """Force-write every debounced Store immediately — runtime
+        trackers, power trackers, and the daily-state (weak-day peak)
+        store all re-trigger their own debounce timer on every single
+        coordinator cycle while active, which can leave them without a
+        quiet window to actually flush to disk on their own for an entire
+        day (see DailyRuntimeTracker.async_save_now). Call this right
+        before the integration unloads — every version update reloads it —
+        so today's tracking survives instead of reverting to a stale disk
+        copy on the next load.
+        """
+        for tracker in self._runtime_trackers.values():
+            await tracker.async_save_now()
+        for tracker in self._power_trackers.values():
+            await tracker.async_save_now()
+        if self._today_date is not None:
+            await self._daily_state_store.async_save(self._daily_state_to_save())
 
     @property
     def devices(self) -> list[dict]:
