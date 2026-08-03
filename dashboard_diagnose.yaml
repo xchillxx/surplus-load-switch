@@ -82,12 +82,17 @@ views:
                 name: Hausverbrauch (gesamt)
                 icon: mdi:home-lightning-bolt-outline
                 suffix: " kW"
-              - type: attribute
-                entity: sensor.surplus_load_switch_uberschuss
-                attribute: base_load_kw
+              # Grundlast has its own dedicated entity (PVBaseLoadSensor) so
+              # it gets its own recorder history instead of opening
+              # Überschuss's graph when tapped — unlike the four raw-sensor
+              # rows above, its entity_id isn't fixed/predictable (it was
+              # added after this integration switched to has_entity_name,
+              # so the id HA generates depends on your own device/area
+              # naming). Replace with your own instance's id if it differs
+              # (Entwicklerwerkzeuge -> Zustände, search "Grundlast").
+              - entity: sensor.technik_abstellraum_sls_grundlast
                 name: Grundlast (ohne verwaltete Geräte)
                 icon: mdi:home-import-outline
-                suffix: " kW"
               - entity: sensor.surplus_load_switch_uberschuss
                 name: Überschuss (exkl. Wallbox + laufende Geräte)
                 icon: mdi:transmission-tower
@@ -115,9 +120,11 @@ views:
               - entity: sun.sun
                 name: Sonne über Horizont
                 icon: mdi:sun-angle
-              - type: attribute
-                entity: sensor.surplus_load_switch_uberschuss
-                attribute: batt_ok
+              # Same reasoning as Grundlast above: PVBattOkBinarySensor is
+              # its own dedicated entity so it gets its own history instead
+              # of opening Überschuss's graph — id isn't fixed/predictable
+              # across installs, replace with yours if it differs.
+              - entity: binary_sensor.technik_abstellraum_sls_akku_ausreichend
                 name: Akku ausreichend (Nachtmodus OK)
                 icon: mdi:battery-check
               - entity: sensor.surplus_load_switch_modus
