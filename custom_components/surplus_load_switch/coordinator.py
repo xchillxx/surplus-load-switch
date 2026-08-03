@@ -181,6 +181,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # settled, capped by LOAD_SENSOR_STALENESS_GRACE so a stalled
         # sensor doesn't freeze this indefinitely.
         self._last_managed_power_kw: float = 0.0
+        self._managed_power_kw_seen: bool = False
         self._stale_managed_power_kw: float | None = None
         self._stale_since: datetime | None = None
         self._last_seen_load_kw: float | None = None
@@ -943,6 +944,24 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # LOAD_SENSOR_STALENESS_GRACE in case a sensor stalls and never
         # reaches that count.
         now = dt_util.utcnow()
+
+        # self._last_managed_power_kw starts at 0.0 (see __init__) purely as
+        # a Python default, not because devices were actually off — but the
+        # check below can't tell the difference. Without _managed_power_kw_seen,
+        # the very first cycle after every integration (re)start/reload (e.g.
+        # right after installing an update) sees "0.0 -> real managed power"
+        # and mistakes that for a genuine composition change, freezing
+        # effective_managed_power_kw at the fictitious 0.0 baseline for up to
+        # LOAD_SENSOR_STALENESS_GRACE — during which base_load/base_discharge_kw
+        # wrongly include the full house load, as if no managed device were
+        # subtracted at all, making the battery projection needlessly
+        # pessimistic (and devices needlessly quick to shed) right after
+        # every restart. The first real reading is always trustworthy on its
+        # own — there's no "before" to protect against yet — so it's taken
+        # as-is instead of being run through the freeze logic.
+        if not self._managed_power_kw_seen:
+            self._managed_power_kw_seen = True
+            self._last_managed_power_kw = managed_power_kw
 
         if managed_power_kw != self._last_managed_power_kw and self._stale_managed_power_kw is None:
             # Only capture a fresh freeze point if we're not already mid
