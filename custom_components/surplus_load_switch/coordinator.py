@@ -1056,7 +1056,24 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # pessimistic for every device right when a windowed device's
         # cutoff should be making things easier, not harder.
         managed_discharge_kw = max(effective_managed_power_kw - max(available_surplus, 0.0), 0.0)
-        base_discharge_kw = max(data.smoothed_discharge_kw - managed_discharge_kw, 0.0)
+        if data.sun_above_horizon:
+            base_discharge_kw = max(data.smoothed_discharge_kw - managed_discharge_kw, 0.0)
+        else:
+            # At dusk, solar can sit briefly right around base_load_kw
+            # (available_surplus ≈ 0) purely by coincidence of a rapidly
+            # *declining* reading passing through that value on its way
+            # to zero — the live-attribution formula above reads that
+            # instant as "base load fully covered, nothing unavoidable
+            # right now", which is technically true for that one moment
+            # but then gets extrapolated as a flat rate across the
+            # entire multi-hour overnight projection in
+            # _hours_until_depleted below. Once the sun's below the
+            # horizon, solar isn't coming back until tomorrow regardless
+            # of what it still reads this instant, so the durable
+            # overnight "unavoidable" rate is simply the household's own
+            # base load, undiminished by a solar contribution that's
+            # already on its way out.
+            base_discharge_kw = base_load
 
         device_states: dict[str, bool] = {}
         device_diagnostics: dict[str, DeviceDiagnostics] = {}
