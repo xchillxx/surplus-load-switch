@@ -545,6 +545,50 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             return start_t <= now_t < end_t
         return now_t >= start_t or now_t < end_t  # wraps past midnight
 
+    def _window_reopens_within(self, dev: dict, now: datetime, horizon: timedelta) -> bool:
+        """True if a currently-closed window's next start is within `horizon`.
+
+        Only called for devices already known to be window/schedule
+        restricted (in_window is False, i.e. _in_window returned a real
+        schedule/window, just not open right now) — used to tell "about to
+        open" apart from "just closed for the day, next open is tomorrow".
+        Without this, pre-charging (see the per-device loop) can't
+        distinguish the two: it would prime on_counter and show a "wartet
+        noch X min bis einschalten" countdown for hours after a window
+        closes, implying an imminent switch-on that's actually many hours
+        away.
+        """
+        schedule_entity = dev.get(CONF_DEVICE_SCHEDULE_ENTITY)
+        if schedule_entity:
+            state = self.hass.states.get(schedule_entity)
+            if state is None or state.state in ("unavailable", "unknown"):
+                return False
+            # While the schedule is "off", its own next_event is the next
+            # moment it turns "on" — see _effective_cutoff above for the
+            # datetime-vs-string handling this mirrors.
+            next_event_raw = state.attributes.get("next_event")
+            if isinstance(next_event_raw, datetime):
+                next_event = next_event_raw
+            elif isinstance(next_event_raw, str):
+                next_event = dt_util.parse_datetime(next_event_raw)
+            else:
+                return False
+            if next_event is None:
+                return False
+            return dt_util.as_utc(next_event) - now <= horizon
+
+        start_str = dev.get(CONF_DEVICE_WINDOW_START)
+        start_t = dt_util.parse_time(start_str) if start_str else None
+        if start_t is None:
+            return False
+        candidate = dt_util.now().replace(
+            hour=start_t.hour, minute=start_t.minute, second=0, microsecond=0
+        )
+        candidate_utc = dt_util.as_utc(candidate)
+        if candidate_utc <= now:
+            candidate_utc += timedelta(days=1)
+        return candidate_utc - now <= horizon
+
     def _effective_cutoff(
         self,
         dev: dict,
@@ -1273,6 +1317,29 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # it's on, either one is enforced immediately, no hysteresis,
             # same as before.
             window_closed = in_window is False
+            precharge_horizon = timedelta(seconds=STABLE_ON_CYCLES * UPDATE_INTERVAL_SECONDS)
+            window_far_closed = window_closed and not self._window_reopens_within(
+                dev, now_dt, precharge_horizon
+            )
+
+            # A window that just closed for the day (next open likely
+            # tomorrow, well beyond the pre-charge horizon) is a hard
+            # boundary like weak_day_block above — no point pre-charging
+            # on_counter for a reopening hours away. Without this, a device
+            # sits primed (and shows a misleading "wartet noch X min bis
+            # einschalten" countdown) for the rest of the evening right
+            # after every window close, even though it can't actually turn
+            # on until blocked clears regardless.
+            if window_far_closed and not is_on:
+                tracker.on_counter = 0
+                tracker.off_counter = 0
+                diag.should_be_on = False
+                await self._log_decision(
+                    dev, False, "Außerhalb Zeitfenster",
+                    "außerhalb des Zeitfensters — öffnet erst wieder später, kein Vorladen",
+                )
+                continue
+
             blocked = window_closed or not dependency_met
             if blocked and is_on:
                 tracker.on_counter = 0
