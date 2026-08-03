@@ -166,6 +166,19 @@ LOAD_SENSOR_STALENESS_GRACE = timedelta(minutes=10)
 # staleness correction trusts them again.
 STALENESS_MIN_REFRESHES = 2
 
+# How long to keep computing off each core sensor's (solar/load/soc/
+# battery) last known good reading once it goes unavailable/unknown,
+# before actually freezing the coordinator (see _get_core_float) — a
+# *different* mechanism from LOAD_SENSOR_STALENESS_GRACE above, which
+# only covers a lagging-but-present reading right after a device's
+# composition changes. This one covers the sensor itself going away
+# entirely. Sized from what's actually been observed on a real
+# installation: most FusionSolarPlus blips clear within ~10-25 minutes,
+# so a short outage no longer skips a cycle at all, while a genuinely
+# extended one (observed once: ~5 hours) still correctly freezes rather
+# than running forever on an increasingly stale number.
+CORE_SENSOR_GRACE_PERIOD = timedelta(minutes=20)
+
 # "Margin" = h_battery - h_to_solar, i.e. how many hours of battery buffer
 # exist beyond what's strictly needed until solar resumes. When margin is
 # large, a short deficit is more likely a transient spike (oven, kettle) than

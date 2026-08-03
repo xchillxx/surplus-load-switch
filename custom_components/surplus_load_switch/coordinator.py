@@ -47,6 +47,7 @@ from .const import (
     CONF_SOLAR_SENSOR,
     CONF_WALLBOX_SATISFIED_KW,
     CONF_WALLBOX_WEAK_DAY_PRIORITY,
+    CORE_SENSOR_GRACE_PERIOD,
     DAYTIME_PROJECTION_HORIZON_H,
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
@@ -190,6 +191,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # system-log entry is written only on the transition (goes
         # unavailable / comes back), not every cycle it stays that way.
         self._last_sensor_valid: dict[str, bool] = {}
+        # Last known good reading per core sensor, and when it first went
+        # unavailable/unknown (cleared the moment it's readable again) —
+        # see _get_core_float and CORE_SENSOR_GRACE_PERIOD.
+        self._core_sensor_last_good: dict[str, float] = {}
+        self._core_sensor_invalid_since: dict[str, datetime] = {}
         # The should_be_on target last pushed to the native HA logbook per
         # device — the log table (self.log_entries) gets every cycle
         # unconditionally, but the native logbook (and anything built on
@@ -309,29 +315,37 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             key=lambda d: d.get(CONF_DEVICE_PRIORITY, 99),
         )
 
-    def _get_float(self, entity_id: str, default: float = 0.0) -> float:
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unavailable", "unknown", ""):
-            return default
-        try:
-            return float(state.state)
-        except ValueError:
-            return default
+    def _get_core_float(self, entity_id: str) -> float:
+        """Read one of the four core sensors (solar/load/soc/battery),
+        tolerating a brief unavailable/unknown blip by holding its last
+        known good value for up to CORE_SENSOR_GRACE_PERIOD before giving
+        up and raising UpdateFailed.
 
-    def _require_valid(self, entity_id: str) -> None:
-        """Raise if a core sensor isn't currently readable.
-
-        Without this, a sensor going "unknown" (e.g. a brief integration
-        hiccup) would silently read as 0 via _get_float's default — 0 solar
-        looks exactly like "no sun" to the cascade, and after the off-hold
-        buffer expires, devices would actually be switched off because of a
-        communication glitch, not a real drop in production. Raising
-        UpdateFailed here instead makes the coordinator keep its last good
-        data and skip evaluating devices entirely this cycle, so nothing
-        gets switched based on a sensor that isn't actually reporting.
+        Without any of this, a sensor going "unknown" (e.g. a brief
+        integration hiccup) would silently read as 0 — 0 solar looks
+        exactly like "no sun" to the cascade, and after the off-hold
+        buffer expires, devices would actually be switched off because of
+        a communication glitch, not a real drop in production. The
+        previous version of this check raised UpdateFailed immediately on
+        any invalid reading — safe, but on a real installation most
+        FusionSolarPlus blips clear within ~10-25 minutes, and freezing
+        the whole coordinator (skipping every device's evaluation) for
+        each one turned out to be far more disruptive than briefly
+        computing off a reading that's a few minutes stale. A genuinely
+        extended outage (observed once: ~5 hours) still needs to freeze
+        rather than run forever on an increasingly stale number — that's
+        what the grace period boundary is for.
         """
         state = self.hass.states.get(entity_id)
-        valid = state is not None and state.state not in ("unavailable", "unknown", "")
+        value: float | None = None
+        if state is not None and state.state not in ("unavailable", "unknown", ""):
+            try:
+                value = float(state.state)
+            except ValueError:
+                value = None
+        valid = value is not None
+        now = dt_util.utcnow()
+
         # Only log real transitions — the entity's first-ever observation
         # (right after startup/reload) always looks like a "change" against
         # the empty dict otherwise, which would falsely announce "wieder
@@ -342,12 +356,27 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             titel = "Sensor wieder verfügbar" if valid else "Sensor nicht verfügbar"
             details = (
                 f"{entity_id} wieder verfügbar" if valid
-                else f"{entity_id} nicht verfügbar — Zyklus wird übersprungen, bis es sich erholt"
+                else (
+                    f"{entity_id} nicht verfügbar — verwende letzten bekannten Wert für bis "
+                    f"zu {int(CORE_SENSOR_GRACE_PERIOD.total_seconds() // 60)} Min., danach "
+                    "wird der Zyklus übersprungen"
+                )
             )
             self.hass.async_create_task(self._log_system(titel, details))
         self._last_sensor_valid[entity_id] = valid
-        if not valid:
-            raise UpdateFailed(f"{entity_id} is unavailable/unknown — skipping this cycle")
+
+        if valid:
+            self._core_sensor_last_good[entity_id] = value
+            self._core_sensor_invalid_since.pop(entity_id, None)
+            return value
+
+        if entity_id not in self._core_sensor_invalid_since:
+            self._core_sensor_invalid_since[entity_id] = now
+        invalid_for = now - self._core_sensor_invalid_since[entity_id]
+        if invalid_for <= CORE_SENSOR_GRACE_PERIOD and entity_id in self._core_sensor_last_good:
+            return self._core_sensor_last_good[entity_id]
+
+        raise UpdateFailed(f"{entity_id} is unavailable/unknown — skipping this cycle")
 
     def _get_power_kw(self, entity_id: str | None) -> float:
         """Read a power sensor, normalising W to kW."""
@@ -744,13 +773,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 f"{months}/12 Monate kalibriert aus {good_days} guten Tagen",
             )
 
-        for sensor_key in (CONF_SOLAR_SENSOR, CONF_LOAD_SENSOR, CONF_SOC_SENSOR, CONF_BATT_SENSOR):
-            self._require_valid(self._config[sensor_key])
-
-        solar = self._get_float(self._config[CONF_SOLAR_SENSOR])
-        load = self._get_float(self._config[CONF_LOAD_SENSOR])
-        soc = self._get_float(self._config[CONF_SOC_SENSOR])
-        batt = self._get_float(self._config[CONF_BATT_SENSOR])
+        solar = self._get_core_float(self._config[CONF_SOLAR_SENSOR])
+        load = self._get_core_float(self._config[CONF_LOAD_SENSOR])
+        soc = self._get_core_float(self._config[CONF_SOC_SENSOR])
+        batt = self._get_core_float(self._config[CONF_BATT_SENSOR])
         battery_kwh = self._config.get(CONF_BATTERY_CAPACITY_KWH, 13.8)
         min_soc = self._config.get(CONF_MIN_SOC, 20.0)
 

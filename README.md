@@ -61,6 +61,12 @@ cloud passes over or another appliance briefly kicks in.
   external noise the median is meant to filter, so it shouldn't take up to
   20 minutes to be reflected (e.g. a device's time window ending should
   free up its share of the battery margin right away, not gradually).
+- **Tolerant of brief sensor outages** — the four core sensors (solar,
+  load, SOC, battery power) hold their last known good reading for up to
+  20 minutes if one goes `unavailable`/`unknown`, instead of freezing the
+  whole cascade on every short integration hiccup. A genuinely extended
+  outage still correctly freezes rather than running forever on an
+  increasingly stale number.
 - **Wallbox support** — wallboxes with their own PV-surplus charging logic
   are added as a separate device type: never switched, only their power is
   subtracted from the household load so they don't distort the surplus
