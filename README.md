@@ -95,7 +95,11 @@ cloud passes over or another appliance briefly kicks in.
   "would the battery still last?" check accounts for every higher-priority
   device already committed ahead of it, so a lower-priority device drops off
   battery power sooner than a higher-priority one, rather than all of them
-  sharing one global yes/no flag.
+  sharing one global yes/no flag. Also staggers *how long* each waits before
+  actually switching off — a rank's patience shrinks a bit further down the
+  priority list, so several devices crossing their off-threshold in the same
+  cycle (e.g. solar dropping off a cliff at sunset) still shed lowest-first
+  instead of finishing their hold together and switching off as one.
 - **Minimum daily runtime** — set an optional target (e.g. a pool pump that
   needs to filter for 4h/day for hygiene). It's never denied its normal
   chance to reach that for free on surplus/battery power earlier in the day;

@@ -140,13 +140,19 @@ STABLE_OFF_CYCLES_MAX = _minutes_to_cycles(20)  # 20 min — used when margin is
 # same cycle (e.g. solar drops off a cliff at sunset), they'd otherwise all
 # finish their off-hold at the same cycle count and switch off together.
 # Each priority rank below the highest gets this many fewer cycles to wait,
-# down to OFF_CYCLES_FLOOR — so the lowest-priority device always sheds
-# first, even when the underlying trigger fires for everyone at once. The
-# floor itself is still the 10-minute minimum above, not shorter — the
-# staggering only spreads out *when within that range* each priority
-# finishes waiting, it never drops any device below the general floor.
+# down to OFF_CYCLES_FLOOR — so the lowest-priority device sheds first, even
+# when the underlying trigger fires for everyone at once. OFF_CYCLES_FLOOR
+# must stay strictly below STABLE_OFF_CYCLES for this to do anything: the
+# base wait time (_required_off_cycles) already collapses to exactly
+# STABLE_OFF_CYCLES whenever there's no margin to spare — precisely the
+# "cliff" scenario this exists for — and if the floor matched that same
+# value, subtracting a rank's stagger would immediately get clamped straight
+# back up to it, cancelling the stagger for every device at once right when
+# it matters most. Confirmed happening in practice: every device reaching
+# the same 10-minute floor simultaneously during a real margin cliff, with
+# no observable staggering at all.
 STAGGER_CYCLES_PER_PRIORITY_STEP = _minutes_to_cycles(1)  # 1 min less patience per rank
-OFF_CYCLES_FLOOR = _minutes_to_cycles(10)  # 10 min minimum, however low the priority
+OFF_CYCLES_FLOOR = _minutes_to_cycles(5)  # strictly below STABLE_OFF_CYCLES — see above
 
 # How long to keep using the pre-transition managed-power figure for
 # base_load AND battery-discharge attribution after a managed device's
