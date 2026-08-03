@@ -1006,6 +1006,18 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         weak_day_priority_threshold = (
             min(wallbox_weak_day_priorities) if wallbox_weak_day_priorities else None
         )
+        # Once every wallbox actually protecting a weak-day priority is
+        # satisfied (car full or gone — the same idle/threshold detection
+        # _wallbox_satisfied already uses for the dependency feature),
+        # there's nothing left to hold surplus back for: letting other
+        # devices use it beats it going unused to the grid. Vacuously
+        # True (but never consulted) when no wallbox has a weak-day
+        # priority configured at all.
+        weak_day_wallboxes_satisfied = all(
+            wallbox_satisfied.get(wb["_id"], True)
+            for wb in wallbox_devices
+            if wb.get(CONF_WALLBOX_WEAK_DAY_PRIORITY)
+        )
 
         # Battery discharge currently attributable to managed devices already
         # running is whatever part of their draw a *positive* surplus doesn't
@@ -1183,13 +1195,18 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # protecting surplus for the wallbox, and overnight there's no
             # surplus at all for it to compete over — holding a device
             # back after dark wouldn't save anything for the car, only
-            # cost the device a night's runtime for nothing.
+            # cost the device a night's runtime for nothing. And only
+            # while the wallbox actually still needs it: once it's
+            # satisfied (car full or gone), holding other devices back
+            # any longer wouldn't protect anything — the surplus would
+            # just go unused to the grid instead of being used here.
             weak_day_block = (
                 data.is_weak_day
                 and weak_day_priority_threshold is not None
                 and diag.priority >= weak_day_priority_threshold
                 and self._today_peak_soc < WEAK_DAY_BATTERY_FULL_SOC
                 and data.sun_above_horizon
+                and not weak_day_wallboxes_satisfied
             )
 
             # A detected weak day is a hard boundary with no known future

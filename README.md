@@ -148,7 +148,12 @@ cloud passes over or another appliance briefly kicks in.
   days only" even though it's never itself switched or ranked otherwise
   — on a day running well below normal, any device at or worse than that
   priority gets held back entirely until the battery's nearly full, so a
-  car that still needs it gets first claim on a scarce day. Optional and
+  car that still needs it gets first claim on a scarce day. The block
+  releases as soon as the wallbox itself no longer needs the surplus —
+  same idle/threshold "satisfied" detection as the wallbox-dependency
+  feature, so it works whether the car finished charging or was never
+  plugged in — rather than holding other devices back for nothing while
+  the surplus would otherwise just go unused to the grid. Optional and
   off by default.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
