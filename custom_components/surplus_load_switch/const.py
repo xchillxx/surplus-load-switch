@@ -239,6 +239,11 @@ CALIBRATION_INTERVAL_HOURS = 24  # how often to re-derive offsets from statistic
 # instead of waiting the full normal cadence above.
 CALIBRATION_RETRY_INTERVAL = timedelta(hours=1)
 CALIBRATION_LOOKBACK_DAYS = 400  # a bit over a year, so multi-year data accumulates
+
+# --- Self-calibrating base-load floor ---
+# base_load's floor: the raw house-load sensor's own minimum over this many
+# recent days, instead of a hard 0.0 — see base_load_floor.py for why.
+BASE_LOAD_FLOOR_LOOKBACK_DAYS = 3
 # A day only counts toward calibration if its peak production reaches this
 # fraction of the 90th-percentile peak in the surrounding window — filters
 # out cloudy/overcast days using only the system's own data, no external

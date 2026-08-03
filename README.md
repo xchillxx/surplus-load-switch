@@ -51,6 +51,18 @@ cloud passes over or another appliance briefly kicks in.
   the value actually in effect each day, and "Solar-Start Kalibrierung"
   is a diagnostic sensor showing how many months are calibrated and each
   month's value, sample size, and source (measured / borrowed / default).
+- **Self-calibrating base-load floor** — the "unavoidable" load a battery
+  projection assumes when nothing is managed used to floor at a hard 0 kW,
+  which a real household never draws (fridge, standby electronics,
+  networking gear). Several devices without a real power sensor fall back
+  to a static config estimate, and whenever that briefly overshoots what
+  the device is actually drawing, the floor kicked in and made the
+  projection look more favorable than reality for that cycle. The floor is
+  now the house's own raw, unmanaged-load sensor's minimum over the last 3
+  days — a real physical measurement instead of an assumption — re-derived
+  daily from Home Assistant's long-term statistics, with the same
+  measured/none-yet fallback behaviour as the solar-start offset above.
+  Visible as attributes on the "Grundlast" sensor.
 - **Spike-resistant** — the battery-margin projection uses a 20-minute
   rolling median of the discharge rate, so a stove or kettle running for a
   few minutes doesn't get projected forward as if it continued all night.

@@ -151,6 +151,12 @@ class PVBaseLoadSensor(_PVSensorBase):
             return round(self.coordinator.data.base_load_kw, 3)
         return None
 
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        return self.coordinator.data.base_load_floor
+
 
 class PVHBatterySensor(_PVSensorBase):
     _attr_name = "Akku reicht"

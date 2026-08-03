@@ -76,6 +76,7 @@ from .const import (
 from .device_control import async_turn_off, async_turn_on, control_entity_id, is_device_on
 from .power_tracker import DevicePowerTracker
 from .runtime_tracker import DailyRuntimeTracker
+from .base_load_floor import BaseLoadFloorCalibrator
 from .solar_calibration import SolarOffsetCalibrator
 
 _LOGGER = logging.getLogger(__name__)
@@ -142,6 +143,7 @@ class CoordinatorData:
     device_states: dict[str, bool] = field(default_factory=dict)
     device_diagnostics: dict[str, DeviceDiagnostics] = field(default_factory=dict)
     calibration: dict = field(default_factory=dict)
+    base_load_floor: dict = field(default_factory=dict)
     active_solar_offset_h: float = 0.0
     next_cycle_at: datetime | None = None
     soc_gain_today: float | None = None
@@ -253,6 +255,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._calibrator = SolarOffsetCalibrator(
             hass, entry_id, config[CONF_SOLAR_SENSOR], config[CONF_SOC_SENSOR]
         )
+        self._base_load_floor_calibrator = BaseLoadFloorCalibrator(
+            hass, entry_id, config[CONF_LOAD_SENSOR]
+        )
         self._last_offset_h = 0.0
         for dev in config.get(CONF_DEVICES, []):
             device_id = dev["_id"]
@@ -265,6 +270,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         later). Also loads the last computed solar-offset calibration and
         today's weak-day peak-tracking state."""
         await self._calibrator.async_load()
+        await self._base_load_floor_calibrator.async_load()
         await self._async_load_daily_state()
         for dev in self._config.get(CONF_DEVICES, []):
             if dev.get(CONF_DEVICE_IS_WALLBOX, False):
@@ -839,6 +845,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 f"{months}/12 Monate kalibriert aus {good_days} guten Tagen",
             )
 
+        # Same idea, much cheaper query: re-derive base_load's floor from
+        # the raw house-load sensor's own recent minimum at most once a
+        # day — see base_load_floor.py.
+        if self._base_load_floor_calibrator.due_for_recalibration(
+            timedelta(hours=CALIBRATION_INTERVAL_HOURS)
+        ):
+            await self._base_load_floor_calibrator.async_recalibrate()
+
         solar = self._get_core_float(self._config[CONF_SOLAR_SENSOR])
         load = self._get_core_float(self._config[CONF_LOAD_SENSOR])
         soc = self._get_core_float(self._config[CONF_SOC_SENSOR])
@@ -926,6 +940,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             batt_ok=batt_ok,
             min_soc=min_soc,
             calibration=self._calibrator.diagnostics,
+            base_load_floor=self._base_load_floor_calibrator.diagnostics,
             active_solar_offset_h=self._last_offset_h,
             next_cycle_at=dt_util.utcnow() + timedelta(seconds=UPDATE_INTERVAL_SECONDS),
             soc_gain_today=soc_gain_today,
@@ -1065,7 +1080,18 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         self._last_managed_power_kw = managed_power_kw
 
-        base_load = max(data.load_kw - wallbox_power_kw - effective_managed_power_kw, 0.0)
+        # Floored at the house's own recent minimum draw, not a hard 0.0 —
+        # a household never genuinely idles at 0 kW (fridge, standby,
+        # networking gear), and several managed devices without a real
+        # power sensor fall back to a static config *estimate* that can
+        # briefly overshoot their real draw, which would otherwise send
+        # this negative and floor it at a physically implausible 0 —
+        # making base_discharge_kw below look more favorable than reality
+        # for that cycle. See base_load_floor.py.
+        base_load = max(
+            data.load_kw - wallbox_power_kw - effective_managed_power_kw,
+            self._base_load_floor_calibrator.floor_kw,
+        )
         available_surplus = data.solar_kw - base_load
 
         data.base_load_kw = base_load
