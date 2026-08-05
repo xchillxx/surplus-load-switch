@@ -18,6 +18,17 @@ needs at its quietest moment. Re-derived periodically from the
 recorder's own hourly statistics (already retained regardless of the
 recorder's raw-history purge period), mirroring solar_calibration.py's
 approach — no sample storage of its own needed.
+
+Uses a low percentile of the hourly minimums, not the outright minimum
+— confirmed on a real installation that a single glitched hour (an
+implausible exact 0.0 amid an otherwise consistent ~0.35-0.4 kW band
+across every other hour in the window) is enough to poison a pure
+min(), instantly undoing the whole point of this floor. A household
+that's genuinely lower for a single hour out of ~80+ is one thing; one
+hour reading exactly zero while every neighbour reads a consistent real
+value is a sensor blip, the same kind of brief cloud-polling glitch the
+core-sensor grace period already tolerates elsewhere — just showing up
+here as a valid-looking "0" instead of "unavailable".
 """
 from __future__ import annotations
 
@@ -30,6 +41,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     BASE_LOAD_FLOOR_LOOKBACK_DAYS,
+    BASE_LOAD_FLOOR_PERCENTILE,
     CALIBRATION_RETRY_INTERVAL,
     STORAGE_VERSION,
 )
@@ -72,7 +84,7 @@ class BaseLoadFloorCalibrator:
     def diagnostics(self) -> dict:
         return {
             "floor_kw": self._floor_kw,
-            "aus_stunden": self._sample_count,
+            "stundenwerte": self._sample_count,
             "zuletzt_kalibriert": self._last_calibrated.isoformat() if self._last_calibrated else None,
         }
 
@@ -124,7 +136,13 @@ class BaseLoadFloorCalibrator:
             self._last_query_empty = True
             return
 
-        self._floor_kw = round(min(mins), 3)
+        # Nearest-rank percentile: sort ascending and take the value at
+        # index round(percentile/100 * (n-1)) — robust to a handful of
+        # outlier-low hours instead of being fully determined by the
+        # single lowest one.
+        mins.sort()
+        index = round(BASE_LOAD_FLOOR_PERCENTILE / 100 * (len(mins) - 1))
+        self._floor_kw = round(mins[index], 3)
         self._sample_count = len(mins)
         self._last_calibrated = dt_util.utcnow()
         self._last_query_empty = False
@@ -134,6 +152,8 @@ class BaseLoadFloorCalibrator:
             "last_calibrated": self._last_calibrated.isoformat(),
         })
         _LOGGER.info(
-            "Base load floor: recalibrated to %.3f kW from %d hourly point(s) over the last %d day(s)",
-            self._floor_kw, self._sample_count, BASE_LOAD_FLOOR_LOOKBACK_DAYS,
+            "Base load floor: recalibrated to %.3f kW (p%d) from %d hourly point(s) "
+            "over the last %d day(s)",
+            self._floor_kw, BASE_LOAD_FLOOR_PERCENTILE, self._sample_count,
+            BASE_LOAD_FLOOR_LOOKBACK_DAYS,
         )
