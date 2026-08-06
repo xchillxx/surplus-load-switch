@@ -31,6 +31,7 @@ from .const import (
     CONF_DEVICE_DEPENDS_ON,
     CONF_DEVICE_ENABLED,
     CONF_DEVICE_IS_WALLBOX,
+    CONF_DEVICE_MAX_ASSUMED_RUNTIME_H,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
     CONF_DEVICE_NAME,
     CONF_DEVICE_OFF_ONLY,
@@ -628,13 +629,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         zero, or None if there's no way to know (it might keep drawing all
         the way to the projection horizon).
 
-        Three independent sources, the earliest of which wins since any
-        one of them alone forces the device off:
+        Four independent sources, the earliest of which wins since any one
+        of them alone forces the device off:
         - A schedule.* helper's own `next_event` attribute while the
           schedule is currently "on" — next_event is then necessarily the
           moment it turns off.
         - A simple window_end time (next occurrence from now, including
           past-midnight wraparound).
+        - A configured max_assumed_runtime_h, only when neither of the two
+          above applies at all (not just "not currently active" — a device
+          with a real but currently-off window still has none of the above
+          contribute a candidate, and shouldn't fall back to this either).
+          A rolling "at most N hours from right now" instead of a fixed
+          clock time, re-derived every call — see const.py's
+          CONF_DEVICE_MAX_ASSUMED_RUNTIME_H for why this exists.
         - Inherited from a prerequisite device's own cutoff, if this
           device depends on one — it gets forced off the instant its
           prerequisite does, regardless of its own window/schedule.
@@ -646,9 +654,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         _visited = _visited | {device_id}
 
         candidates: list[datetime] = []
+        has_configured_window = False
 
         schedule_entity = dev.get(CONF_DEVICE_SCHEDULE_ENTITY)
         if schedule_entity:
+            has_configured_window = True
             state = self.hass.states.get(schedule_entity)
             if state is not None and state.state == "on":
                 # The schedule integration stores next_event as a native
@@ -668,6 +678,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             window_end_str = dev.get(CONF_DEVICE_WINDOW_END)
             end_t = dt_util.parse_time(window_end_str) if window_end_str else None
             if end_t is not None:
+                has_configured_window = True
                 candidate = dt_util.now().replace(
                     hour=end_t.hour, minute=end_t.minute, second=0, microsecond=0
                 )
@@ -675,6 +686,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 if candidate_utc <= now:
                     candidate_utc += timedelta(days=1)
                 candidates.append(candidate_utc)
+
+        if not has_configured_window:
+            max_runtime_h = dev.get(CONF_DEVICE_MAX_ASSUMED_RUNTIME_H)
+            if max_runtime_h:
+                candidates.append(now + timedelta(hours=max_runtime_h))
 
         depends_on_id = dev.get(CONF_DEVICE_DEPENDS_ON)
         if depends_on_id:

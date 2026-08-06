@@ -19,6 +19,7 @@ from .const import (
     CONF_DEVICE_DEPENDS_ON,
     CONF_DEVICE_IS_CLIMATE,
     CONF_DEVICE_IS_WALLBOX,
+    CONF_DEVICE_MAX_ASSUMED_RUNTIME_H,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
     CONF_DEVICE_NAME,
     CONF_DEVICE_POWER_KW,
@@ -117,6 +118,11 @@ def _common_device_fields(
         ): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
         vol.Optional(CONF_DEVICE_WINDOW_START, **_default(d, CONF_DEVICE_WINDOW_START)): selector.TimeSelector(),
         vol.Optional(CONF_DEVICE_WINDOW_END, **_default(d, CONF_DEVICE_WINDOW_END)): selector.TimeSelector(),
+        vol.Optional(
+            CONF_DEVICE_MAX_ASSUMED_RUNTIME_H, **_default(d, CONF_DEVICE_MAX_ASSUMED_RUNTIME_H)
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0.5, max=12.0, step=0.5, unit_of_measurement="h")
+        ),
         vol.Optional(
             CONF_DEVICE_MIN_DAILY_RUNTIME_H, **_default(d, CONF_DEVICE_MIN_DAILY_RUNTIME_H)
         ): selector.NumberSelector(

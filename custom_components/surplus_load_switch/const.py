@@ -44,6 +44,15 @@ CONF_DEVICE_OFF_ONLY = "off_only"  # legacy (v1.1.0) — superseded by window fi
 CONF_DEVICE_WINDOW_START = "window_start"
 CONF_DEVICE_WINDOW_END = "window_end"
 CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes priority over window_start/end
+# Optional fallback for a device with neither a schedule nor a window: the
+# overnight battery projection otherwise has to assume it might run all the
+# way to solar start (no known stopping point), which can make even a high-
+# priority device fail the battery check on a device that's actually only
+# expected to run a few more hours. This caps the assumed worst case at a
+# rolling "at most N hours from right now" instead of a fixed clock time —
+# re-derived every cycle, so it keeps sliding forward while conditions stay
+# good, rather than a one-shot commitment. See coordinator._effective_cutoff.
+CONF_DEVICE_MAX_ASSUMED_RUNTIME_H = "max_assumed_runtime_h"
 CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
 CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that must be ON first
 # Wallbox-only, optional: a wallbox is never itself switched by the

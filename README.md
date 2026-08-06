@@ -101,6 +101,21 @@ cloud passes over or another appliance briefly kicks in.
   still closed* — a device that's already had enough surplus/battery
   margin for the full hold time before its window opens switches on the
   moment it does, instead of waiting out a fresh hold from zero after.
+- **Max. assumed runtime for windowless devices** — a device with neither
+  a schedule nor a window has no known stopping point, so the overnight
+  battery projection has to assume (for safety) that it might keep
+  drawing power all the way to solar start if switched on — which can
+  make even a high-priority device fail the battery check outright, since
+  its total worst-case energy need balloons over many hours, regardless
+  of how little competition it actually has. Setting "Max. angenommene
+  Laufzeit" caps that assumption at a rolling "at most N hours from right
+  now" instead — re-derived every cycle, so it keeps sliding forward
+  while conditions stay good rather than being a one-shot commitment, and
+  the device still gets shed immediately the moment it genuinely no
+  longer fits, same as any other device. Leave at 0 (default) for the
+  original unbounded behaviour. Only takes effect when the device has no
+  schedule/window configured — those already have a real, more precise
+  stopping point and take priority over this.
 - **Priority-graduated shedding** — when there isn't enough surplus or
   battery margin for everything, the lowest-priority device is shed first
   instead of every device switching off together. Each device's own
