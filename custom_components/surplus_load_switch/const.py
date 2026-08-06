@@ -154,6 +154,13 @@ STABLE_OFF_CYCLES_MAX = _minutes_to_cycles(20)  # 20 min — used when margin is
 STAGGER_CYCLES_PER_PRIORITY_STEP = _minutes_to_cycles(1)  # 1 min less patience per rank
 OFF_CYCLES_FLOOR = _minutes_to_cycles(5)  # strictly below STABLE_OFF_CYCLES — see above
 
+# Battery-optimal set selection (see coordinator._select_battery_optimal_set):
+# exhaustive over 2^n subsets of devices competing for overnight battery
+# budget, so it's fast for any realistic device count but grows
+# exponentially — this caps it, falling back to a simpler independent check
+# above the cap rather than blocking the coordinator's own cycle.
+MAX_BATTERY_OPTIMIZATION_DEVICES = 16
+
 # How long to keep using the pre-transition managed-power figure for
 # base_load AND battery-discharge attribution after a managed device's
 # on/off state changes, at most — covers cloud-polled sensors (e.g.

@@ -54,6 +54,7 @@ from .const import (
     DOMAIN,
     LOAD_SENSOR_STALENESS_GRACE,
     MARGIN_FOR_MAX_PATIENCE_H,
+    MAX_BATTERY_OPTIMIZATION_DEVICES,
     MIN_RUNTIME_FORCE_AFTER_HOUR,
     MIN_SAMPLES_FOR_MEASURED_AVG,
     OFF_CYCLES_FLOOR,
@@ -772,6 +773,115 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             remaining_kwh -= seg_energy
         return max_horizon_h
 
+    def _select_battery_optimal_set(
+        self,
+        candidates: list[tuple[str, float, datetime | None, int]],
+        mandatory_segments: list[tuple[float, datetime | None]],
+        now: datetime,
+        horizon_end: datetime,
+        base_discharge_kw: float,
+        available_surplus: float,
+        avail_kwh: float,
+        soc: float,
+        min_soc: float,
+        max_priority_number: int,
+    ) -> frozenset[str]:
+        """Which of `candidates` (device_id, predicted_power, own_cutoff,
+        priority) should count as "battery would last" this cycle.
+
+        The old per-device check was purely sequential: each device only
+        saw what higher-priority devices already committed, then checked
+        whether its OWN addition (with its own cutoff) still fit. That's
+        fine for the *surplus* check (a live, moment-to-moment thing,
+        still handled sequentially elsewhere) but produces a real paradox
+        for the *overnight battery* check: a lower-priority device with a
+        known cutoff (bounded total energy) can pass while a *higher*-
+        priority device with no cutoff (assumed to draw power all the way
+        to solar start, since there's no known stopping point) fails —
+        even though shedding the lower-priority device wouldn't have
+        helped the higher-priority one at all, since it already saw the
+        full, uncommitted margin when it was evaluated first, before
+        anyone else had a chance to claim any of it.
+
+        Instead: find the combination of candidates that fits within
+        avail_kwh together with the always-on mandatory_segments (disabled-
+        but-physically-running devices, and force-runtime devices — both
+        already committed regardless of what this picks) while keeping the
+        most priority-weighted value. This sheds only what's actually
+        necessary rather than a strict lowest-priority-first order: a
+        cheap, low-priority device that wouldn't free up enough to matter
+        stays on, while a pricier higher-priority device may still have to
+        give way to several cheaper lower-priority ones if that's what it
+        takes to fit.
+
+        Exhaustive over 2^n subsets — n is a handful of managed devices in
+        any real installation, so this easily runs every cycle; capped at
+        MAX_BATTERY_OPTIMIZATION_DEVICES to guard against a pathologically
+        large config, falling back to a simpler independent check (each
+        candidate checked alone against the mandatory baseline, no
+        cross-candidate trade-offs) above the cap.
+        """
+        if soc <= min_soc or not candidates:
+            return frozenset()
+
+        n = len(candidates)
+        if n > MAX_BATTERY_OPTIMIZATION_DEVICES:
+            _LOGGER.warning(
+                "Battery-optimal set: %d candidate devices exceeds the %d cap, "
+                "falling back to a simple independent check for this cycle",
+                n, MAX_BATTERY_OPTIMIZATION_DEVICES,
+            )
+            kept = set()
+            for device_id, power, cutoff, _priority in candidates:
+                segments = [*mandatory_segments, (power, cutoff)]
+                energy = self._project_energy_kwh(
+                    segments, now, horizon_end, base_discharge_kw, available_surplus
+                )
+                if avail_kwh > energy:
+                    kept.add(device_id)
+            return frozenset(kept)
+
+        def value_of(priority: int) -> int:
+            # Exponential, not linear (max_priority_number + 1 - priority):
+            # a linear scale lets several lower-priority devices' combined
+            # value outweigh one higher-priority device's — e.g. one Prio 1
+            # device losing out to four Prio 2-5 devices together, which is
+            # the exact opposite of what priority is for. Exponential
+            # weighting makes priority *lexicographically* dominant: no
+            # combination of every worse-priority device combined can ever
+            # outvalue keeping one better-priority device (2^(n-1) always
+            # exceeds the sum of every lower power of two), so a device
+            # only ever gives way to worse-priority ones once it genuinely
+            # doesn't fit on its own — never because enough cheap, low-
+            # priority devices happened to add up.
+            return 2 ** (max_priority_number - priority)
+
+        best_value = -1
+        best_count = -1
+        best_subset: tuple[int, ...] = ()
+        for mask in range(1 << n):
+            indices = [i for i in range(n) if mask & (1 << i)]
+            segments = [
+                *mandatory_segments,
+                *((candidates[i][1], candidates[i][2]) for i in indices),
+            ]
+            energy_needed = self._project_energy_kwh(
+                segments, now, horizon_end, base_discharge_kw, available_surplus
+            )
+            if energy_needed > avail_kwh:
+                continue
+            value = sum(value_of(candidates[i][3]) for i in indices)
+            count = len(indices)
+            # Value first (priority-weighted importance kept on), then
+            # count as a tiebreaker (prefer keeping more devices among
+            # equally-valuable combinations).
+            if value > best_value or (value == best_value and count > best_count):
+                best_value = value
+                best_count = count
+                best_subset = tuple(indices)
+
+        return frozenset(candidates[i][0] for i in best_subset)
+
     @staticmethod
     def _required_off_cycles(data: CoordinatorData, priority_rank: int = 0) -> int:
         """More battery margin beyond what's needed until solar resumes ->
@@ -1192,6 +1302,89 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         now_dt = dt_util.utcnow()
         horizon_end = now_dt + timedelta(hours=data.effective_h_to_solar + BATT_OK_BUFFER_H)
 
+        # Read-only pre-pass mirroring the main loop's hard-boundary checks
+        # below (weak day / legacy off-only / window-far-closed / blocked),
+        # just to sort every device into exactly one of three buckets before
+        # any decision is made, for _select_battery_optimal_set:
+        #   - mandatory_segments: always-on regardless of the battery check
+        #     (disabled-but-physically-running, or minimum-runtime-forced)
+        #   - optional_candidates: genuinely competing for battery budget
+        #     this cycle — eligible to actually turn on/stay on
+        #   - (implicitly excluded): hard-blocked or blocked-but-off
+        #     devices, which can't commit real budget either way and are
+        #     evaluated the old, simpler sequential way further down, only
+        #     for their own pre-charge countdown.
+        # See _select_battery_optimal_set's docstring for why this matters.
+        mandatory_segments: list[tuple[float, datetime | None]] = []
+        optional_candidates: list[tuple[str, float, datetime | None, int]] = []
+        max_priority_number = 1
+        for _dev in candidate_devices:
+            _device_id = _dev["_id"]
+            if not control_entity_id(_dev):
+                continue
+            _is_on = device_is_on[_device_id]
+            _predicted_power, _ = self._predicted_power_kw(_dev)
+            _own_cutoff = self._effective_cutoff(_dev, now_dt, devices_by_id)
+            _priority = _dev.get(CONF_DEVICE_PRIORITY, 99)
+            max_priority_number = max(max_priority_number, _priority)
+
+            if not _dev.get(CONF_DEVICE_ENABLED, True):
+                if _is_on:
+                    mandatory_segments.append((_predicted_power, _own_cutoff))
+                continue
+
+            _in_window = self._in_window(_dev)
+            _weak_day_block = (
+                data.is_weak_day
+                and weak_day_priority_threshold is not None
+                and _priority >= weak_day_priority_threshold
+                and self._today_peak_soc < WEAK_DAY_BATTERY_FULL_SOC
+                and data.sun_above_horizon
+                and not weak_day_wallboxes_satisfied
+            )
+            if _weak_day_block or (_in_window is None and _dev.get(CONF_DEVICE_OFF_ONLY, False)):
+                continue
+
+            _window_closed = _in_window is False
+            _precharge_horizon = timedelta(seconds=STABLE_ON_CYCLES * UPDATE_INTERVAL_SECONDS)
+            if _window_closed and not _is_on and not self._window_reopens_within(
+                _dev, now_dt, _precharge_horizon
+            ):
+                continue
+
+            _depends_on_id = _dev.get(CONF_DEVICE_DEPENDS_ON)
+            _depends_on_dev = devices_by_id.get(_depends_on_id) if _depends_on_id else None
+            if _depends_on_dev is not None and _depends_on_dev.get(CONF_DEVICE_IS_WALLBOX, False):
+                _dependency_met = wallbox_satisfied.get(_depends_on_id, True)
+            else:
+                _dependency_met = _depends_on_id is None or device_is_on.get(_depends_on_id, False)
+            _blocked = _window_closed or not _dependency_met
+            if _blocked:
+                # Either forced off this cycle (blocked and on) or just
+                # pre-charging (blocked and off) — neither commits real
+                # budget, handled the old sequential way further down.
+                continue
+
+            _runtime_tracker = self._runtime_trackers.get(_device_id)
+            _runtime_hours_today = _runtime_tracker.hours_today if _runtime_tracker is not None else 0.0
+            _min_daily_runtime_h = _dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
+            _force_runtime = (
+                _min_daily_runtime_h is not None
+                and _runtime_hours_today < _min_daily_runtime_h
+                and dt_util.now().hour >= MIN_RUNTIME_FORCE_AFTER_HOUR
+            )
+            if _force_runtime:
+                mandatory_segments.append((_predicted_power, _own_cutoff))
+                continue
+
+            optional_candidates.append((_device_id, _predicted_power, _own_cutoff, _priority))
+
+        battery_eligible_ids = self._select_battery_optimal_set(
+            optional_candidates, mandatory_segments, now_dt, horizon_end,
+            base_discharge_kw, available_surplus, data.avail_kwh, data.soc, data.min_soc,
+            max_priority_number,
+        )
+
         for priority_rank, dev in enumerate(candidate_devices):
             device_id = dev["_id"]
             control_id = control_entity_id(dev)
@@ -1439,11 +1632,28 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # higher-priority windowed device is due to stop anyway.
             own_cutoff = self._effective_cutoff(dev, now_dt, devices_by_id)
             diag.effective_cutoff = own_cutoff.isoformat() if own_cutoff else None
-            projected_segments = [*committed_segments, (predicted_power, own_cutoff)]
-            energy_needed_kwh = self._project_energy_kwh(
-                projected_segments, now_dt, horizon_end, base_discharge_kw, available_surplus
-            )
-            battery_would_last = data.avail_kwh > energy_needed_kwh and data.soc > data.min_soc
+            if blocked:
+                # Blocked-but-off (window not open yet / dependency unmet):
+                # can't actually commit real budget this cycle regardless
+                # of the answer, so it wasn't part of the battery-optimal
+                # set search above — checked the old, simpler sequential
+                # way instead, purely so its own pre-charge countdown has
+                # something to go on.
+                projected_segments = [*committed_segments, (predicted_power, own_cutoff)]
+                energy_needed_kwh = self._project_energy_kwh(
+                    projected_segments, now_dt, horizon_end, base_discharge_kw, available_surplus
+                )
+                battery_would_last = data.avail_kwh > energy_needed_kwh and data.soc > data.min_soc
+            else:
+                # Genuinely competing for tonight's battery budget — use
+                # the priority-optimal combination picked above instead of
+                # a purely sequential per-device check, so a higher-
+                # priority device with no cutoff (assumed to draw power
+                # all the way to solar start) doesn't lose out to a lower-
+                # priority device that merely happens to have a bounded
+                # schedule, when shedding the lower-priority one wouldn't
+                # even have helped. See _select_battery_optimal_set.
+                battery_would_last = device_id in battery_eligible_ids
             required_off_cycles = self._required_off_cycles(data, priority_rank)
             diag.required_off_cycles = required_off_cycles
             diag.required_on_cycles = STABLE_ON_CYCLES
