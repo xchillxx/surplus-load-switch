@@ -259,7 +259,7 @@ class PVDeviceMaxAssumedRuntimeNumber(_PVDeviceNumberBase):
     CONF_DEVICE_MAX_ASSUMED_RUNTIME_H for the full reasoning."""
 
     _field = CONF_DEVICE_MAX_ASSUMED_RUNTIME_H
-    _attr_name = "Max. angenommene Laufzeit (0 = unbegrenzt)"
+    _attr_name = "Max. angenommene Laufzeit ab jetzt (0 = unbegrenzt)"
     _attr_icon = "mdi:timer-sand"
     _attr_native_min_value = 0
     _attr_native_max_value = 12
