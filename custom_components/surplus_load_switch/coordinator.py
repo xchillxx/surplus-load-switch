@@ -1030,7 +1030,28 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # a battery projection while the sun is still actually up.
         sun_state = self.hass.states.get("sun.sun")
         sun_above_horizon = sun_state is not None and sun_state.state == "above_horizon"
-        effective_h_to_solar = DAYTIME_PROJECTION_HORIZON_H if sun_above_horizon else h_to_solar
+        # sun_above_horizon alone is a hard geometric cliff (elevation > 0),
+        # not a statement about whether solar is still doing anything —
+        # confirmed on a real installation that right at dusk (elevation a
+        # fraction of a degree, solar already down to near-zero) it can
+        # still read True for several more minutes, during which every
+        # device's battery check used the short DAYTIME_PROJECTION_HORIZON_H
+        # instead of the real multi-hour overnight one, letting the whole
+        # evening's devices pass right up until the exact geometric sunset
+        # second — then all switch to the long horizon simultaneously and
+        # can discover a real deficit at once. Also requiring solar to
+        # still be above SOLAR_START_MIN_KW (the same threshold used to
+        # detect the day's solar *start*, applied symmetrically to its
+        # end) switches to the honest long horizon a few minutes earlier,
+        # as production tapers off, instead of at that one discontinuous
+        # instant — smoothing the transition into a gradual, still-
+        # sequential shed instead of a last-second cliff. Daytime
+        # (sun_above_horizon and meaningful solar) is unaffected.
+        effective_h_to_solar = (
+            DAYTIME_PROJECTION_HORIZON_H
+            if sun_above_horizon and solar >= SOLAR_START_MIN_KW
+            else h_to_solar
+        )
 
         batt_ok = h_battery > (effective_h_to_solar + BATT_OK_BUFFER_H) and soc > min_soc
 
@@ -1277,7 +1298,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # cutoff should be making things easier, not harder.
         managed_discharge_kw = max(effective_managed_power_kw - max(available_surplus, 0.0), 0.0)
         if data.sun_above_horizon:
-            base_discharge_kw = max(data.smoothed_discharge_kw - managed_discharge_kw, 0.0)
+            # Floored at the same learned floor as base_load, not a hard
+            # 0.0 — a household never genuinely idles at 0 kW, and this
+            # same live-attribution formula can read as "fully covered"
+            # whenever a managed device's config *estimate* (no real power
+            # sensor) briefly overshoots its real draw, for the identical
+            # reason base_load's own floor exists. See base_load_floor.py.
+            base_discharge_kw = max(
+                data.smoothed_discharge_kw - managed_discharge_kw,
+                self._base_load_floor_calibrator.floor_kw,
+            )
         else:
             # At dusk, solar can sit briefly right around base_load_kw
             # (available_surplus ≈ 0) purely by coincidence of a rapidly
