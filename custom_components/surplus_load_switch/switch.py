@@ -17,6 +17,9 @@ from .const import (
     CONF_DEVICE_ENABLED,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_PRIORITY,
+    CONF_DEVICE_SCHEDULE_ENTITY,
+    CONF_DEVICE_STOPS_OVERNIGHT,
+    CONF_DEVICE_WINDOW_END,
     DOMAIN,
 )
 from .coordinator import PVSurplusCoordinator
@@ -37,6 +40,7 @@ async def async_setup_entry(
         if control_entity_id(dev)
     ]
     entities += [PVDeviceEnabledSwitch(coordinator, entry, dev) for dev in non_wallbox]
+    entities += [PVDeviceStopsOvernightSwitch(coordinator, entry, dev) for dev in non_wallbox]
     async_add_entities(entities)
 
 
@@ -151,3 +155,87 @@ class PVDeviceEnabledSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntit
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._async_set_enabled(False)
+
+
+class PVDeviceStopsOvernightSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
+    """Only has any effect on a device with neither a schedule.* helper nor
+    a window_end configured. Such a device has no known stopping point, so
+    the overnight battery projection otherwise has to assume it might keep
+    drawing power all the way to solar start if switched on — which can
+    make even a high-priority device fail the check outright, since its
+    worst-case energy need balloons over many hours regardless of how
+    little it's actually competing with other devices for that budget.
+
+    Turning this on caps that assumption at a rolling "at most
+    DEFAULT_MAX_ASSUMED_RUNTIME_H hours from right now" instead — re-
+    derived every cycle, so it keeps sliding forward while conditions stay
+    good rather than being a one-shot commitment — without ever forcing
+    the device off by itself; it still only ever gets shed via the normal
+    surplus/battery check, exactly like any other device. See
+    coordinator._effective_cutoff and const.py's
+    CONF_DEVICE_STOPS_OVERNIGHT/DEFAULT_MAX_ASSUMED_RUNTIME_H."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Läuft nicht die ganze Nacht durch"
+    _attr_icon = "mdi:weather-night"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        coordinator: PVSurplusCoordinator,
+        entry: ConfigEntry,
+        device: dict,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._device_id = device["_id"]
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_stops_overnight"
+
+    @property
+    def device_info(self):
+        return sub_device_info(self._entry.entry_id, self._device or {"_id": self._device_id})
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def _device(self) -> dict | None:
+        devices = self._entry.data.get(CONF_DEVICES, [])
+        return next((d for d in devices if d.get("_id") == self._device_id), None)
+
+    @property
+    def is_on(self) -> bool:
+        dev = self._device
+        return dev.get(CONF_DEVICE_STOPS_OVERNIGHT, False) if dev else False
+
+    @property
+    def extra_state_attributes(self):
+        dev = self._device
+        if not dev:
+            return {}
+        has_window = bool(dev.get(CONF_DEVICE_SCHEDULE_ENTITY)) or bool(dev.get(CONF_DEVICE_WINDOW_END))
+        return {
+            "prioritaet": dev.get(CONF_DEVICE_PRIORITY, 99),
+            "wirkung": (
+                "keine — Zeitfenster/Helfer bereits konfiguriert" if has_window
+                else "aktiv" if dev.get(CONF_DEVICE_STOPS_OVERNIGHT, False)
+                else "unbegrenzte Laufzeit angenommen"
+            ),
+        }
+
+    async def _async_set(self, value: bool) -> None:
+        async with self.coordinator.config_write_lock:
+            devices = self._entry.data.get(CONF_DEVICES, [])
+            new_devices = [
+                {**d, CONF_DEVICE_STOPS_OVERNIGHT: value} if d.get("_id") == self._device_id else d
+                for d in devices
+            ]
+            new_data = {**self._entry.data, CONF_DEVICES: new_devices}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._async_set(False)

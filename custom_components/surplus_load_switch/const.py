@@ -48,11 +48,16 @@ CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes p
 # overnight battery projection otherwise has to assume it might run all the
 # way to solar start (no known stopping point), which can make even a high-
 # priority device fail the battery check on a device that's actually only
-# expected to run a few more hours. This caps the assumed worst case at a
-# rolling "at most N hours from right now" instead of a fixed clock time —
-# re-derived every cycle, so it keeps sliding forward while conditions stay
-# good, rather than a one-shot commitment. See coordinator._effective_cutoff.
-CONF_DEVICE_MAX_ASSUMED_RUNTIME_H = "max_assumed_runtime_h"
+# expected to run a few more hours. A plain on/off flag rather than a
+# configurable number — asking "does this device stop overnight?" is a much
+# more natural question than picking a specific number of hours, and one
+# sensible default (DEFAULT_MAX_ASSUMED_RUNTIME_H below) covers it. When
+# set, this caps the assumed worst case at a rolling "at most N hours from
+# right now" instead of a fixed clock time — re-derived every cycle, so it
+# keeps sliding forward while conditions stay good, rather than a one-shot
+# commitment. See coordinator._effective_cutoff.
+CONF_DEVICE_STOPS_OVERNIGHT = "stops_overnight"
+DEFAULT_MAX_ASSUMED_RUNTIME_H = 2.0
 CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
 CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that must be ON first
 # Wallbox-only, optional: a wallbox is never itself switched by the

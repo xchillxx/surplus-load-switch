@@ -31,7 +31,6 @@ from .const import (
     CONF_DEVICE_DEPENDS_ON,
     CONF_DEVICE_ENABLED,
     CONF_DEVICE_IS_WALLBOX,
-    CONF_DEVICE_MAX_ASSUMED_RUNTIME_H,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
     CONF_DEVICE_NAME,
     CONF_DEVICE_OFF_ONLY,
@@ -39,6 +38,7 @@ from .const import (
     CONF_DEVICE_POWER_SENSOR,
     CONF_DEVICE_PRIORITY,
     CONF_DEVICE_SCHEDULE_ENTITY,
+    CONF_DEVICE_STOPS_OVERNIGHT,
     CONF_DEVICE_WINDOW_END,
     CONF_DEVICE_WINDOW_START,
     CONF_LOAD_SENSOR,
@@ -50,6 +50,7 @@ from .const import (
     CONF_WALLBOX_WEAK_DAY_PRIORITY,
     CORE_SENSOR_GRACE_PERIOD,
     DAYTIME_PROJECTION_HORIZON_H,
+    DEFAULT_MAX_ASSUMED_RUNTIME_H,
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
     DOMAIN,
@@ -636,13 +637,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
           moment it turns off.
         - A simple window_end time (next occurrence from now, including
           past-midnight wraparound).
-        - A configured max_assumed_runtime_h, only when neither of the two
-          above applies at all (not just "not currently active" — a device
-          with a real but currently-off window still has none of the above
-          contribute a candidate, and shouldn't fall back to this either).
-          A rolling "at most N hours from right now" instead of a fixed
-          clock time, re-derived every call — see const.py's
-          CONF_DEVICE_MAX_ASSUMED_RUNTIME_H for why this exists.
+        - stops_overnight, only when neither of the two above applies at
+          all (not just "not currently active" — a device with a real but
+          currently-off window still has none of the above contribute a
+          candidate, and shouldn't fall back to this either). A rolling
+          "at most DEFAULT_MAX_ASSUMED_RUNTIME_H hours from right now"
+          instead of a fixed clock time, re-derived every call — see
+          const.py's CONF_DEVICE_STOPS_OVERNIGHT for why this exists.
         - Inherited from a prerequisite device's own cutoff, if this
           device depends on one — it gets forced off the instant its
           prerequisite does, regardless of its own window/schedule.
@@ -687,10 +688,8 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     candidate_utc += timedelta(days=1)
                 candidates.append(candidate_utc)
 
-        if not has_configured_window:
-            max_runtime_h = dev.get(CONF_DEVICE_MAX_ASSUMED_RUNTIME_H)
-            if max_runtime_h:
-                candidates.append(now + timedelta(hours=max_runtime_h))
+        if not has_configured_window and dev.get(CONF_DEVICE_STOPS_OVERNIGHT, False):
+            candidates.append(now + timedelta(hours=DEFAULT_MAX_ASSUMED_RUNTIME_H))
 
         depends_on_id = dev.get(CONF_DEVICE_DEPENDS_ON)
         if depends_on_id:

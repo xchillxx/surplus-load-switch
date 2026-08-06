@@ -19,7 +19,6 @@ from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_DEVICES,
     CONF_DEVICE_IS_WALLBOX,
-    CONF_DEVICE_MAX_ASSUMED_RUNTIME_H,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_PRIORITY,
@@ -48,7 +47,6 @@ async def async_setup_entry(
         entities.append(PVDevicePriorityNumber(coordinator, entry, dev))
         entities.append(PVDevicePowerEstimateNumber(coordinator, entry, dev))
         entities.append(PVDeviceMinRuntimeNumber(coordinator, entry, dev))
-        entities.append(PVDeviceMaxAssumedRuntimeNumber(coordinator, entry, dev))
     async_add_entities(entities)
 
 
@@ -243,40 +241,6 @@ class PVDeviceMinRuntimeNumber(_PVDeviceNumberBase):
     def native_value(self) -> float:
         dev = self._device
         return (dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H) or 0) if dev else 0
-
-    async def async_set_native_value(self, value: float) -> None:
-        await self._async_write(value if value > 0 else None)
-
-
-class PVDeviceMaxAssumedRuntimeNumber(_PVDeviceNumberBase):
-    """Only used when the device has neither a schedule nor a window
-    configured — caps the overnight battery projection's worst-case
-    assumption for this device at "at most N hours from right now"
-    instead of assuming it might run all the way to solar start. 0 means
-    "not set" (unbounded, today's default behaviour), same sentinel
-    convention as PVDeviceMinRuntimeNumber. See
-    coordinator._effective_cutoff and const.py's
-    CONF_DEVICE_MAX_ASSUMED_RUNTIME_H for the full reasoning."""
-
-    _field = CONF_DEVICE_MAX_ASSUMED_RUNTIME_H
-    _attr_name = "Max. angenommene Laufzeit ab jetzt (0 = unbegrenzt)"
-    _attr_icon = "mdi:timer-sand"
-    _attr_native_min_value = 0
-    _attr_native_max_value = 12
-    _attr_native_step = 0.5
-    _attr_native_unit_of_measurement = "h"
-    _attr_mode = NumberMode.BOX
-
-    def __init__(
-        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
-    ) -> None:
-        super().__init__(coordinator, entry, device)
-        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_max_assumed_runtime"
-
-    @property
-    def native_value(self) -> float:
-        dev = self._device
-        return (dev.get(CONF_DEVICE_MAX_ASSUMED_RUNTIME_H) or 0) if dev else 0
 
     async def async_set_native_value(self, value: float) -> None:
         await self._async_write(value if value > 0 else None)
