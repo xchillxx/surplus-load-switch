@@ -177,6 +177,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # even a small per-cycle wobble can flip a borderline device's
         # verdict back and forth all night. See _evaluate_devices.
         self._base_load_samples: deque[float] = deque(maxlen=DISCHARGE_SMOOTHING_SAMPLES)
+        # Only a sample whose underlying raw load reading actually changed
+        # gets admitted to _base_load_samples (see _evaluate_devices) — the
+        # cloud-polled load sensor only refreshes every ~5 minutes, so
+        # naively appending once per 60s coordinator cycle would fill the
+        # "20-sample" window with only ~4 genuinely distinct readings, each
+        # duplicated 4-5x, letting 1-2 real bad readings dominate a median
+        # that looks far more robust than it actually is. None means "not
+        # tracked yet / just reset" — the next reading is always admitted.
+        self._last_appended_load_kw: float | None = None
         # Which managed devices were on as of the last cycle — used to
         # detect a composition change and reset the discharge smoothing
         # window when one happens (see _evaluate_devices).
@@ -1151,6 +1160,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if managed_on_now != self._last_managed_on:
             self._discharge_samples.clear()
             self._base_load_samples.clear()
+            self._last_appended_load_kw = None
         self._last_managed_on = managed_on_now
 
         # Our own switch/climate states react within seconds of a
@@ -1263,10 +1273,25 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # unbounded-duration design) switched on/off roughly every 15-20
         # minutes all night, driven by exactly this — the live numbers
         # underneath its "would it last" check genuinely flickering, not a
-        # hysteresis bug. Same 20-minute median window as
-        # smoothed_discharge_kw, same composition-change reset just above.
-        self._base_load_samples.append(base_load)
-        smoothed_base_load = statistics.median(self._base_load_samples)
+        # hysteresis bug. Same composition-change reset as
+        # smoothed_discharge_kw above, but NOT the same "once per 60s
+        # cycle" admission — data.load_kw itself is a cloud-polled reading
+        # that only actually changes every ~5 minutes (confirmed directly
+        # against real data: 20:40:00, 20:41:27, 20:45:30, 20:50:20,
+        # 20:55:22 — roughly 4-5.5 min apart), so appending unconditionally
+        # every cycle would fill "20 samples" with only ~4 genuinely
+        # distinct readings, each duplicated 4-5x — letting 1-2 real bad
+        # readings dominate a median that looks far more robust than it
+        # actually is. Only admitting a sample when the raw reading itself
+        # has genuinely changed makes the window mean what its name says
+        # (DISCHARGE_SMOOTHING_SAMPLES genuinely independent measurements,
+        # spanning however long that takes in wall-clock time) regardless
+        # of the coordinator's own polling cadence or any drift in how
+        # often the cloud source actually refreshes.
+        if data.load_kw != self._last_appended_load_kw:
+            self._base_load_samples.append(base_load)
+            self._last_appended_load_kw = data.load_kw
+        smoothed_base_load = statistics.median(self._base_load_samples) if self._base_load_samples else base_load
 
         # Computed once per cycle, not per dependent device — several
         # devices could depend on the same wallbox, and calling
