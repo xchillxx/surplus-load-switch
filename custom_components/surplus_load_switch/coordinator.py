@@ -170,6 +170,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._power_trackers: dict[str, DevicePowerTracker] = {}
         self._runtime_trackers: dict[str, DailyRuntimeTracker] = {}
         self._discharge_samples: deque[float] = deque(maxlen=DISCHARGE_SMOOTHING_SAMPLES)
+        # Smooths base_load specifically for the overnight base_discharge_kw
+        # projection — raw, unsmoothed cycle-to-cycle noise in the live load
+        # reading gets multiplied by however many hours remain until solar
+        # start when feeding the "would the battery last" energy total, so
+        # even a small per-cycle wobble can flip a borderline device's
+        # verdict back and forth all night. See _evaluate_devices.
+        self._base_load_samples: deque[float] = deque(maxlen=DISCHARGE_SMOOTHING_SAMPLES)
         # Which managed devices were on as of the last cycle — used to
         # detect a composition change and reset the discharge smoothing
         # window when one happens (see _evaluate_devices).
@@ -1143,6 +1150,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         managed_on_now = frozenset(dev_id for dev_id, on in device_is_on.items() if on)
         if managed_on_now != self._last_managed_on:
             self._discharge_samples.clear()
+            self._base_load_samples.clear()
         self._last_managed_on = managed_on_now
 
         # Our own switch/climate states react within seconds of a
@@ -1243,6 +1251,23 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         data.base_load_kw = base_load
         data.surplus_kw = available_surplus
 
+        # Raw base_load is exactly right for the *live* figures above
+        # (display, and the surplus check's own moment-to-moment
+        # responsiveness) — but the overnight energy projection below
+        # multiplies whatever rate it's given by however many hours remain
+        # until solar start, so an unsmoothed, noisy base_load gets
+        # amplified into a total-kWh swing large enough to flip a
+        # borderline device's feasibility verdict every cycle. Confirmed
+        # on a real installation: a device with no cutoff (correctly
+        # assumed to run all the way to solar start, per its own
+        # unbounded-duration design) switched on/off roughly every 15-20
+        # minutes all night, driven by exactly this — the live numbers
+        # underneath its "would it last" check genuinely flickering, not a
+        # hysteresis bug. Same 20-minute median window as
+        # smoothed_discharge_kw, same composition-change reset just above.
+        self._base_load_samples.append(base_load)
+        smoothed_base_load = statistics.median(self._base_load_samples)
+
         # Computed once per cycle, not per dependent device — several
         # devices could depend on the same wallbox, and calling
         # _wallbox_satisfied once per dependent would advance its idle
@@ -1337,8 +1362,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # of what it still reads this instant, so the durable
             # overnight "unavoidable" rate is simply the household's own
             # base load, undiminished by a solar contribution that's
-            # already on its way out.
-            base_discharge_kw = base_load
+            # already on its way out. Smoothed (see smoothed_base_load
+            # above), not the raw instantaneous reading — this rate gets
+            # multiplied by every remaining hour until solar start, so
+            # unsmoothed noise here is what was flipping borderline
+            # devices' feasibility verdict every cycle all night.
+            base_discharge_kw = smoothed_base_load
 
         device_states: dict[str, bool] = {}
         device_diagnostics: dict[str, DeviceDiagnostics] = {}
