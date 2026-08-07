@@ -1676,7 +1676,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # projection stays needlessly pessimistic after a
             # higher-priority windowed device is due to stop anyway.
             own_cutoff = self._effective_cutoff(dev, now_dt, devices_by_id)
-            diag.effective_cutoff = own_cutoff.isoformat() if own_cutoff else None
+            # Only shown when it actually falls inside the current
+            # projection horizon (same strict "<" _project_energy_kwh uses
+            # to decide whether a cutoff creates a real segment boundary)
+            # — a cutoff beyond the horizon (e.g. a "stops overnight"
+            # device's rolling +2h during a sunny midday, when the whole
+            # horizon is only ~1.5h) doesn't affect anything this cycle,
+            # and showing it anyway reads as "this device stops soon" when
+            # in reality it's just an unused future value. Confirmed
+            # matching a real installation's confusion: a device's cutoff
+            # displaying every morning even though it only ever binds
+            # once the evening's long horizon kicks in.
+            diag.effective_cutoff = (
+                own_cutoff.isoformat() if own_cutoff and own_cutoff < horizon_end else None
+            )
             if blocked:
                 # Blocked-but-off (window not open yet / dependency unmet):
                 # can't actually commit real budget this cycle regardless
