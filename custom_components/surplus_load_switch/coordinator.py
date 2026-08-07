@@ -170,6 +170,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._power_trackers: dict[str, DevicePowerTracker] = {}
         self._runtime_trackers: dict[str, DailyRuntimeTracker] = {}
         self._discharge_samples: deque[float] = deque(maxlen=DISCHARGE_SMOOTHING_SAMPLES)
+        # Same "genuinely distinct readings, not cycles" gate as
+        # _last_appended_load_kw below, for _discharge_samples — the raw
+        # battery charge/discharge sensor is cloud-polled on the same
+        # ~5-minute cadence as the load sensor (confirmed directly against
+        # real data), so this median feeds smoothed_discharge_kw (used in
+        # batt_ok and the daytime base_discharge_kw branch) with the exact
+        # same duplicate-inflation risk _base_load_samples had before
+        # v1.27.16 fixed it — see _async_update_data.
+        self._last_appended_discharge_kw: float | None = None
         # Smooths base_load specifically for the overnight base_discharge_kw
         # projection — raw, unsmoothed cycle-to-cycle noise in the live load
         # reading gets multiplied by however many hours remain until solar
@@ -1041,13 +1050,23 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         )
 
         discharge = max(-batt, 0.0)
-        self._discharge_samples.append(discharge)
         # h_battery is a division by discharge rate, which would otherwise
         # project a brief spike (e.g. a stove running for 10-15 min) forward
-        # as if it continued all night. The median over a 20 min window
-        # ignores such a spike almost entirely while still tracking a real,
-        # sustained change in load within roughly half the window's length.
-        smoothed_discharge = statistics.median(self._discharge_samples)
+        # as if it continued all night. The median over a 20-*reading*
+        # window ignores such a spike almost entirely while still tracking
+        # a real, sustained change within roughly half the window's length
+        # — genuine readings, not coordinator cycles: only admitted when
+        # the raw sensor itself has actually changed (see
+        # _last_appended_discharge_kw above), since it only refreshes
+        # every ~5 minutes and appending every 60s cycle regardless would
+        # let 1-2 real readings dominate a "20-sample" median far more
+        # than that name implies.
+        if batt != self._last_appended_discharge_kw:
+            self._discharge_samples.append(discharge)
+            self._last_appended_discharge_kw = batt
+        smoothed_discharge = (
+            statistics.median(self._discharge_samples) if self._discharge_samples else discharge
+        )
         avail_kwh = max((soc - min_soc) / 100.0 * battery_kwh, 0.0)
         h_battery = avail_kwh / smoothed_discharge if smoothed_discharge > 0.05 else 999.0
 
@@ -1161,6 +1180,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._discharge_samples.clear()
             self._base_load_samples.clear()
             self._last_appended_load_kw = None
+            self._last_appended_discharge_kw = None
         self._last_managed_on = managed_on_now
 
         # Our own switch/climate states react within seconds of a
