@@ -63,6 +63,17 @@ CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes p
 # commitment. See coordinator._effective_cutoff.
 CONF_DEVICE_STOPS_OVERNIGHT = "stops_overnight"
 DEFAULT_MAX_ASSUMED_RUNTIME_H = 2.0
+# Optional per-device hard floor: below this battery SOC, the device is
+# forced off unconditionally, regardless of what the energy projection
+# says — a direct "keep at least this much in reserve for the rest of
+# the house" guarantee, not a factor the battery-optimal-set math weighs
+# against anything else. None (default) means no device-specific floor
+# beyond the existing global min_soc. Same hard-block/pre-charge
+# treatment as a closed window or unmet dependency (see coordinator.
+# _evaluate_devices's `blocked` computation) — forced off immediately
+# while on, allowed to pre-charge its on-hold while off so it resumes
+# the instant SOC clears the floor again, not from a fresh hold.
+CONF_DEVICE_MIN_SOC_PERCENT = "device_min_soc_percent"
 CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
 CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that must be ON first
 # Wallbox-only, optional: a wallbox is never itself switched by the
@@ -278,8 +289,17 @@ RUNTIME_STORE_SAVE_DELAY = 60
 # Forcing a device on to hit its minimum daily runtime only ever kicks in
 # from this local hour onward — never in the morning, so a good-surplus day
 # still gets first chance to reach the target for free before we consider
-# spending grid power on it.
+# spending grid power on it. Only used as a fallback when sun.sun is
+# unavailable (see _solar_noon_passed) or for windowless devices' original
+# clock-hour behavior.
 MIN_RUNTIME_FORCE_AFTER_HOUR = 12
+# For a device WITH a configured window (schedule.* or window_end): forcing
+# starts once the time remaining until that window closes is no longer
+# enough to freely reach the still-missing hours PLUS this safety margin —
+# guarantees the daily target lands before the window shuts even if a
+# transient block (SOC reserve, unmet dependency) eats into the runway,
+# rather than starting at the exact last possible instant with zero slack.
+MIN_RUNTIME_FORCE_BUFFER_H = 1.0
 
 # --- Self-calibrating solar-start offset ---
 # Learns DEFAULT_SOLAR_OFFSETS from the system's own historical solar

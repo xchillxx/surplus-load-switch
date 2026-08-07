@@ -20,6 +20,7 @@ from .const import (
     CONF_DEVICE_IS_CLIMATE,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
+    CONF_DEVICE_MIN_SOC_PERCENT,
     CONF_DEVICE_NAME,
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_POWER_SENSOR,
@@ -127,6 +128,11 @@ def _common_device_fields(
             CONF_DEVICE_MIN_DAILY_RUNTIME_H, **_default(d, CONF_DEVICE_MIN_DAILY_RUNTIME_H)
         ): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0.5, max=24.0, step=0.5, unit_of_measurement="h")
+        ),
+        vol.Optional(
+            CONF_DEVICE_MIN_SOC_PERCENT, **_default(d, CONF_DEVICE_MIN_SOC_PERCENT)
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=1, max=100, step=1, unit_of_measurement="%")
         ),
     }
     fields.update(_dependency_field(d, devices, exclude_id))

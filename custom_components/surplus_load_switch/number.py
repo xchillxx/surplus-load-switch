@@ -20,6 +20,7 @@ from .const import (
     CONF_DEVICES,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
+    CONF_DEVICE_MIN_SOC_PERCENT,
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_PRIORITY,
     CONF_MIN_SOC,
@@ -47,6 +48,7 @@ async def async_setup_entry(
         entities.append(PVDevicePriorityNumber(coordinator, entry, dev))
         entities.append(PVDevicePowerEstimateNumber(coordinator, entry, dev))
         entities.append(PVDeviceMinRuntimeNumber(coordinator, entry, dev))
+        entities.append(PVDeviceMinSocNumber(coordinator, entry, dev))
     async_add_entities(entities)
 
 
@@ -241,6 +243,40 @@ class PVDeviceMinRuntimeNumber(_PVDeviceNumberBase):
     def native_value(self) -> float:
         dev = self._device
         return (dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H) or 0) if dev else 0
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._async_write(value if value > 0 else None)
+
+
+class PVDeviceMinSocNumber(_PVDeviceNumberBase):
+    """Hard floor: below this battery SOC, the device is forced off
+    unconditionally — a direct reserve guarantee, not weighed against
+    anything else in the battery-optimal-set math. 0 means "not set"
+    (no device-specific floor beyond the global Mindest-SOC), same
+    sentinel convention as PVDeviceMinRuntimeNumber. Suspended while a
+    minimum daily runtime target is being force-enforced — see
+    coordinator._evaluate_devices and const.py's
+    CONF_DEVICE_MIN_SOC_PERCENT for the full reasoning."""
+
+    _field = CONF_DEVICE_MIN_SOC_PERCENT
+    _attr_name = "Akku-Reserve — Gerät aus unter (0 = aus)"
+    _attr_icon = "mdi:battery-alert-variant-outline"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "%"
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_min_soc"
+
+    @property
+    def native_value(self) -> float:
+        dev = self._device
+        return (dev.get(CONF_DEVICE_MIN_SOC_PERCENT) or 0) if dev else 0
 
     async def async_set_native_value(self, value: float) -> None:
         await self._async_write(value if value > 0 else None)

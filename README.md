@@ -144,9 +144,17 @@ cloud passes over or another appliance briefly kicks in.
   instead of finishing their hold together and switching off as one.
 - **Minimum daily runtime** — set an optional target (e.g. a pool pump that
   needs to filter for 4h/day for hygiene). It's never denied its normal
-  chance to reach that for free on surplus/battery power earlier in the day;
-  only from the afternoon onward, if it's still short, does it get forced on
-  (potentially on grid power) to catch up before the day is over.
+  chance to reach that for free on surplus/battery power earlier in the day.
+  Forcing (potentially on grid power) only kicks in once there's no longer
+  enough time left to catch up for free: for a device with a configured time
+  window, that means once the time remaining until the window closes is no
+  longer enough for the still-missing hours plus a safety margin; for a
+  device with no window at all, once today's solar peak has passed.
+- **Per-device battery reserve** — set an optional SOC floor (%) below which
+  a device is forced off unconditionally, independent of the normal
+  battery-runway projection — a direct "keep at least this much in reserve"
+  guarantee. A device's own minimum daily runtime target, if any, may still
+  dip into this reserve to make sure it gets met.
 - **Climate-controlled devices** — some devices (e.g. a pool heat pump) have
   no on/off switch at all, only a thermostat-style mode selector
   (off/heat/cool/auto). Add these as a climate-controlled device: pick the

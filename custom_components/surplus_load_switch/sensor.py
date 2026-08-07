@@ -405,6 +405,7 @@ class PVDevicePowerSensor(_PVDeviceSensorBase):
             "mindest_laufzeit_erzwungen": diag.force_runtime,
             "voraussetzung_erfullt": diag.dependency_met,
             "naechster_cutoff": diag.effective_cutoff,
+            "akku_reserve_prozent": diag.device_min_soc,
             "sollte_an_sein": diag.should_be_on,
             "korrekt_geschaltet": diag.is_on == diag.should_be_on,
             "aktiviert": diag.enabled,

@@ -32,6 +32,7 @@ from .const import (
     CONF_DEVICE_ENABLED,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
+    CONF_DEVICE_MIN_SOC_PERCENT,
     CONF_DEVICE_NAME,
     CONF_DEVICE_OFF_ONLY,
     CONF_DEVICE_POWER_KW,
@@ -59,6 +60,7 @@ from .const import (
     MARGIN_FOR_MAX_PATIENCE_H,
     MAX_BATTERY_OPTIMIZATION_DEVICES,
     MIN_RUNTIME_FORCE_AFTER_HOUR,
+    MIN_RUNTIME_FORCE_BUFFER_H,
     MIN_SAMPLES_FOR_MEASURED_AVG,
     OFF_CYCLES_FLOOR,
     POWER_STORE_SAVE_DELAY,
@@ -116,6 +118,7 @@ class DeviceDiagnostics:
     should_be_on: bool = False
     enabled: bool = True
     priority: float = 99.0
+    device_min_soc: float | None = None
 
 
 @dataclass
@@ -660,6 +663,103 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if candidate_utc <= now:
             candidate_utc += timedelta(days=1)
         return candidate_utc - now <= horizon
+
+    def _own_window_end(self, dev: dict, now: datetime) -> datetime | None:
+        """This device's own configured window close — a schedule.*
+        helper's next "off" event while currently "on", or a plain
+        window_end time (next occurrence, including past-midnight
+        wraparound). None if the device has no configured window at all.
+
+        Deliberately narrower than _effective_cutoff below: excludes the
+        stops_overnight and dependency-inherited fallbacks, which are
+        synthetic/derived and not a real window boundary — using them
+        here would make minimum-daily-runtime forcing (see
+        _force_runtime_active) fire on a rolling, ever-recomputed
+        deadline instead of an actual fixed close time.
+        """
+        schedule_entity = dev.get(CONF_DEVICE_SCHEDULE_ENTITY)
+        if schedule_entity:
+            state = self.hass.states.get(schedule_entity)
+            if state is not None and state.state == "on":
+                next_event_raw = state.attributes.get("next_event")
+                if isinstance(next_event_raw, datetime):
+                    next_event = next_event_raw
+                elif isinstance(next_event_raw, str):
+                    next_event = dt_util.parse_datetime(next_event_raw)
+                else:
+                    next_event = None
+                if next_event is not None:
+                    return dt_util.as_utc(next_event)
+            return None
+
+        window_end_str = dev.get(CONF_DEVICE_WINDOW_END)
+        end_t = dt_util.parse_time(window_end_str) if window_end_str else None
+        if end_t is None:
+            return None
+        candidate = dt_util.now().replace(
+            hour=end_t.hour, minute=end_t.minute, second=0, microsecond=0
+        )
+        candidate_utc = dt_util.as_utc(candidate)
+        if candidate_utc <= now:
+            candidate_utc += timedelta(days=1)
+        return candidate_utc
+
+    def _solar_noon_passed(self) -> bool:
+        """Whether today's actual solar peak (Sonnenhöchstand) has
+        already occurred — the windowless-device fallback trigger for
+        minimum-daily-runtime forcing, in place of a fixed clock hour.
+        Solar noon (not clock noon) is the meaningful "half of today's
+        sunlight is behind us" marker for a PV-surplus system, and shifts
+        with season/DST/longitude the same way solar-start calibration
+        already accounts for elsewhere in this file. Falls back to the
+        fixed MIN_RUNTIME_FORCE_AFTER_HOUR clock hour if sun.sun or its
+        next_noon attribute isn't available.
+        """
+        sun = self.hass.states.get("sun.sun")
+        next_noon_raw = sun.attributes.get("next_noon") if sun is not None else None
+        if isinstance(next_noon_raw, datetime):
+            next_noon = next_noon_raw
+        elif isinstance(next_noon_raw, str):
+            next_noon = dt_util.parse_datetime(next_noon_raw)
+        else:
+            next_noon = None
+        if next_noon is None:
+            return dt_util.now().hour >= MIN_RUNTIME_FORCE_AFTER_HOUR
+
+        local_now = dt_util.now()
+        local_next_noon = dt_util.as_local(next_noon)
+        solar_noon_today = (
+            local_next_noon
+            if local_next_noon.date() == local_now.date()
+            else local_next_noon - timedelta(hours=24)
+        )
+        return local_now >= solar_noon_today
+
+    def _force_runtime_active(
+        self, dev: dict, now: datetime, runtime_hours_today: float
+    ) -> bool:
+        """Whether the minimum-daily-runtime target must be forced on
+        right now, regardless of surplus/battery.
+
+        A device with a real window (schedule.* or window_end) is forced
+        once the time remaining until that window closes — plus
+        MIN_RUNTIME_FORCE_BUFFER_H of safety margin — is no longer enough
+        to freely reach the still-missing hours on its own, guaranteeing
+        the target lands before the window shuts rather than after.
+        Windowless devices fall back to the fixed solar-noon trigger
+        instead, since there's no window end to measure against.
+        """
+        min_daily_runtime_h = dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
+        if min_daily_runtime_h is None or runtime_hours_today >= min_daily_runtime_h:
+            return False
+        missing_h = min_daily_runtime_h - runtime_hours_today
+
+        own_window_end = self._own_window_end(dev, now)
+        if own_window_end is not None:
+            remaining_h = (own_window_end - now).total_seconds() / 3600.0
+            return remaining_h <= missing_h + MIN_RUNTIME_FORCE_BUFFER_H
+
+        return self._solar_noon_passed()
 
     def _effective_cutoff(
         self,
@@ -1507,21 +1607,28 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 _dependency_met = wallbox_satisfied.get(_depends_on_id, True)
             else:
                 _dependency_met = _depends_on_id is None or device_is_on.get(_depends_on_id, False)
-            _blocked = _window_closed or not _dependency_met
+
+            # _force_runtime has to be known before _blocked below, since
+            # it suspends the SOC floor — computed here (earlier than the
+            # main loop computes its own copy) purely for that ordering
+            # reason.
+            _runtime_tracker = self._runtime_trackers.get(_device_id)
+            _runtime_hours_today = _runtime_tracker.hours_today if _runtime_tracker is not None else 0.0
+            _force_runtime = self._force_runtime_active(_dev, now_dt, _runtime_hours_today)
+
+            _device_min_soc = _dev.get(CONF_DEVICE_MIN_SOC_PERCENT)
+            _soc_too_low = (
+                _device_min_soc is not None
+                and data.soc < _device_min_soc
+                and not _force_runtime
+            )
+
+            _blocked = _window_closed or not _dependency_met or _soc_too_low
             if _blocked:
                 # Either forced off this cycle (blocked and on) or just
                 # pre-charging (blocked and off) — neither commits real
                 # budget, handled the old sequential way further down.
                 continue
-
-            _runtime_tracker = self._runtime_trackers.get(_device_id)
-            _runtime_hours_today = _runtime_tracker.hours_today if _runtime_tracker is not None else 0.0
-            _min_daily_runtime_h = _dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
-            _force_runtime = (
-                _min_daily_runtime_h is not None
-                and _runtime_hours_today < _min_daily_runtime_h
-                and dt_util.now().hour >= MIN_RUNTIME_FORCE_AFTER_HOUR
-            )
             if _force_runtime:
                 mandatory_segments.append((_predicted_power, _own_cutoff))
                 continue
@@ -1607,11 +1714,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # never denied its normal surplus/battery-driven chance to reach
             # the target for free earlier in the day.
             min_daily_runtime_h = dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
-            force_runtime = (
-                min_daily_runtime_h is not None
-                and runtime_hours_today < min_daily_runtime_h
-                and dt_util.now().hour >= MIN_RUNTIME_FORCE_AFTER_HOUR
-            )
+            force_runtime = self._force_runtime_active(dev, now_dt, runtime_hours_today)
             diag.force_runtime = force_runtime
 
             # Some devices physically can't do anything unless another
@@ -1767,14 +1870,37 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 )
                 continue
 
-            blocked = window_closed or not dependency_met
+            # An optional per-device SOC floor: below it, the device is
+            # forced off unconditionally, same hard-block/pre-charge
+            # treatment as a closed window or unmet dependency — a direct
+            # "keep at least this much in reserve" guarantee, not just
+            # another input the battery-optimal-set math weighs against
+            # everything else. Suspended while force_runtime is active
+            # (the user's explicit choice: a minimum daily runtime target
+            # may dip into this reserve rather than never being reached on
+            # a low-SOC day) — every other hard block above still applies
+            # regardless of force_runtime, this is the one exception.
+            device_min_soc = dev.get(CONF_DEVICE_MIN_SOC_PERCENT)
+            soc_too_low = (
+                device_min_soc is not None
+                and data.soc < device_min_soc
+                and not force_runtime
+            )
+            diag.device_min_soc = device_min_soc
+
+            blocked = window_closed or not dependency_met or soc_too_low
             if blocked and is_on:
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
-                titel = "Außerhalb Zeitfenster" if window_closed else "Abhängigkeit nicht erfüllt"
+                titel = (
+                    "Außerhalb Zeitfenster" if window_closed
+                    else "Akku-Reserve unterschritten" if soc_too_low
+                    else "Abhängigkeit nicht erfüllt"
+                )
                 reason = (
                     "außerhalb des Zeitfensters" if window_closed
+                    else f"Akku-Reserve unterschritten (SOC {data.soc:.0f}% < {device_min_soc:.0f}%)" if soc_too_low
                     else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)"
                 )
                 await self._log_decision(dev, False, titel, reason)
@@ -1879,13 +2005,21 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             diag.should_be_on = (should_on if (should_on or should_off) else is_on) and not blocked
 
             if should_on and blocked:
-                wartet_auf = "den Start des Zeitfensters" if window_closed else "die Abhängigkeit"
+                wartet_auf = (
+                    "den Start des Zeitfensters" if window_closed
+                    else "eine ausreichende Akku-Reserve" if soc_too_low
+                    else "die Abhängigkeit"
+                )
                 decision_reason = (
                     f"Überschuss/Akku würden bereits ausreichen ("
                     f"{remaining_surplus:.2f} kW verfügbar, {predicted_power:.2f} kW "
                     f"benötigt) — wartet noch auf {wartet_auf}"
                 )
-                titel = "Vorbereitet — wartet auf Zeitfenster" if window_closed else "Vorbereitet — wartet auf Abhängigkeit"
+                titel = (
+                    "Vorbereitet — wartet auf Zeitfenster" if window_closed
+                    else "Vorbereitet — wartet auf Akku-Reserve" if soc_too_low
+                    else "Vorbereitet — wartet auf Abhängigkeit"
+                )
                 await self._log_decision(dev, False, titel, decision_reason)
             elif should_on:
                 if force_runtime:
