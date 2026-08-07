@@ -175,6 +175,20 @@ OFF_CYCLES_FLOOR = _minutes_to_cycles(5)  # strictly below STABLE_OFF_CYCLES —
 # above the cap rather than blocking the coordinator's own cycle.
 MAX_BATTERY_OPTIMIZATION_DEVICES = 16
 
+# Asymmetric threshold for a device *re-joining* the battery-optimal set
+# after having been excluded (see _evaluate_devices' use of
+# _last_battery_eligible_ids). Right at the margin, the projection's
+# horizon shrinks by a minute every cycle purely from time passing (solar
+# start gets a minute closer), which alone — with zero change in any real
+# sensor reading — can be enough to flip a razor-thin verdict back and
+# forth. Requiring a device to also fit within horizon_end + this buffer
+# before letting it back in (shedding itself is unaffected — the normal,
+# stricter horizon still applies there, since under-protecting the
+# battery is the dangerous direction) stops that particular oscillation
+# without blocking a genuine, sustained improvement (more solar, higher
+# SOC) from eventually clearing it.
+RE_INCLUSION_COMFORT_BUFFER_H = 0.33  # ~20 minutes
+
 # How long to keep using the pre-transition managed-power figure for
 # base_load AND battery-discharge attribution after a managed device's
 # on/off state changes, at most — covers cloud-polled sensors (e.g.

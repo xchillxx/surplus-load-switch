@@ -61,6 +61,7 @@ from .const import (
     MIN_SAMPLES_FOR_MEASURED_AVG,
     OFF_CYCLES_FLOOR,
     POWER_STORE_SAVE_DELAY,
+    RE_INCLUSION_COMFORT_BUFFER_H,
     STABLE_OFF_CYCLES,
     STABLE_OFF_CYCLES_MAX,
     STABLE_ON_CYCLES,
@@ -195,6 +196,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # that looks far more robust than it actually is. None means "not
         # tracked yet / just reset" — the next reading is always admitted.
         self._last_appended_load_kw: float | None = None
+        # Which devices _select_battery_optimal_set granted "would last"
+        # last cycle — used to require a device that's re-joining the set
+        # (was excluded last cycle, would be newly included now) to also
+        # clear a more comfortable margin than the one that excluded it in
+        # the first place. See RE_INCLUSION_COMFORT_BUFFER_H in const.py
+        # and its use in _evaluate_devices for why this exists (a
+        # razor-thin margin can flip back and forth purely from the
+        # horizon shrinking as time passes, with zero change in any real
+        # sensor reading).
+        self._last_battery_eligible_ids: frozenset[str] = frozenset()
         # Which managed devices were on as of the last cycle — used to
         # detect a composition change and reset the discharge smoothing
         # window when one happens (see _evaluate_devices).
@@ -1503,6 +1514,44 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             base_discharge_kw, available_surplus, data.avail_kwh, data.soc, data.min_soc,
             max_priority_number,
         )
+
+        # A device *re-joining* the set (wasn't eligible last cycle) must
+        # also clear a more comfortable margin than the one that excluded
+        # it — otherwise, right at the edge, the horizon shrinking by a
+        # minute every cycle (solar start getting a minute closer) is
+        # enough on its own to flip a razor-thin verdict back and forth,
+        # with zero change in any real sensor reading. Confirmed on a real
+        # installation: a device shed with a 0.01h margin was granted
+        # eligibility again 2 cycles later purely from time passing.
+        # Shedding itself is unaffected — this only ever pulls devices OUT
+        # of what the normal (stricter) horizon already granted, never
+        # adds anything beyond it, so it can't make the projection less
+        # safe.
+        candidate_ids = {c[0] for c in optional_candidates}
+        previously_eligible = self._last_battery_eligible_ids & candidate_ids
+        newly_added = battery_eligible_ids - previously_eligible
+        if newly_added:
+            winning_segments = [
+                *mandatory_segments,
+                *(
+                    (c[1], c[2]) for c in optional_candidates
+                    if c[0] in battery_eligible_ids
+                ),
+            ]
+            comfortable_horizon_end = horizon_end + timedelta(hours=RE_INCLUSION_COMFORT_BUFFER_H)
+            energy_with_buffer = self._project_energy_kwh(
+                winning_segments, now_dt, comfortable_horizon_end,
+                base_discharge_kw, available_surplus,
+            )
+            if energy_with_buffer > data.avail_kwh:
+                # Not comfortable enough yet — hold the newly-joining
+                # devices back this cycle, keep only what was already
+                # proven eligible (a subset of a feasible set is always
+                # itself feasible, so this stays safe under the normal
+                # horizon too).
+                battery_eligible_ids = battery_eligible_ids & previously_eligible
+
+        self._last_battery_eligible_ids = battery_eligible_ids
 
         for priority_rank, dev in enumerate(candidate_devices):
             device_id = dev["_id"]
