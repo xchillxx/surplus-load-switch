@@ -10,7 +10,8 @@
           "soc_sensor": "Battery SOC sensor (%)",
           "batt_sensor": "Battery charge/discharge power sensor (kW)",
           "battery_capacity_kwh": "Battery capacity (kWh)",
-          "min_soc": "Minimum SOC (%)"
+          "min_soc": "Minimum SOC (%)",
+          "hausmodus_entity": "House-mode helper (optional, e.g. an input_select) — enables the weekday/hour/mode load-profile learner (diagnostic only, doesn't affect any switching decision yet)"
         }
       },
       "device_intro": {
@@ -145,7 +146,8 @@
           "soc_sensor": "Battery SOC sensor",
           "batt_sensor": "Battery charge/discharge power sensor",
           "battery_capacity_kwh": "Battery capacity (kWh)",
-          "min_soc": "Minimum SOC (%)"
+          "min_soc": "Minimum SOC (%)",
+          "hausmodus_entity": "House-mode helper (optional, e.g. an input_select) — enables the weekday/hour/mode load-profile learner (diagnostic only, doesn't affect any switching decision yet)"
         }
       },
       "add_climate_device": {

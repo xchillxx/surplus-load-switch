@@ -10,7 +10,8 @@
           "soc_sensor": "Akku SOC Sensor (%)",
           "batt_sensor": "Akku Lade-/Entladeleistung Sensor (kW)",
           "battery_capacity_kwh": "Akku-Kapazität (kWh)",
-          "min_soc": "Mindest-SOC (%)"
+          "min_soc": "Mindest-SOC (%)",
+          "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)"
         }
       },
       "device_intro": {
@@ -145,7 +146,8 @@
           "soc_sensor": "Akku SOC Sensor",
           "batt_sensor": "Akku Lade-/Entladeleistung Sensor",
           "battery_capacity_kwh": "Akku-Kapazität (kWh)",
-          "min_soc": "Mindest-SOC (%)"
+          "min_soc": "Mindest-SOC (%)",
+          "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)"
         }
       },
       "add_climate_device": {

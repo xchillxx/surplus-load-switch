@@ -28,6 +28,11 @@ CONF_BATT_SENSOR = "batt_sensor"
 CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 CONF_MIN_SOC = "min_soc"
 CONF_SOLAR_OFFSETS = "solar_offsets"
+# Optional: an input_select (or any entity whose state is a house-mode
+# label, e.g. "Zuhause"/"Abwesend"/"Schlafen"/"Urlaub") — enables the
+# weekday/hour/mode load-profile learner (see load_profile.py). Left
+# unset, the learner and its diagnostic sensor simply don't run.
+CONF_HAUSMODUS_ENTITY = "hausmodus_entity"
 
 # Config keys — per device
 CONF_DEVICES = "devices"
@@ -188,6 +193,18 @@ MAX_BATTERY_OPTIMIZATION_DEVICES = 16
 # without blocking a genuine, sustained improvement (more solar, higher
 # SOC) from eventually clearing it.
 RE_INCLUSION_COMFORT_BUFFER_H = 0.33  # ~20 minutes
+
+# --- Weekday/hour/house-mode load-profile learner (load_profile.py) ---
+# Diagnostic only for now — does not feed any switching decision. Each
+# (weekday, hour, house mode) bucket keeps up to this many trailing daily
+# averages (each weekday only recurs once a week, so this is also
+# roughly how many weeks of history a bucket holds).
+LOAD_PROFILE_TRAILING_SAMPLES = 4
+# A bucket needs at least this many daily samples before it's trusted on
+# its own; below that, a coarser grouping is used instead (see
+# load_profile.py's fallback hierarchy) — an average built from a single
+# day is just that one day, not a real pattern yet.
+LOAD_PROFILE_MIN_SAMPLES = 2
 
 # How long to keep using the pre-transition managed-power figure for
 # base_load AND battery-discharge attribution after a managed device's

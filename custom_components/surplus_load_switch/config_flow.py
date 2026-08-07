@@ -28,6 +28,7 @@ from .const import (
     CONF_DEVICE_SWITCH,
     CONF_DEVICE_WINDOW_END,
     CONF_DEVICE_WINDOW_START,
+    CONF_HAUSMODUS_ENTITY,
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
     CONF_SOC_SENSOR,
@@ -70,6 +71,11 @@ def _global_settings_schema(defaults: dict | None = None) -> vol.Schema:
         ),
         vol.Required(CONF_MIN_SOC, default=d.get(CONF_MIN_SOC, 20)): selector.NumberSelector(
             selector.NumberSelectorConfig(min=5, max=50, step=1, unit_of_measurement="%")
+        ),
+        vol.Optional(
+            CONF_HAUSMODUS_ENTITY, **_default(d, CONF_HAUSMODUS_ENTITY)
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=["input_select", "select"])
         ),
     })
 

@@ -41,6 +41,7 @@ from .const import (
     CONF_DEVICE_STOPS_OVERNIGHT,
     CONF_DEVICE_WINDOW_END,
     CONF_DEVICE_WINDOW_START,
+    CONF_HAUSMODUS_ENTITY,
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
     CONF_SOC_SENSOR,
@@ -81,6 +82,7 @@ from .device_control import async_turn_off, async_turn_on, control_entity_id, is
 from .power_tracker import DevicePowerTracker
 from .runtime_tracker import DailyRuntimeTracker
 from .base_load_floor import BaseLoadFloorCalibrator
+from .load_profile import WeekdayLoadProfileLearner
 from .solar_calibration import SolarOffsetCalibrator
 
 _LOGGER = logging.getLogger(__name__)
@@ -148,6 +150,7 @@ class CoordinatorData:
     device_diagnostics: dict[str, DeviceDiagnostics] = field(default_factory=dict)
     calibration: dict = field(default_factory=dict)
     base_load_floor: dict = field(default_factory=dict)
+    load_profile: dict = field(default_factory=dict)
     active_solar_offset_h: float = 0.0
     next_cycle_at: datetime | None = None
     soc_gain_today: float | None = None
@@ -297,6 +300,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._base_load_floor_calibrator = BaseLoadFloorCalibrator(
             hass, entry_id, config[CONF_LOAD_SENSOR]
         )
+        self._load_profile_learner = WeekdayLoadProfileLearner(hass, entry_id)
         self._last_offset_h = 0.0
         for dev in config.get(CONF_DEVICES, []):
             device_id = dev["_id"]
@@ -310,6 +314,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         today's weak-day peak-tracking state."""
         await self._calibrator.async_load()
         await self._base_load_floor_calibrator.async_load()
+        await self._load_profile_learner.async_load()
         await self._async_load_daily_state()
         for dev in self._config.get(CONF_DEVICES, []):
             if dev.get(CONF_DEVICE_IS_WALLBOX, False):
@@ -374,6 +379,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             await tracker.async_save_now()
         if self._today_date is not None:
             await self._daily_state_store.async_save(self._daily_state_to_save())
+        await self._load_profile_learner.async_save_now()
 
     @property
     def devices(self) -> list[dict]:
@@ -1291,6 +1297,19 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         data.base_load_kw = base_load
         data.surplus_kw = available_surplus
+
+        # Diagnostic only for now — see load_profile.py. Sampled here
+        # (not gated on day/night or anything else) so every cycle
+        # contributes, same as base_load's own display value.
+        hausmodus_entity = self._config.get(CONF_HAUSMODUS_ENTITY)
+        hausmodus_state = self.hass.states.get(hausmodus_entity) if hausmodus_entity else None
+        hausmodus = (
+            hausmodus_state.state
+            if hausmodus_state is not None and hausmodus_state.state not in ("unavailable", "unknown")
+            else None
+        )
+        self._load_profile_learner.record(base_load, hausmodus)
+        data.load_profile = self._load_profile_learner.diagnostics
 
         # Raw base_load is exactly right for the *live* figures above
         # (display, and the surplus check's own moment-to-moment

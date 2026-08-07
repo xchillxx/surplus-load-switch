@@ -63,6 +63,19 @@ cloud passes over or another appliance briefly kicks in.
   daily from Home Assistant's long-term statistics, with the same
   measured/none-yet fallback behaviour as the solar-start offset above.
   Visible as attributes on the "Grundlast" sensor.
+- **Weekday/hour/house-mode load-profile learner (diagnostic)** —
+  optionally point it at a house-mode helper (e.g. an `input_select`
+  with values like "Zuhause"/"Abwesend"/"Schlafen"/"Urlaub") and it
+  learns typical Grundlast per (weekday, hour, mode) combination — e.g.
+  "Mondays at 22:00 while home, load is usually ~0.5 kW lower". Self-
+  samples from the coordinator's own cycles rather than the recorder's
+  history, since that's usually retained for far less than the trailing
+  4 weeks this is meant to cover, and re-derives don't depend on knowing
+  this install's specific Grundlast entity_id. Falls back to a coarser
+  grouping (same hour+mode across all weekdays, then just the hour)
+  until a given combination has enough daily samples of its own.
+  Diagnostic only for now — visible on the "Lastprofil Wochentag/Modus"
+  sensor's attributes — doesn't yet feed into any switching decision.
 - **Spike-resistant** — the battery-margin projection uses a 20-minute
   rolling median of the discharge rate, so a stove or kettle running for a
   few minutes doesn't get projected forward as if it continued all night.

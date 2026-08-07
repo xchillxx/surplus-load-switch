@@ -31,6 +31,7 @@ async def async_setup_entry(
         PVModeSensor(coordinator, entry),
         PVSocSensor(coordinator, entry),
         PVSolarCalibrationSensor(coordinator, entry),
+        PVLoadProfileSensor(coordinator, entry),
         PVActiveSolarOffsetSensor(coordinator, entry),
         PVLogTableSensor(coordinator, entry),
         PVNextCycleSensor(coordinator, entry),
@@ -289,6 +290,35 @@ class PVSolarCalibrationSensor(_PVSensorBase):
         if not self.coordinator.data:
             return {}
         return self.coordinator.data.calibration
+
+
+class PVLoadProfileSensor(_PVSensorBase):
+    """How many (weekday, hour, house-mode) combinations have at least
+    one learned daily average so far. Diagnostic only — see
+    load_profile.py — doesn't affect any switching decision. The full
+    learned table (per-bucket trailing daily averages) is in the
+    "profil" attribute; requires a house-mode helper entity configured
+    in System settings, otherwise stays at 0."""
+
+    _attr_name = "Lastprofil Wochentag/Modus"
+    _attr_icon = "mdi:calendar-clock"
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_load_profile"
+
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return None
+        n = self.coordinator.data.load_profile.get("erfasste_kombinationen", 0)
+        return f"{n} Kombinationen"
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        return self.coordinator.data.load_profile
 
 
 class PVNextCycleSensor(_PVSensorBase):
