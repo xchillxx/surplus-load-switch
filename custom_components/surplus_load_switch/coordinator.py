@@ -1608,22 +1608,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             else:
                 _dependency_met = _depends_on_id is None or device_is_on.get(_depends_on_id, False)
 
-            # _force_runtime has to be known before _blocked below, since
-            # it suspends the SOC floor — computed here (earlier than the
-            # main loop computes its own copy) purely for that ordering
-            # reason.
+            # _force_runtime has to be known before _soc_too_low below,
+            # since it suspends the SOC floor — computed here (earlier
+            # than the main loop computes its own copy) purely for that
+            # ordering reason.
             _runtime_tracker = self._runtime_trackers.get(_device_id)
             _runtime_hours_today = _runtime_tracker.hours_today if _runtime_tracker is not None else 0.0
             _force_runtime = self._force_runtime_active(_dev, now_dt, _runtime_hours_today)
 
-            _device_min_soc = _dev.get(CONF_DEVICE_MIN_SOC_PERCENT)
-            _soc_too_low = (
-                _device_min_soc is not None
-                and data.soc < _device_min_soc
-                and not _force_runtime
-            )
-
-            _blocked = _window_closed or not _dependency_met or _soc_too_low
+            _blocked = _window_closed or not _dependency_met
             if _blocked:
                 # Either forced off this cycle (blocked and on) or just
                 # pre-charging (blocked and off) — neither commits real
@@ -1631,6 +1624,23 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 continue
             if _force_runtime:
                 mandatory_segments.append((_predicted_power, _own_cutoff))
+                continue
+
+            _device_min_soc = _dev.get(CONF_DEVICE_MIN_SOC_PERCENT)
+            _soc_too_low = (
+                _device_min_soc is not None
+                and data.soc < _device_min_soc
+                and not _force_runtime
+            )
+            if _soc_too_low:
+                # Below its own reserve floor: excluded from the battery-
+                # budget competition entirely, so it can never win
+                # "battery_would_last" while under the floor — but unlike
+                # window/dependency this never blocks it from turning on
+                # via direct PV surplus in the main loop below, which
+                # doesn't consult battery_eligible_ids at all. The floor
+                # is purely a "don't let the battery cover this device"
+                # guarantee, not an on/off gate of its own.
                 continue
 
             optional_candidates.append((_device_id, _predicted_power, _own_cutoff, _priority))
@@ -1870,16 +1880,19 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 )
                 continue
 
-            # An optional per-device SOC floor: below it, the device is
-            # forced off unconditionally, same hard-block/pre-charge
-            # treatment as a closed window or unmet dependency — a direct
-            # "keep at least this much in reserve" guarantee, not just
-            # another input the battery-optimal-set math weighs against
-            # everything else. Suspended while force_runtime is active
-            # (the user's explicit choice: a minimum daily runtime target
-            # may dip into this reserve rather than never being reached on
-            # a low-SOC day) — every other hard block above still applies
-            # regardless of force_runtime, this is the one exception.
+            # An optional per-device SOC floor: below it, an already-*on*
+            # device is forced off — a direct "keep at least this much in
+            # reserve" guarantee. Deliberately NOT folded into `blocked`
+            # below: unlike a closed window or unmet dependency, it must
+            # never prevent the device from turning ON via genuine PV
+            # surplus (see the pre-pass above, which excludes it from
+            # battery_eligible_ids while under the floor but leaves the
+            # direct-surplus should_on path in the main loop untouched) —
+            # it only ever protects the reserve from being drawn down
+            # further once the device is already running. Suspended while
+            # force_runtime is active (the user's explicit choice: a
+            # minimum daily runtime target may dip into this reserve
+            # rather than never being reached on a low-SOC day).
             device_min_soc = dev.get(CONF_DEVICE_MIN_SOC_PERCENT)
             soc_too_low = (
                 device_min_soc is not None
@@ -1888,20 +1901,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             )
             diag.device_min_soc = device_min_soc
 
-            blocked = window_closed or not dependency_met or soc_too_low
-            if blocked and is_on:
+            blocked = window_closed or not dependency_met
+            if (blocked or soc_too_low) and is_on:
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
                 titel = (
                     "Außerhalb Zeitfenster" if window_closed
-                    else "Akku-Reserve unterschritten" if soc_too_low
-                    else "Abhängigkeit nicht erfüllt"
+                    else "Abhängigkeit nicht erfüllt" if not dependency_met
+                    else "Akku-Reserve unterschritten"
                 )
                 reason = (
                     "außerhalb des Zeitfensters" if window_closed
-                    else f"Akku-Reserve unterschritten (SOC {data.soc:.0f}% < {device_min_soc:.0f}%)" if soc_too_low
-                    else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)"
+                    else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
+                    else f"Akku-Reserve unterschritten (SOC {data.soc:.0f}% < {device_min_soc:.0f}%)"
                 )
                 await self._log_decision(dev, False, titel, reason)
                 _LOGGER.info("PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), reason)
@@ -2005,11 +2018,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             diag.should_be_on = (should_on if (should_on or should_off) else is_on) and not blocked
 
             if should_on and blocked:
-                wartet_auf = (
-                    "den Start des Zeitfensters" if window_closed
-                    else "eine ausreichende Akku-Reserve" if soc_too_low
-                    else "die Abhängigkeit"
-                )
+                wartet_auf = "den Start des Zeitfensters" if window_closed else "die Abhängigkeit"
                 decision_reason = (
                     f"Überschuss/Akku würden bereits ausreichen ("
                     f"{remaining_surplus:.2f} kW verfügbar, {predicted_power:.2f} kW "
@@ -2017,7 +2026,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 )
                 titel = (
                     "Vorbereitet — wartet auf Zeitfenster" if window_closed
-                    else "Vorbereitet — wartet auf Akku-Reserve" if soc_too_low
                     else "Vorbereitet — wartet auf Abhängigkeit"
                 )
                 await self._log_decision(dev, False, titel, decision_reason)

@@ -249,13 +249,13 @@ class PVDeviceMinRuntimeNumber(_PVDeviceNumberBase):
 
 
 class PVDeviceMinSocNumber(_PVDeviceNumberBase):
-    """Hard floor: below this battery SOC, the device is forced off
-    unconditionally — a direct reserve guarantee, not weighed against
-    anything else in the battery-optimal-set math. 0 means "not set"
-    (no device-specific floor beyond the global Mindest-SOC), same
-    sentinel convention as PVDeviceMinRuntimeNumber. Suspended while a
-    minimum daily runtime target is being force-enforced — see
-    coordinator._evaluate_devices and const.py's
+    """Hard floor: below this battery SOC, an already-on device is
+    forced off — a reserve-protection cutoff, not an on/off
+    precondition (turning on via direct PV surplus is unaffected). 0
+    means "not set" (no device-specific floor beyond the global
+    Mindest-SOC), same sentinel convention as PVDeviceMinRuntimeNumber.
+    Suspended while a minimum daily runtime target is being
+    force-enforced — see coordinator._evaluate_devices and const.py's
     CONF_DEVICE_MIN_SOC_PERCENT for the full reasoning."""
 
     _field = CONF_DEVICE_MIN_SOC_PERCENT

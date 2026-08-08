@@ -150,11 +150,13 @@ cloud passes over or another appliance briefly kicks in.
   window, that means once the time remaining until the window closes is no
   longer enough for the still-missing hours plus a safety margin; for a
   device with no window at all, once today's solar peak has passed.
-- **Per-device battery reserve** — set an optional SOC floor (%) below which
-  a device is forced off unconditionally, independent of the normal
-  battery-runway projection — a direct "keep at least this much in reserve"
-  guarantee. A device's own minimum daily runtime target, if any, may still
-  dip into this reserve to make sure it gets met.
+- **Per-device battery reserve** — set an optional SOC floor (%): once the
+  battery drops below it, that device gets forced off to protect the
+  reserve. This only ever cuts an already-running device off — it never
+  blocks the device from turning on via genuine PV surplus, so a good day
+  behaves exactly as before regardless of the floor. A device's own minimum
+  daily runtime target, if any, may still dip into this reserve to make
+  sure it gets met.
 - **Climate-controlled devices** — some devices (e.g. a pool heat pump) have
   no on/off switch at all, only a thermostat-style mode selector
   (off/heat/cool/auto). Add these as a climate-controlled device: pick the

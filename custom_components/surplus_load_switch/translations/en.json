@@ -36,7 +36,7 @@
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
           "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
-          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — a hard floor independent of the battery projection; overridden by minimum daily runtime (which may dip into this reserve if needed)",
+          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — cuts an already-running device off once the battery drops below this, but never blocks it from turning on via genuine PV surplus. Overridden by minimum daily runtime (which may dip into this reserve if needed)",
           "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       },
@@ -71,7 +71,7 @@
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
           "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
-          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — a hard floor independent of the battery projection; overridden by minimum daily runtime (which may dip into this reserve if needed)",
+          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — cuts an already-running device off once the battery drops below this, but never blocks it from turning on via genuine PV surplus. Overridden by minimum daily runtime (which may dip into this reserve if needed)",
           "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       }
@@ -104,7 +104,7 @@
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
           "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
-          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — a hard floor independent of the battery projection; overridden by minimum daily runtime (which may dip into this reserve if needed)",
+          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — cuts an already-running device off once the battery drops below this, but never blocks it from turning on via genuine PV surplus. Overridden by minimum daily runtime (which may dip into this reserve if needed)",
           "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       },
@@ -132,7 +132,7 @@
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
           "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
-          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — a hard floor independent of the battery projection; overridden by minimum daily runtime (which may dip into this reserve if needed)",
+          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — cuts an already-running device off once the battery drops below this, but never blocks it from turning on via genuine PV surplus. Overridden by minimum daily runtime (which may dip into this reserve if needed)",
           "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       },
@@ -168,7 +168,7 @@
           "window_start": "Time window start — only used if no helper above is set (leave empty for no restriction)",
           "window_end": "Time window end — outside this window the device is only ever turned off, e.g. for a pool pump on its own daily schedule",
           "min_daily_runtime_h": "Minimum daily runtime (h, optional) — from the afternoon onward, forces the device on (even without surplus) if it hasn't reached this yet today",
-          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — a hard floor independent of the battery projection; overridden by minimum daily runtime (which may dip into this reserve if needed)",
+          "device_min_soc_percent": "Battery reserve — device off below (%, optional) — cuts an already-running device off once the battery drops below this, but never blocks it from turning on via genuine PV surplus. Overridden by minimum daily runtime (which may dip into this reserve if needed)",
           "depends_on_device_id": "Depends on device (optional) — this device is only ever turned on while the selected one is also on (e.g. a heat pump that needs its circulation pump running first)"
         }
       }
