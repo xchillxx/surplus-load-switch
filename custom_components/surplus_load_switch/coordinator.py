@@ -1880,24 +1880,34 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 )
                 continue
 
+            remaining_surplus = available_surplus - cumulative_committed
+
             # An optional per-device SOC floor: below it, an already-*on*
-            # device is forced off — a direct "keep at least this much in
-            # reserve" guarantee. Deliberately NOT folded into `blocked`
-            # below: unlike a closed window or unmet dependency, it must
-            # never prevent the device from turning ON via genuine PV
-            # surplus (see the pre-pass above, which excludes it from
-            # battery_eligible_ids while under the floor but leaves the
-            # direct-surplus should_on path in the main loop untouched) —
-            # it only ever protects the reserve from being drawn down
-            # further once the device is already running. Suspended while
-            # force_runtime is active (the user's explicit choice: a
-            # minimum daily runtime target may dip into this reserve
-            # rather than never being reached on a low-SOC day).
+            # device is forced off — but only if it would actually draw
+            # on the battery to keep running (remaining_surplus doesn't
+            # cover its own predicted power). A device fully covered by
+            # live PV surplus isn't touching the reserve at all, so
+            # kicking it off would protect nothing — it would just cycle
+            # on/off forever every time it re-qualifies via surplus and
+            # then gets yanked the very next cycle, purely because SOC
+            # hasn't (and often can't quickly) climb back above the
+            # floor. Confirmed live: exactly this oscillation happened
+            # before this check existed. Deliberately NOT folded into
+            # `blocked` below: unlike a closed window or unmet
+            # dependency, it must never prevent the device from turning
+            # ON via genuine PV surplus (see the pre-pass above, which
+            # excludes it from battery_eligible_ids while under the
+            # floor but leaves the direct-surplus should_on path here
+            # untouched). Suspended while force_runtime is active (the
+            # user's explicit choice: a minimum daily runtime target may
+            # dip into this reserve rather than never being reached on a
+            # low-SOC day).
             device_min_soc = dev.get(CONF_DEVICE_MIN_SOC_PERCENT)
             soc_too_low = (
                 device_min_soc is not None
                 and data.soc < device_min_soc
                 and not force_runtime
+                and remaining_surplus < predicted_power
             )
             diag.device_min_soc = device_min_soc
 
@@ -1933,8 +1943,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # doesn't get this treatment (see above) since it has no
             # equivalent discrete "clears at" moment worth pre-charging
             # for.
-
-            remaining_surplus = available_surplus - cumulative_committed
 
             # Forward-looking battery check: would the battery still last
             # until solar start if THIS device — on top of every
