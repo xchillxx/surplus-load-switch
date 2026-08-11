@@ -1882,49 +1882,46 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
             remaining_surplus = available_surplus - cumulative_committed
 
-            # An optional per-device SOC floor: below it, an already-*on*
-            # device is forced off — but only if it would actually draw
-            # on the battery to keep running (remaining_surplus doesn't
-            # cover its own predicted power). A device fully covered by
-            # live PV surplus isn't touching the reserve at all, so
-            # kicking it off would protect nothing — it would just cycle
-            # on/off forever every time it re-qualifies via surplus and
-            # then gets yanked the very next cycle, purely because SOC
-            # hasn't (and often can't quickly) climb back above the
-            # floor. Confirmed live: exactly this oscillation happened
-            # before this check existed. Deliberately NOT folded into
-            # `blocked` below: unlike a closed window or unmet
-            # dependency, it must never prevent the device from turning
-            # ON via genuine PV surplus (see the pre-pass above, which
-            # excludes it from battery_eligible_ids while under the
-            # floor but leaves the direct-surplus should_on path here
-            # untouched). Suspended while force_runtime is active (the
-            # user's explicit choice: a minimum daily runtime target may
-            # dip into this reserve rather than never being reached on a
-            # low-SOC day).
+            # An optional per-device SOC floor. Deliberately has NO
+            # instant/hard-cutoff path of its own (unlike window_closed
+            # or unmet dependency below) — its only effect is upstream,
+            # in the pre-pass above, which excludes a device under its
+            # floor from battery_eligible_ids so it can never win
+            # "battery_would_last" down there. That alone is enough to
+            # make the normal should_off further below fire once surplus
+            # genuinely can't cover it, going through the SAME multi-
+            # cycle off_counter debounce as every other shutdown reason —
+            # no separate flapping-prone hard-off needed. An earlier
+            # version DID hard-cut a soc-too-low device the instant it
+            # turned on, which produced confirmed live on/off cycling
+            # every ~10 minutes on an otherwise stable, cloudless morning
+            # (see project memory): floors set high enough to be "always
+            # below" for most of the morning turned every one-cycle
+            # surplus blip into an instant, undebounced cutoff, wiping
+            # out the normal hysteresis this codebase otherwise relies on
+            # everywhere else. Suspended while force_runtime is active
+            # (the user's explicit choice: a minimum daily runtime target
+            # may dip into this reserve rather than never being reached
+            # on a low-SOC day) — handled entirely by the pre-pass, which
+            # already knows force_runtime by the time it excludes/admits
+            # a device.
             device_min_soc = dev.get(CONF_DEVICE_MIN_SOC_PERCENT)
             soc_too_low = (
                 device_min_soc is not None
                 and data.soc < device_min_soc
                 and not force_runtime
-                and remaining_surplus < predicted_power
             )
             diag.device_min_soc = device_min_soc
 
             blocked = window_closed or not dependency_met
-            if (blocked or soc_too_low) and is_on:
+            if blocked and is_on:
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
-                titel = (
-                    "Außerhalb Zeitfenster" if window_closed
-                    else "Abhängigkeit nicht erfüllt" if not dependency_met
-                    else "Akku-Reserve unterschritten"
-                )
+                titel = "Außerhalb Zeitfenster" if window_closed else "Abhängigkeit nicht erfüllt"
                 reason = (
                     "außerhalb des Zeitfensters" if window_closed
-                    else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)" if not dependency_met
-                    else f"Akku-Reserve unterschritten (SOC {data.soc:.0f}% < {device_min_soc:.0f}%)"
+                    else "Abhängigkeit nicht erfüllt (Voraussetzung läuft nicht)"
                 )
                 await self._log_decision(dev, False, titel, reason)
                 _LOGGER.info("PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), reason)
@@ -2058,11 +2055,21 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     )
                 await self._log_decision(dev, True, decision_titel, decision_reason)
             elif should_off:
-                decision_reason = (
-                    f"Überschuss/Akku reichen nicht ({remaining_surplus:.2f} kW verfügbar, "
-                    f"{predicted_power:.2f} kW benötigt, Akku würde nicht bis Solar-Start reichen)"
-                )
-                await self._log_decision(dev, False, "Ausschalten — Überschuss/Akku reichen nicht", decision_reason)
+                if soc_too_low:
+                    decision_titel = "Ausschalten — Akku-Reserve unterschritten"
+                    decision_reason = (
+                        f"Überschuss reicht nicht ({remaining_surplus:.2f} kW verfügbar, "
+                        f"{predicted_power:.2f} kW benötigt) und Akku-Reserve unterschritten "
+                        f"(SOC {data.soc:.0f}% < {device_min_soc:.0f}%) — Akku darf für dieses "
+                        f"Gerät nicht einspringen"
+                    )
+                else:
+                    decision_titel = "Ausschalten — Überschuss/Akku reichen nicht"
+                    decision_reason = (
+                        f"Überschuss/Akku reichen nicht ({remaining_surplus:.2f} kW verfügbar, "
+                        f"{predicted_power:.2f} kW benötigt, Akku würde nicht bis Solar-Start reichen)"
+                    )
+                await self._log_decision(dev, False, decision_titel, decision_reason)
             else:
                 stable_titel = "Bleibt an — Hysterese" if is_on else "Bleibt aus — Hysterese"
                 decision_reason = (

@@ -63,16 +63,18 @@ CONF_DEVICE_SCHEDULE_ENTITY = "schedule_entity"  # schedule.* helper — takes p
 # commitment. See coordinator._effective_cutoff.
 CONF_DEVICE_STOPS_OVERNIGHT = "stops_overnight"
 DEFAULT_MAX_ASSUMED_RUNTIME_H = 2.0
-# Optional per-device hard floor: below this battery SOC, an already-ON
-# device is forced off — a direct "keep at least this much in reserve
-# for the rest of the house" guarantee. Deliberately does NOT gate
-# turning the device on: it's excluded from the battery-optimal-set
-# competition while under the floor (so it can never win
-# "battery_would_last" down there), but a genuine direct-PV-surplus
-# turn-on is completely unaffected, exactly as if the floor didn't
-# exist — this is a reserve-protection cutoff, not an on/off
-# precondition. None (default) means no device-specific floor beyond
-# the existing global min_soc. See coordinator._evaluate_devices.
+# Optional per-device hard floor: below this battery SOC, the device
+# may no longer draw on the battery — a direct "keep at least this much
+# in reserve for the rest of the house" guarantee. Implemented as a
+# single upstream exclusion (the device can never win
+# "battery_would_last" while under the floor, see the pre-pass in
+# coordinator._evaluate_devices) rather than its own hard cutoff: once
+# excluded, the existing surplus-driven should_on/should_off — with its
+# normal multi-cycle debounce — takes it from there, exactly like any
+# other device. Deliberately does NOT gate turning the device on at
+# all: a genuine direct-PV-surplus turn-on is completely unaffected, as
+# if the floor didn't exist. None (default) means no device-specific
+# floor beyond the existing global min_soc.
 CONF_DEVICE_MIN_SOC_PERCENT = "device_min_soc_percent"
 CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
 CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that must be ON first
