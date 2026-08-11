@@ -85,7 +85,11 @@ cloud passes over or another appliance briefly kicks in.
   that's a real, known change in what's drawing power, not the kind of
   external noise the median is meant to filter, so it shouldn't take up to
   20 minutes to be reflected (e.g. a device's time window ending should
-  free up its share of the battery margin right away, not gradually).
+  free up its share of the battery margin right away, not gradually). The
+  first reading right after that reset bridges to the last trusted value
+  instead of being used on its own — right after a reset is exactly when a
+  cloud sensor is most likely to still be catching up, and a single
+  unsmoothed reading has no averaging protection at all.
 - **Tolerant of brief sensor outages** — the four core sensors (solar,
   load, SOC, battery power) hold their last known good reading for up to
   20 minutes if one goes `unavailable`/`unknown`, instead of freezing the

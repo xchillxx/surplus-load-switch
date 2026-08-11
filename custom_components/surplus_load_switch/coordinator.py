@@ -186,6 +186,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # same duplicate-inflation risk _base_load_samples had before
         # v1.27.16 fixed it — see _async_update_data.
         self._last_appended_discharge_kw: float | None = None
+        # Bridges smoothed_discharge_kw across a composition-change reset
+        # (see managed_on_now below), which clears _discharge_samples
+        # outright. Without this, the very first sample landing in the
+        # freshly-emptied deque gets ZERO smoothing (median of one value
+        # IS that value) — exactly the moment attribution is most likely
+        # to be transiently wrong (the load/discharge sensors haven't
+        # caught up with the change yet either). Holds the last value
+        # that WAS backed by >=2 genuinely independent readings until the
+        # new deque earns that same trust again. None only pre-first-ever
+        # reading, when there's nothing to bridge to.
+        self._last_trusted_discharge_kw: float | None = None
         # Smooths base_load specifically for the overnight base_discharge_kw
         # projection — raw, unsmoothed cycle-to-cycle noise in the live load
         # reading gets multiplied by however many hours remain until solar
@@ -202,6 +213,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # that looks far more robust than it actually is. None means "not
         # tracked yet / just reset" — the next reading is always admitted.
         self._last_appended_load_kw: float | None = None
+        # Same composition-change bridge as _last_trusted_discharge_kw
+        # above, for _base_load_samples/smoothed_base_load.
+        self._last_trusted_base_load: float | None = None
         # Which devices _select_battery_optimal_set granted "would last"
         # last cycle — used to require a device that's re-joining the set
         # (was excluded last cycle, would be newly included now) to also
@@ -1181,9 +1195,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if batt != self._last_appended_discharge_kw:
             self._discharge_samples.append(discharge)
             self._last_appended_discharge_kw = batt
-        smoothed_discharge = (
-            statistics.median(self._discharge_samples) if self._discharge_samples else discharge
-        )
+        # A single sample right after a composition-change reset (see
+        # managed_on_now below) gets no averaging protection at all —
+        # bridge to the last value that WAS backed by >=2 independent
+        # readings until the fresh deque earns that trust again.
+        # Confirmed live: exactly one glitchy reading right after a
+        # composition change dragged the overnight discharge projection
+        # for ~9 minutes before enough real readings diluted it out.
+        if len(self._discharge_samples) >= 2:
+            smoothed_discharge = statistics.median(self._discharge_samples)
+            self._last_trusted_discharge_kw = smoothed_discharge
+        elif self._last_trusted_discharge_kw is not None:
+            smoothed_discharge = self._last_trusted_discharge_kw
+        else:
+            smoothed_discharge = discharge
         avail_kwh = max((soc - min_soc) / 100.0 * battery_kwh, 0.0)
         h_battery = avail_kwh / smoothed_discharge if smoothed_discharge > 0.05 else 999.0
 
@@ -1441,7 +1466,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if data.load_kw != self._last_appended_load_kw:
             self._base_load_samples.append(base_load)
             self._last_appended_load_kw = data.load_kw
-        smoothed_base_load = statistics.median(self._base_load_samples) if self._base_load_samples else base_load
+        # Same composition-change bridge as smoothed_discharge above —
+        # the first sample into a freshly-reset deque is otherwise fully
+        # exposed, right when it's most likely to be transiently wrong.
+        if len(self._base_load_samples) >= 2:
+            smoothed_base_load = statistics.median(self._base_load_samples)
+            self._last_trusted_base_load = smoothed_base_load
+        elif self._last_trusted_base_load is not None:
+            smoothed_base_load = self._last_trusted_base_load
+        else:
+            smoothed_base_load = base_load
 
         # Computed once per cycle, not per dependent device — several
         # devices could depend on the same wallbox, and calling
