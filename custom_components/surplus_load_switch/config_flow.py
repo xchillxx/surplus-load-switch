@@ -33,6 +33,7 @@ from .const import (
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
     CONF_SOC_SENSOR,
+    CONF_SOLAR_FORECAST_REMAINING_ENTITY,
     CONF_SOLAR_SENSOR,
     DOMAIN,
 )
@@ -77,6 +78,11 @@ def _global_settings_schema(defaults: dict | None = None) -> vol.Schema:
             CONF_HAUSMODUS_ENTITY, **_default(d, CONF_HAUSMODUS_ENTITY)
         ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain=["input_select", "select"])
+        ),
+        vol.Optional(
+            CONF_SOLAR_FORECAST_REMAINING_ENTITY, **_default(d, CONF_SOLAR_FORECAST_REMAINING_ENTITY)
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
         ),
     })
 

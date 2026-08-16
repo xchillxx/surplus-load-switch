@@ -33,6 +33,8 @@ from .const import (
     CONF_LOAD_SENSOR,
     CONF_SOC_SENSOR,
     CONF_SOLAR_SENSOR,
+    CONF_WALLBOX_SOC_ENTITY,
+    CONF_WALLBOX_TARGET_SOC_ENTITY,
     DOMAIN,
     SELECT_NONE,
 )
@@ -63,6 +65,10 @@ async def async_setup_entry(
         # it (see coordinator._wallbox_satisfied): "don't run until the
         # car's satisfied or the wallbox has been idle a while".
         entities.append(PVDeviceDependsOnSelect(coordinator, entry, dev, devices))
+    for dev in devices:
+        if dev.get(CONF_DEVICE_IS_WALLBOX, False):
+            entities.append(PVWallboxSocSelect(coordinator, entry, dev))
+            entities.append(PVWallboxTargetSocSelect(coordinator, entry, dev))
     async_add_entities(entities)
 
 
@@ -260,6 +266,43 @@ class PVDeviceScheduleSelect(_PVDeviceOptionalEntitySelect):
     ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_schedule_select"
+
+
+class PVWallboxSocSelect(_PVDeviceOptionalEntitySelect):
+    """Only meaningful on a wallbox device: the car's own current-SOC
+    sensor (e.g. from a Tesla/EV integration) — together with the
+    target-SOC entity below and the battery-capacity number, lets
+    coordinator._wallbox_reserved_kw compute how many kWh are still
+    missing to the charge target. See CONF_WALLBOX_BATTERY_CAPACITY_KWH
+    in const.py for the full reasoning."""
+
+    _field = CONF_WALLBOX_SOC_ENTITY
+    _domain = "sensor"
+    _attr_name = "SOC-Sensor Auto"
+    _attr_icon = "mdi:battery-charging-70"
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_soc_select"
+
+
+class PVWallboxTargetSocSelect(_PVDeviceOptionalEntitySelect):
+    """Only meaningful on a wallbox device: the car's charge-limit/
+    target-SOC sensor (e.g. from a Tesla/EV integration) — see
+    PVWallboxSocSelect above."""
+
+    _field = CONF_WALLBOX_TARGET_SOC_ENTITY
+    _domain = "sensor"
+    _attr_name = "Ladeziel-Sensor Auto"
+    _attr_icon = "mdi:battery-charging-100"
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_target_soc_select"
 
 
 class PVDeviceDependsOnSelect(_PVDeviceSelectBase):

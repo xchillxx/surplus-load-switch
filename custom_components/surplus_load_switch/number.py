@@ -24,6 +24,8 @@ from .const import (
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_PRIORITY,
     CONF_MIN_SOC,
+    CONF_WALLBOX_BATTERY_CAPACITY_KWH,
+    CONF_WALLBOX_MAX_CHARGE_KW,
     CONF_WALLBOX_SATISFIED_KW,
     CONF_WALLBOX_WEAK_DAY_PRIORITY,
     DOMAIN,
@@ -44,6 +46,8 @@ async def async_setup_entry(
         if dev.get(CONF_DEVICE_IS_WALLBOX, False):
             entities.append(PVWallboxSatisfiedKwNumber(coordinator, entry, dev))
             entities.append(PVWallboxWeakDayPriorityNumber(coordinator, entry, dev))
+            entities.append(PVWallboxBatteryCapacityNumber(coordinator, entry, dev))
+            entities.append(PVWallboxMaxChargeKwNumber(coordinator, entry, dev))
             continue
         entities.append(PVDevicePriorityNumber(coordinator, entry, dev))
         entities.append(PVDevicePowerEstimateNumber(coordinator, entry, dev))
@@ -351,3 +355,69 @@ class PVWallboxWeakDayPriorityNumber(_PVDeviceNumberBase):
 
     async def async_set_native_value(self, value: float) -> None:
         await self._async_write(int(value) if value > 0 else None)
+
+
+class PVWallboxBatteryCapacityNumber(_PVDeviceNumberBase):
+    """Only meaningful on a wallbox device: the car's total usable
+    battery capacity (kWh) — together with the SOC/target-SOC entities
+    (select.py), lets coordinator._wallbox_reserved_kw work out how many
+    kWh are still missing to the charge target and, from there, the kW
+    the wallbox needs reserved from the current surplus (see
+    CONF_WALLBOX_BATTERY_CAPACITY_KWH in const.py). 0 ("not set")
+    disables the whole dynamic-reservation feature for this wallbox,
+    same sentinel convention as every other optional per-device number
+    here — the SOC/target-SOC entities being unset does the same."""
+
+    _field = CONF_WALLBOX_BATTERY_CAPACITY_KWH
+    _attr_name = "Akkukapazität Auto (0 = aus)"
+    _attr_icon = "mdi:car-battery"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 200
+    _attr_native_step = 0.1
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_battery_capacity_kwh"
+
+    @property
+    def native_value(self) -> float:
+        dev = self._device
+        return (dev.get(CONF_WALLBOX_BATTERY_CAPACITY_KWH) or 0) if dev else 0
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._async_write(value if value > 0 else None)
+
+
+class PVWallboxMaxChargeKwNumber(_PVDeviceNumberBase):
+    """Only meaningful on a wallbox device: caps
+    coordinator._wallbox_reserved_kw at whatever the car/charger can
+    actually draw, regardless of how large the remaining deficit is —
+    no point reserving surplus the wallbox could never use. 0 ("not
+    set") means no cap beyond whatever surplus genuinely exists."""
+
+    _field = CONF_WALLBOX_MAX_CHARGE_KW
+    _attr_name = "Maximale Ladeleistung (0 = aus)"
+    _attr_icon = "mdi:ev-station"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 43
+    _attr_native_step = 0.5
+    _attr_native_unit_of_measurement = "kW"
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_max_charge_kw"
+
+    @property
+    def native_value(self) -> float:
+        dev = self._device
+        return (dev.get(CONF_WALLBOX_MAX_CHARGE_KW) or 0) if dev else 0
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._async_write(value if value > 0 else None)

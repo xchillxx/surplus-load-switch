@@ -11,7 +11,8 @@
           "batt_sensor": "Battery charge/discharge power sensor (kW)",
           "battery_capacity_kwh": "Battery capacity (kWh)",
           "min_soc": "Minimum SOC (%)",
-          "hausmodus_entity": "House-mode helper (optional, e.g. an input_select) — enables the weekday/hour/mode load-profile learner (diagnostic only, doesn't affect any switching decision yet)"
+          "hausmodus_entity": "House-mode helper (optional, e.g. an input_select) — enables the weekday/hour/mode load-profile learner (diagnostic only, doesn't affect any switching decision yet)",
+          "solar_forecast_remaining_entity": "PV forecast — remaining today (optional, kWh, e.g. Forecast.Solar) — lets the wallbox reservation follow the sun's actual daily curve instead of a flat time average"
         }
       },
       "device_intro": {
@@ -151,7 +152,8 @@
           "batt_sensor": "Battery charge/discharge power sensor",
           "battery_capacity_kwh": "Battery capacity (kWh)",
           "min_soc": "Minimum SOC (%)",
-          "hausmodus_entity": "House-mode helper (optional, e.g. an input_select) — enables the weekday/hour/mode load-profile learner (diagnostic only, doesn't affect any switching decision yet)"
+          "hausmodus_entity": "House-mode helper (optional, e.g. an input_select) — enables the weekday/hour/mode load-profile learner (diagnostic only, doesn't affect any switching decision yet)",
+          "solar_forecast_remaining_entity": "PV forecast — remaining today (optional, kWh, e.g. Forecast.Solar) — lets the wallbox reservation follow the sun's actual daily curve instead of a flat time average"
         }
       },
       "add_climate_device": {

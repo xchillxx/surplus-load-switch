@@ -107,6 +107,35 @@ cloud passes over or another appliance briefly kicks in.
   uses, which reads the same whether the car's finished charging or isn't
   even there. E.g. a pool heat pump can hold back until the car is no
   longer the priority.
+- **Dynamic wallbox surplus reservation** — a wallbox can also reserve a
+  share of the current surplus for itself before the device cascade
+  competes for the rest, without blocking anything outright. Set the
+  car's battery capacity plus its current-SOC and target-SOC sensors
+  (e.g. from a Tesla/EV integration) and the reservation is computed
+  fresh every cycle from how many kWh are still missing to the target
+  and the current *shape* of the day: with an optional solar-forecast
+  sensor configured (e.g. Forecast.Solar's "kWh still to come today"),
+  the reservation claims the same share of whatever surplus is flowing
+  right now as the deficit's share of today's forecast remaining
+  production — low first thing in the morning when little is forecast
+  yet, higher once the afternoon is genuinely delivering it. Without a
+  forecast sensor configured, falls back to a flatter sunset-minus-a-
+  safety-margin/hours-remaining rate — easing off on its own as the car
+  approaches its target, and ramping up on its own if the deficit isn't
+  closing. Capped at both the
+  surplus that actually exists right now and the wallbox's own maximum
+  charge rate — self-limiting rather than gated to a fixed time of day,
+  so a large deficit that genuinely needs a full day to close isn't held
+  back until some arbitrary starting point, while a small one doesn't
+  claim more of the morning than it actually needs. The max-charge cap
+  can be entered by hand, or left unset to self-learn from the rolling
+  maximum this wallbox's own power sensor has actually reported over the
+  last 30 days — adjusts on its own as reality changes (3-phase summer
+  charging vs. a single-phase winter fallback, a different car) instead
+  of a number that quietly goes stale. All optional; leaving the
+  capacity or either SOC sensor unset disables the whole reservation.
+  This is separate from and complements the weak-day priority above,
+  which still applies unchanged on a detected weak day.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's

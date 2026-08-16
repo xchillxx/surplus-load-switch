@@ -33,6 +33,15 @@ CONF_SOLAR_OFFSETS = "solar_offsets"
 # weekday/hour/mode load-profile learner (see load_profile.py). Left
 # unset, the learner and its diagnostic sensor simply don't run.
 CONF_HAUSMODUS_ENTITY = "hausmodus_entity"
+# Optional: a sensor reporting the forecast kWh still expected to arrive
+# today (e.g. Forecast.Solar's "Geschätzte Energieerzeugung – Resttag
+# heute" / sensor.energy_production_today_remaining) — lets
+# coordinator._wallbox_reserved_kw scale its reservation by the actual
+# shape of today's remaining solar curve instead of a flat clock-time
+# average (a weak 9am and a strong 2pm get treated the same by a flat
+# average; they shouldn't). Left unset, the wallbox reservation falls
+# back to the flat time-based formula.
+CONF_SOLAR_FORECAST_REMAINING_ENTITY = "solar_forecast_remaining_entity"
 
 # Config keys — per device
 CONF_DEVICES = "devices"
@@ -96,6 +105,24 @@ CONF_WALLBOX_SATISFIED_KW = "wallbox_satisfied_kw"
 # everything from there on down waits. 0/unset disables the feature for
 # this wallbox.
 CONF_WALLBOX_WEAK_DAY_PRIORITY = "wallbox_weak_day_priority"
+# Soft, everyday counterpart to CONF_WALLBOX_WEAK_DAY_PRIORITY above: on
+# an *ordinary* day (not flagged weak), a fixed kW slice of the current
+# surplus is reserved for the wallbox — computed dynamically from how
+# much energy it still needs to reach its target and how much daylight
+# is realistically left, rather than a flat number — before the device
+# cascade even sees the rest. Unlike the weak-day mechanism, this is
+# graduated: it only ever shrinks what other devices compete for, it
+# never blocks them outright, and it eases off on its own as the car
+# approaches its target or as more raw surplus becomes available. All
+# three optional/0-or-unset means the reservation is inactive.
+CONF_WALLBOX_BATTERY_CAPACITY_KWH = "wallbox_battery_capacity_kwh"
+CONF_WALLBOX_SOC_ENTITY = "wallbox_soc_entity"
+CONF_WALLBOX_TARGET_SOC_ENTITY = "wallbox_target_soc_entity"
+# Optional: caps the reservation above at whatever the car/charger can
+# actually draw — no point reserving more than that regardless of how
+# large the remaining deficit is. 0/unset means no cap beyond whatever
+# surplus genuinely exists.
+CONF_WALLBOX_MAX_CHARGE_KW = "wallbox_max_charge_kw"
 # Per-device "enabled" toggle — exposed as a live switch entity (switch.py),
 # not a config-flow field, since it's meant for a quick vacation-style
 # on/off rather than something you configure once at setup. Absent/True
@@ -110,6 +137,24 @@ BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
 # _wallbox_satisfied's idle-release check — low enough that a genuinely
 # charging car is never mistaken for an idle one.
 WALLBOX_IDLE_THRESHOLD_KW = 0.3
+# The dynamic wallbox reservation (CONF_WALLBOX_BATTERY_CAPACITY_KWH etc.)
+# targets sunset minus this many hours, not sunset itself — a safety
+# margin so the car isn't still counting on the literal last minute of
+# daylight, mirroring MIN_RUNTIME_FORCE_BUFFER_H's role for min-runtime
+# forcing.
+WALLBOX_TARGET_TIME_BUFFER_H = 2.0
+# Floors how few hours-remaining the reservation's kW/h division uses —
+# without this, a deadline that's already passed (or seconds away) would
+# either divide by ~0 (a wild, meaningless kW spike) or by a negative
+# number. Reserving hard for the last stretch is correct; reserving an
+# absurd number isn't.
+WALLBOX_TARGET_MIN_HOURS = 0.25
+# Same floor, but for the forecast-based reservation path (see
+# CONF_SOLAR_FORECAST_REMAINING_ENTITY): a forecast "kWh still to come
+# today" reading near/at 0 (end of day) would otherwise blow the
+# missing/forecast fraction up to an absurd multiple instead of just
+# correctly claiming ~100% of whatever's left.
+WALLBOX_FORECAST_MIN_KWH = 0.5
 
 # --- Weak-day detection ---
 # Solar power (kW) above which today counts as "producing" for the purpose
@@ -322,6 +367,16 @@ BASE_LOAD_FLOOR_LOOKBACK_DAYS = 3
 # Percentile (not the outright minimum) so a single glitched hour can't
 # poison the floor — see base_load_floor.py's module docstring.
 BASE_LOAD_FLOOR_PERCENTILE = 5
+# --- Self-calibrating wallbox max charge rate ---
+# The rolling maximum a wallbox's own power sensor has actually reported
+# over this many recent days, used as CONF_WALLBOX_MAX_CHARGE_KW's cap
+# on the dynamic surplus reservation whenever that field is left unset
+# — self-adjusting to whatever's actually achievable this month (3-phase
+# summer charging vs. a single-phase winter fallback, an amperage
+# change, etc.) instead of a number that has to be updated by hand every
+# time reality changes. See wallbox_charge_calibrator.py.
+WALLBOX_MAX_CHARGE_LOOKBACK_DAYS = 30
+
 # A day only counts toward calibration if its peak production reaches this
 # fraction of the 90th-percentile peak in the surrounding window — filters
 # out cloudy/overcast days using only the system's own data, no external

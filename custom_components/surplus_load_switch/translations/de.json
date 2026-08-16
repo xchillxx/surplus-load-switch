@@ -11,7 +11,8 @@
           "batt_sensor": "Akku Lade-/Entladeleistung Sensor (kW)",
           "battery_capacity_kwh": "Akku-Kapazität (kWh)",
           "min_soc": "Mindest-SOC (%)",
-          "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)"
+          "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)",
+          "solar_forecast_remaining_entity": "PV-Prognose Resttag heute (optional, kWh, z.B. Forecast.Solar) — lässt die Wallbox-Reservierung dem tatsächlichen Tagesverlauf der Sonne folgen statt einem flachen Zeitdurchschnitt"
         }
       },
       "device_intro": {
@@ -151,7 +152,8 @@
           "batt_sensor": "Akku Lade-/Entladeleistung Sensor",
           "battery_capacity_kwh": "Akku-Kapazität (kWh)",
           "min_soc": "Mindest-SOC (%)",
-          "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)"
+          "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)",
+          "solar_forecast_remaining_entity": "PV-Prognose Resttag heute (optional, kWh, z.B. Forecast.Solar) — lässt die Wallbox-Reservierung dem tatsächlichen Tagesverlauf der Sonne folgen statt einem flachen Zeitdurchschnitt"
         }
       },
       "add_climate_device": {

@@ -46,9 +46,14 @@ from .const import (
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
     CONF_SOC_SENSOR,
+    CONF_SOLAR_FORECAST_REMAINING_ENTITY,
     CONF_SOLAR_OFFSETS,
     CONF_SOLAR_SENSOR,
+    CONF_WALLBOX_BATTERY_CAPACITY_KWH,
+    CONF_WALLBOX_MAX_CHARGE_KW,
     CONF_WALLBOX_SATISFIED_KW,
+    CONF_WALLBOX_SOC_ENTITY,
+    CONF_WALLBOX_TARGET_SOC_ENTITY,
     CONF_WALLBOX_WEAK_DAY_PRIORITY,
     CORE_SENSOR_GRACE_PERIOD,
     DAYTIME_PROJECTION_HORIZON_H,
@@ -76,6 +81,9 @@ from .const import (
     SURPLUS_ON_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
     WALLBOX_IDLE_THRESHOLD_KW,
+    WALLBOX_FORECAST_MIN_KWH,
+    WALLBOX_TARGET_MIN_HOURS,
+    WALLBOX_TARGET_TIME_BUFFER_H,
     WEAK_DAY_BATTERY_FULL_SOC,
     WEAK_DAY_EARLIEST_CHECK_HOUR,
     WEAK_DAY_RATIO_THRESHOLD,
@@ -84,10 +92,25 @@ from .device_control import async_turn_off, async_turn_on, control_entity_id, is
 from .power_tracker import DevicePowerTracker
 from .runtime_tracker import DailyRuntimeTracker
 from .base_load_floor import BaseLoadFloorCalibrator
+from .wallbox_charge_calibrator import WallboxChargeCalibrator
 from .load_profile import WeekdayLoadProfileLearner
 from .solar_calibration import SolarOffsetCalibrator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _safe_float(state) -> float | None:
+    """Parse a state's numeric value, tolerating unavailable/unknown/
+    missing states and non-numeric content — None rather than 0.0 on
+    failure, since a wallbox SOC/target reading defaulting to 0 would
+    silently invent a huge, wrong energy deficit instead of just
+    skipping the computation for this cycle."""
+    if state is None or state.state in ("unavailable", "unknown", ""):
+        return None
+    try:
+        return float(state.state)
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -131,6 +154,11 @@ class CoordinatorData:
     discharge_kw: float = 0.0
     smoothed_discharge_kw: float = 0.0
     surplus_kw: float = 0.0
+    # Sum of every wallbox's dynamic reservation this cycle (see
+    # _wallbox_reserved_kw) — already subtracted out of what the device
+    # cascade competes over, kept here purely for visibility into why
+    # devices see less than the raw surplus_kw above.
+    wallbox_reserved_kw: float = 0.0
     base_load_kw: float = 0.0
     avail_kwh: float = 0.0
     # Set twice: a naive avail_kwh/discharge_rate placeholder in
@@ -333,6 +361,19 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._base_load_floor_calibrator = BaseLoadFloorCalibrator(
             hass, entry_id, config[CONF_LOAD_SENSOR]
         )
+        # One calibrator per wallbox with a power sensor — capacity/SOC
+        # config and charging history are per-car, so this can't be a
+        # single shared instance the way the two calibrators above are.
+        self._wallbox_charge_calibrators: dict[str, WallboxChargeCalibrator] = {}
+        for dev in config.get(CONF_DEVICES, []):
+            if not dev.get(CONF_DEVICE_IS_WALLBOX, False):
+                continue
+            power_sensor = dev.get(CONF_DEVICE_POWER_SENSOR)
+            if not power_sensor:
+                continue
+            self._wallbox_charge_calibrators[dev["_id"]] = WallboxChargeCalibrator(
+                hass, entry_id, dev["_id"], power_sensor
+            )
         self._load_profile_learner = WeekdayLoadProfileLearner(hass, entry_id)
         self._last_offset_h = 0.0
         for dev in config.get(CONF_DEVICES, []):
@@ -347,6 +388,8 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         today's weak-day peak-tracking state."""
         await self._calibrator.async_load()
         await self._base_load_floor_calibrator.async_load()
+        for calibrator in self._wallbox_charge_calibrators.values():
+            await calibrator.async_load()
         await self._load_profile_learner.async_load()
         await self._async_load_daily_state()
         for dev in self._config.get(CONF_DEVICES, []):
@@ -791,6 +834,123 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         return self._solar_noon_passed()
 
+    def _wallbox_reservation_rate(
+        self, missing_kwh: float, now: datetime, available_surplus: float
+    ) -> float | None:
+        """The raw (pre-cap) reservation rate in kW, before
+        _wallbox_reserved_kw applies the surplus/max-charge caps. None
+        means "can't compute right now" (missing sun.sun data), not "no
+        reservation" — the caller distinguishes.
+
+        Prefers a forecast-based proportional rate when
+        CONF_SOLAR_FORECAST_REMAINING_ENTITY is configured: claim the
+        same *share* of whatever solar is happening right now as the
+        share of today's still-forecast solar the deficit represents
+        (missing_kwh / forecast_kwh_still_to_come). A flat clock-time
+        average treats a weak 9am and a strong 2pm identically, which is
+        exactly backwards — confirmed live: reserving a flat rate from
+        the morning onward claimed real surplus during hours when actual
+        production was still ramping up, while a large deficit
+        discovered at midday would need an even larger flat rate for the
+        rest of the day than the true solar curve could comfortably
+        supply. The forecast-based rate instead scales naturally with
+        the sun itself: low at 9am when little is forecast to still
+        arrive relative to the whole day, higher once the afternoon peak
+        is actually forecast to deliver it.
+
+        Falls back to the flat sunset-minus-buffer/hours-remaining
+        formula when no forecast entity is configured (or its reading is
+        unavailable) — worse-shaped, but still deadline-aware and still
+        fully capped downstream, so the feature keeps working without
+        Forecast.Solar or an equivalent integration installed.
+        """
+        forecast_entity = self._config.get(CONF_SOLAR_FORECAST_REMAINING_ENTITY)
+        forecast_remaining_kwh = (
+            _safe_float(self.hass.states.get(forecast_entity)) if forecast_entity else None
+        )
+        if forecast_remaining_kwh is not None:
+            share_needed = missing_kwh / max(forecast_remaining_kwh, WALLBOX_FORECAST_MIN_KWH)
+            return share_needed * max(available_surplus, 0.0)
+
+        sun = self.hass.states.get("sun.sun")
+        next_setting_raw = sun.attributes.get("next_setting") if sun is not None else None
+        if isinstance(next_setting_raw, datetime):
+            next_setting = next_setting_raw
+        elif isinstance(next_setting_raw, str):
+            next_setting = dt_util.parse_datetime(next_setting_raw)
+        else:
+            next_setting = None
+        if next_setting is None:
+            return None
+
+        deadline = next_setting - timedelta(hours=WALLBOX_TARGET_TIME_BUFFER_H)
+        hours_remaining = max(
+            (deadline - now).total_seconds() / 3600.0, WALLBOX_TARGET_MIN_HOURS
+        )
+        return missing_kwh / hours_remaining
+
+    def _wallbox_reserved_kw(
+        self, wallbox_dev: dict, now: datetime, available_surplus: float
+    ) -> float:
+        """How much of the current surplus (kW) to set aside for this
+        wallbox before the device cascade gets to compete for the rest —
+        the everyday, graduated counterpart to
+        CONF_WALLBOX_WEAK_DAY_PRIORITY (which only fires on a detected
+        weak day and blocks candidate devices outright, rather than just
+        shrinking the pool). Computed dynamically from how many kWh are
+        still missing to reach the charge target and how many hours are
+        realistically left to get there (sunset minus a safety buffer),
+        so it eases off on its own as the car approaches its target or
+        the deadline gets closer, instead of a flat number that's either
+        too little on a good day or too much on a weak one.
+
+        No fixed "don't start before X" gate — an earlier version waited
+        for solar noon, which is wrong for a large deficit: at, say, 60%
+        still missing and an 11 kW charger, even a full afternoon at max
+        power might not be enough, so waiting for it to even start is
+        exactly backwards. The formula is self-limiting without a gate:
+        capped at the surplus that actually exists right now (can't
+        manufacture morning surplus that isn't there — the house battery
+        and everything else naturally still gets whatever the wallbox
+        doesn't need or can't use yet) AND at the wallbox's own maximum
+        charge rate (no point reserving more than the car could ever
+        draw). Whatever's left over after both caps is exactly what's
+        available for the wallbox to actually use — nothing is being
+        held back from other devices for a share the wallbox couldn't
+        draw anyway.
+        """
+        capacity_kwh = wallbox_dev.get(CONF_WALLBOX_BATTERY_CAPACITY_KWH)
+        soc_entity = wallbox_dev.get(CONF_WALLBOX_SOC_ENTITY)
+        target_entity = wallbox_dev.get(CONF_WALLBOX_TARGET_SOC_ENTITY)
+        if not capacity_kwh or not soc_entity or not target_entity:
+            return 0.0
+
+        current_soc = _safe_float(self.hass.states.get(soc_entity))
+        target_soc = _safe_float(self.hass.states.get(target_entity))
+        if current_soc is None or target_soc is None:
+            return 0.0
+
+        missing_kwh = max(capacity_kwh * (target_soc - current_soc) / 100.0, 0.0)
+        if missing_kwh <= 0:
+            return 0.0
+
+        reserved_kw = self._wallbox_reservation_rate(missing_kwh, now, available_surplus)
+        if reserved_kw is None:
+            return 0.0
+
+        # A manually-entered cap always wins if set; otherwise fall back
+        # to the learned rolling max from this wallbox's own charging
+        # history (see wallbox_charge_calibrator.py) — self-adjusting to
+        # whatever's actually achievable this month instead of a number
+        # that silently goes stale the moment reality changes.
+        max_charge_kw = wallbox_dev.get(CONF_WALLBOX_MAX_CHARGE_KW)
+        if not max_charge_kw:
+            calibrator = self._wallbox_charge_calibrators.get(wallbox_dev.get("_id"))
+            max_charge_kw = calibrator.max_charge_kw if calibrator else None
+        if max_charge_kw:
+            reserved_kw = min(reserved_kw, max_charge_kw)
+        return min(reserved_kw, max(available_surplus, 0.0))
+
     def _effective_cutoff(
         self,
         dev: dict,
@@ -1150,6 +1310,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         ):
             await self._base_load_floor_calibrator.async_recalibrate()
 
+        # Same idea, per wallbox: re-derive its learned max charge rate
+        # from its own power sensor's recent history — see
+        # wallbox_charge_calibrator.py.
+        for wb_calibrator in self._wallbox_charge_calibrators.values():
+            if wb_calibrator.due_for_recalibration(timedelta(hours=CALIBRATION_INTERVAL_HOURS)):
+                await wb_calibrator.async_recalibrate()
+
         solar = self._get_core_float(self._config[CONF_SOLAR_SENSOR])
         load = self._get_core_float(self._config[CONF_LOAD_SENSOR])
         soc = self._get_core_float(self._config[CONF_SOC_SENSOR])
@@ -1447,7 +1614,23 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         available_surplus = data.solar_kw - base_load
 
         data.base_load_kw = base_load
+        # The true, physical surplus — captured before any wallbox
+        # reservation narrows what the device cascade gets to see below,
+        # so the diagnostic sensor always reflects reality, not an
+        # artificially-shrunk figure.
         data.surplus_kw = available_surplus
+
+        # Narrows what the cascade below actually competes over — each
+        # wallbox's own reservation is already capped at the surplus
+        # that exists, so this can't push available_surplus any lower
+        # than "nothing left for anyone", never negative beyond that.
+        wallbox_reserved_kw = sum(
+            self._wallbox_reserved_kw(wb, now, available_surplus)
+            for wb in wallbox_devices
+            if wb.get(CONF_WALLBOX_BATTERY_CAPACITY_KWH)
+        )
+        available_surplus -= wallbox_reserved_kw
+        data.wallbox_reserved_kw = wallbox_reserved_kw
 
         # Diagnostic only for now — see load_profile.py. Sampled here
         # (not gated on day/night or anything else) so every cycle
