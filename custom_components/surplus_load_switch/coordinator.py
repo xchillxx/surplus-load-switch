@@ -181,6 +181,8 @@ class CoordinatorData:
     device_diagnostics: dict[str, DeviceDiagnostics] = field(default_factory=dict)
     calibration: dict = field(default_factory=dict)
     base_load_floor: dict = field(default_factory=dict)
+    # Keyed by wallbox device_id — see WallboxChargeCalibrator.diagnostics.
+    wallbox_max_charge: dict[str, dict] = field(default_factory=dict)
     load_profile: dict = field(default_factory=dict)
     active_solar_offset_h: float = 0.0
     next_cycle_at: datetime | None = None
@@ -1447,6 +1449,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             min_soc=min_soc,
             calibration=self._calibrator.diagnostics,
             base_load_floor=self._base_load_floor_calibrator.diagnostics,
+            wallbox_max_charge={
+                dev_id: calibrator.diagnostics
+                for dev_id, calibrator in self._wallbox_charge_calibrators.items()
+            },
             active_solar_offset_h=self._last_offset_h,
             next_cycle_at=dt_util.utcnow() + timedelta(seconds=UPDATE_INTERVAL_SECONDS),
             soc_gain_today=soc_gain_today,

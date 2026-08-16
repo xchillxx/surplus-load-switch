@@ -40,9 +40,11 @@ async def async_setup_entry(
     # predicted-power diagnostics for them — their own power_sensor already
     # shows live power directly.
     for dev in entry.data.get(CONF_DEVICES, []):
-        if not dev.get(CONF_DEVICE_IS_WALLBOX, False):
-            entities.append(PVDevicePowerSensor(coordinator, entry, dev))
-            entities.append(PVDeviceSwitchCountdownSensor(coordinator, entry, dev))
+        if dev.get(CONF_DEVICE_IS_WALLBOX, False):
+            entities.append(PVWallboxMaxChargeSensor(coordinator, entry, dev))
+            continue
+        entities.append(PVDevicePowerSensor(coordinator, entry, dev))
+        entities.append(PVDeviceSwitchCountdownSensor(coordinator, entry, dev))
     async_add_entities(entities)
 
 
@@ -482,3 +484,46 @@ class PVDeviceSwitchCountdownSensor(_PVDeviceSensorBase):
         if not self.coordinator.data:
             return None
         return self.coordinator.data.device_diagnostics.get(self._device_id)
+
+
+class PVWallboxMaxChargeSensor(_PVDeviceSensorBase):
+    """Only meaningful on a wallbox device: the rolling 30-day maximum
+    this wallbox's own power sensor has actually reported — the *learned*
+    figure coordinator._wallbox_reserved_kw falls back to whenever the
+    manual "Maximale Ladeleistung" number is left at 0. Kept as its own
+    read-only sensor rather than folded into that number entity, so it's
+    visible even while nobody has ever touched the manual override —
+    otherwise there'd be no way to see what the system is actually using
+    as the cap without reading the log or the Store file directly."""
+
+    _attr_name = "Gelernte max. Ladeleistung"
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:ev-station"
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_{self._device_id}_wallbox_max_charge"
+
+    @property
+    def native_value(self):
+        diag = self._wallbox_diag
+        if not diag:
+            return None
+        return diag.get("max_charge_kw")
+
+    @property
+    def extra_state_attributes(self):
+        diag = self._wallbox_diag
+        if not diag:
+            return {}
+        return {
+            "stundenwerte": diag.get("stundenwerte"),
+            "zuletzt_kalibriert": diag.get("zuletzt_kalibriert"),
+        }
+
+    @property
+    def _wallbox_diag(self):
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.wallbox_max_charge.get(self._device_id)
