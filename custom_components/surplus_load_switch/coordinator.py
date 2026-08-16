@@ -49,7 +49,7 @@ from .const import (
     CONF_SOLAR_FORECAST_REMAINING_ENTITY,
     CONF_SOLAR_OFFSETS,
     CONF_SOLAR_SENSOR,
-    CONF_WALLBOX_BATTERY_CAPACITY_KWH,
+    CONF_WALLBOX_CAPACITY_ENTITY,
     CONF_WALLBOX_MAX_CHARGE_KW,
     CONF_WALLBOX_SATISFIED_KW,
     CONF_WALLBOX_SOC_ENTITY,
@@ -921,15 +921,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         held back from other devices for a share the wallbox couldn't
         draw anyway.
         """
-        capacity_kwh = wallbox_dev.get(CONF_WALLBOX_BATTERY_CAPACITY_KWH)
+        capacity_entity = wallbox_dev.get(CONF_WALLBOX_CAPACITY_ENTITY)
         soc_entity = wallbox_dev.get(CONF_WALLBOX_SOC_ENTITY)
         target_entity = wallbox_dev.get(CONF_WALLBOX_TARGET_SOC_ENTITY)
-        if not capacity_kwh or not soc_entity or not target_entity:
+        if not capacity_entity or not soc_entity or not target_entity:
             return 0.0
 
+        capacity_kwh = _safe_float(self.hass.states.get(capacity_entity))
         current_soc = _safe_float(self.hass.states.get(soc_entity))
         target_soc = _safe_float(self.hass.states.get(target_entity))
-        if current_soc is None or target_soc is None:
+        if capacity_kwh is None or current_soc is None or target_soc is None:
             return 0.0
 
         missing_kwh = max(capacity_kwh * (target_soc - current_soc) / 100.0, 0.0)
@@ -1633,7 +1634,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         wallbox_reserved_kw = sum(
             self._wallbox_reserved_kw(wb, now, available_surplus)
             for wb in wallbox_devices
-            if wb.get(CONF_WALLBOX_BATTERY_CAPACITY_KWH)
+            if wb.get(CONF_WALLBOX_CAPACITY_ENTITY)
         )
         available_surplus -= wallbox_reserved_kw
         data.wallbox_reserved_kw = wallbox_reserved_kw

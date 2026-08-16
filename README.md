@@ -110,8 +110,10 @@ cloud passes over or another appliance briefly kicks in.
 - **Dynamic wallbox surplus reservation** — a wallbox can also reserve a
   share of the current surplus for itself before the device cascade
   competes for the rest, without blocking anything outright. Set the
-  car's battery capacity plus its current-SOC and target-SOC sensors
-  (e.g. from a Tesla/EV integration) and the reservation is computed
+  car's capacity, current-SOC, and target-SOC entities (e.g. from a
+  Tesla/EV integration, or a spot-price charge scheduler add-on for
+  capacity specifically — point at whatever already tracks it instead
+  of re-entering a number by hand) and the reservation is computed
   fresh every cycle from how many kWh are still missing to the target
   and the current *shape* of the day: with an optional solar-forecast
   sensor configured (e.g. Forecast.Solar's "kWh still to come today"),

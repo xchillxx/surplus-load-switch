@@ -33,6 +33,7 @@ from .const import (
     CONF_LOAD_SENSOR,
     CONF_SOC_SENSOR,
     CONF_SOLAR_SENSOR,
+    CONF_WALLBOX_CAPACITY_ENTITY,
     CONF_WALLBOX_SOC_ENTITY,
     CONF_WALLBOX_TARGET_SOC_ENTITY,
     DOMAIN,
@@ -67,6 +68,7 @@ async def async_setup_entry(
         entities.append(PVDeviceDependsOnSelect(coordinator, entry, dev, devices))
     for dev in devices:
         if dev.get(CONF_DEVICE_IS_WALLBOX, False):
+            entities.append(PVWallboxCapacitySelect(coordinator, entry, dev))
             entities.append(PVWallboxSocSelect(coordinator, entry, dev))
             entities.append(PVWallboxTargetSocSelect(coordinator, entry, dev))
     async_add_entities(entities)
@@ -221,7 +223,7 @@ class _PVDeviceOptionalEntitySelect(_PVDeviceSelectBase):
     """Shared logic for an optional per-device entity-reference field:
     any entity in _domain, or the SELECT_NONE sentinel to clear it."""
 
-    _domain: str = ""
+    _domain: str | tuple[str, ...] = ""
 
     @property
     def options(self) -> list[str]:
@@ -268,13 +270,36 @@ class PVDeviceScheduleSelect(_PVDeviceOptionalEntitySelect):
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_schedule_select"
 
 
+class PVWallboxCapacitySelect(_PVDeviceOptionalEntitySelect):
+    """Only meaningful on a wallbox device: the car's total usable
+    battery capacity, as an entity reference rather than a plain number
+    — several EV/charging integrations (e.g. a spot-price charge
+    scheduler) already track and recalibrate this themselves, so
+    pointing at that existing entity means it's never re-entered by
+    hand or goes stale here when the source recalibrates. Together with
+    the SOC/target-SOC entities below, lets
+    coordinator._wallbox_reserved_kw work out how many kWh are still
+    missing to the charge target. number or sensor domain, since
+    capacity trackers show up as either depending on the integration."""
+
+    _field = CONF_WALLBOX_CAPACITY_ENTITY
+    _domain = ("number", "sensor")
+    _attr_name = "Akkukapazität-Entität Auto"
+    _attr_icon = "mdi:car-battery"
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_capacity_select"
+
+
 class PVWallboxSocSelect(_PVDeviceOptionalEntitySelect):
     """Only meaningful on a wallbox device: the car's own current-SOC
     sensor (e.g. from a Tesla/EV integration) — together with the
-    target-SOC entity below and the battery-capacity number, lets
+    target-SOC entity below and the capacity entity above, lets
     coordinator._wallbox_reserved_kw compute how many kWh are still
-    missing to the charge target. See CONF_WALLBOX_BATTERY_CAPACITY_KWH
-    in const.py for the full reasoning."""
+    missing to the charge target."""
 
     _field = CONF_WALLBOX_SOC_ENTITY
     _domain = "sensor"

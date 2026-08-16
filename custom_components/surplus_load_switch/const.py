@@ -115,7 +115,12 @@ CONF_WALLBOX_WEAK_DAY_PRIORITY = "wallbox_weak_day_priority"
 # never blocks them outright, and it eases off on its own as the car
 # approaches its target or as more raw surplus becomes available. All
 # three optional/0-or-unset means the reservation is inactive.
-CONF_WALLBOX_BATTERY_CAPACITY_KWH = "wallbox_battery_capacity_kwh"
+# An entity reference, not a plain number — several EV integrations
+# (e.g. a spot-price charge scheduler add-on) already track and
+# recalibrate the car's real usable capacity themselves; pointing at
+# that existing entity means it never needs to be re-entered by hand or
+# go stale here when the source recalibrates.
+CONF_WALLBOX_CAPACITY_ENTITY = "wallbox_capacity_entity"
 CONF_WALLBOX_SOC_ENTITY = "wallbox_soc_entity"
 CONF_WALLBOX_TARGET_SOC_ENTITY = "wallbox_target_soc_entity"
 # Optional: caps the reservation above at whatever the car/charger can
@@ -137,7 +142,7 @@ BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
 # _wallbox_satisfied's idle-release check — low enough that a genuinely
 # charging car is never mistaken for an idle one.
 WALLBOX_IDLE_THRESHOLD_KW = 0.3
-# The dynamic wallbox reservation (CONF_WALLBOX_BATTERY_CAPACITY_KWH etc.)
+# The dynamic wallbox reservation (CONF_WALLBOX_CAPACITY_ENTITY etc.)
 # targets sunset minus this many hours, not sunset itself — a safety
 # margin so the car isn't still counting on the literal last minute of
 # daylight, mirroring MIN_RUNTIME_FORCE_BUFFER_H's role for min-runtime
