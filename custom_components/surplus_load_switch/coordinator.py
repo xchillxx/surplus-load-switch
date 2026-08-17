@@ -23,6 +23,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BATTERY_FULL_TARGET_TIME_BUFFER_H,
     BATT_OK_BUFFER_H,
     CALIBRATION_INTERVAL_HOURS,
     CONF_BATT_SENSOR,
@@ -191,6 +192,11 @@ class CoordinatorData:
     peak_soc_gain_today: float = 0.0
     reference_soc_gain: float | None = None
     is_weak_day: bool = False
+    # See coordinator._battery_full_projection.
+    battery_full_missing_kwh: float = 0.0
+    battery_full_hours_needed: float | None = None
+    battery_full_hours_until_deadline: float | None = None
+    battery_full_on_track: bool = False
 
 
 class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
@@ -967,6 +973,51 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             reserved_kw = min(reserved_kw, max_charge_kw)
         return min(reserved_kw, max(available_surplus, 0.0))
 
+    def _battery_full_projection(
+        self, soc: float, batt: float, battery_kwh: float, now: datetime
+    ) -> tuple[float, float | None, float | None, bool]:
+        """Whether the house battery is on track to reach
+        WEAK_DAY_BATTERY_FULL_SOC by sunset minus a safety margin,
+        projected from the *current* live charge rate — a rough,
+        live-snapshot estimate (no smoothing of its own, unlike the
+        discharge-rate projection elsewhere in this file), since this is
+        diagnostic-only and not itself a switching input. Confirmed
+        useful live: on a "weak day" that's nonetheless charging
+        strongly right now, a five-minute mental calculation (missing
+        kWh ÷ current charge rate vs. hours left) already answers "will
+        it make it" far more usefully than the weak-day flag alone,
+        which only looks backward at today's gain so far, never forward.
+
+        Returns (missing_kwh, hours_needed, hours_until_deadline,
+        on_track). hours_needed is None while the battery isn't
+        genuinely charging right now (can't project a rate of ~0
+        forward — that's "stalled", not "will take forever" the way a
+        naive division would suggest). on_track is True outright once
+        missing_kwh is already ~0.
+        """
+        missing_kwh = max(battery_kwh * (WEAK_DAY_BATTERY_FULL_SOC - soc) / 100.0, 0.0)
+        if missing_kwh <= 0:
+            return 0.0, 0.0, None, True
+
+        charge_kw = max(batt, 0.0)
+        hours_needed = missing_kwh / charge_kw if charge_kw > 0.05 else None
+
+        sun = self.hass.states.get("sun.sun")
+        next_setting_raw = sun.attributes.get("next_setting") if sun is not None else None
+        if isinstance(next_setting_raw, datetime):
+            next_setting = next_setting_raw
+        elif isinstance(next_setting_raw, str):
+            next_setting = dt_util.parse_datetime(next_setting_raw)
+        else:
+            next_setting = None
+        if next_setting is None:
+            return missing_kwh, hours_needed, None, False
+
+        deadline = next_setting - timedelta(hours=BATTERY_FULL_TARGET_TIME_BUFFER_H)
+        hours_until_deadline = max((deadline - now).total_seconds() / 3600.0, 0.0)
+        on_track = hours_needed is not None and hours_needed <= hours_until_deadline
+        return missing_kwh, hours_needed, hours_until_deadline, on_track
+
     def _effective_cutoff(
         self,
         dev: dict,
@@ -1340,6 +1391,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         battery_kwh = self._config.get(CONF_BATTERY_CAPACITY_KWH, 13.8)
         min_soc = self._config.get(CONF_MIN_SOC, 20.0)
 
+        (
+            battery_full_missing_kwh,
+            battery_full_hours_needed,
+            battery_full_hours_until_deadline,
+            battery_full_on_track,
+        ) = self._battery_full_projection(soc, batt, battery_kwh, dt_util.utcnow())
+
         # Weak-day detection: capture the battery's SOC the moment solar
         # production starts today (see SOLAR_START_MIN_KW), then compare
         # how much it's gained since against the calibrated "normal" gain
@@ -1473,6 +1531,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             peak_soc_gain_today=self._today_peak_soc_gain,
             reference_soc_gain=reference_soc_gain,
             is_weak_day=is_weak_day,
+            battery_full_missing_kwh=battery_full_missing_kwh,
+            battery_full_hours_needed=battery_full_hours_needed,
+            battery_full_hours_until_deadline=battery_full_hours_until_deadline,
+            battery_full_on_track=battery_full_on_track,
         )
 
         await self._evaluate_devices(data)

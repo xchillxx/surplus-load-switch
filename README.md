@@ -250,6 +250,14 @@ cloud passes over or another appliance briefly kicks in.
   plugged in — rather than holding other devices back for nothing while
   the surplus would otherwise just go unused to the grid. Optional and
   off by default.
+- **Will the battery reach full in time?** — a forward-looking
+  counterpart to weak-day detection above, which only ever looks
+  backward at today's gain so far. Projects from the *current* live
+  charge rate whether the battery is on track to reach its "essentially
+  full" threshold by sunset minus a safety margin — a "Akku wird
+  rechtzeitig voll" binary sensor, with the missing kWh and both hour
+  figures as attributes. Diagnostic only, doesn't affect any switching
+  decision.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
   Devices & Services, nested under the integration's hub device, instead of

@@ -197,6 +197,12 @@ WEAK_DAY_EARLIEST_CHECK_HOUR = 11
 # priority devices held back purely because production is weak; the
 # battery doesn't need the surplus either way.
 WEAK_DAY_BATTERY_FULL_SOC = 95.0
+# The house battery's own "will it reach full in time" projection targets
+# sunset minus this many hours, not sunset itself — same reasoning as
+# WALLBOX_TARGET_TIME_BUFFER_H (a separate constant, not shared, since
+# the two features are conceptually independent even though the number
+# happens to start the same).
+BATTERY_FULL_TARGET_TIME_BUFFER_H = 2.0
 
 # h_to_solar ("hours until solar_start") is the time until the *next*
 # calibrated morning threshold — once today's has already passed, that's
