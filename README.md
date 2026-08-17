@@ -134,10 +134,14 @@ cloud passes over or another appliance briefly kicks in.
   maximum this wallbox's own power sensor has actually reported over the
   last 30 days — adjusts on its own as reality changes (3-phase summer
   charging vs. a single-phase winter fallback, a different car) instead
-  of a number that quietly goes stale. All optional; leaving the
-  capacity or either SOC sensor unset disables the whole reservation.
-  This is separate from and complements the weak-day priority above,
-  which still applies unchanged on a detected weak day.
+  of a number that quietly goes stale. An optional presence entity
+  (a binary_sensor "plugged in" or a device_tracker) keeps the
+  reservation from holding surplus back for a car that's simply not
+  there — the SOC/target-SOC entities only ever hold the last known
+  reading, which stays whatever it was when the car left. All optional;
+  leaving the capacity or either SOC sensor unset disables the whole
+  reservation. This is separate from and complements the weak-day
+  priority above, which still applies unchanged on a detected weak day.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's

@@ -128,6 +128,16 @@ CONF_WALLBOX_TARGET_SOC_ENTITY = "wallbox_target_soc_entity"
 # large the remaining deficit is. 0/unset means no cap beyond whatever
 # surplus genuinely exists.
 CONF_WALLBOX_MAX_CHARGE_KW = "wallbox_max_charge_kw"
+# Optional: a binary_sensor ("plugged in"/"connected", on = present) or
+# device_tracker (state "home"/"not_home") — the SOC/target-SOC entities
+# only ever hold the car's *last known* reading, which stays whatever it
+# was when the car left, so without this the reservation would happily
+# hold surplus back for a car that's nowhere near the wallbox. Confirmed
+# live: SOC below target while genuinely away held back real surplus for
+# hours with nothing to actually charge. Unset means no presence check
+# at all (matches pre-existing behavior for installs that don't need
+# one, e.g. a car that's always home).
+CONF_WALLBOX_PRESENT_ENTITY = "wallbox_present_entity"
 # Per-device "enabled" toggle — exposed as a live switch entity (switch.py),
 # not a config-flow field, since it's meant for a quick vacation-style
 # on/off rather than something you configure once at setup. Absent/True

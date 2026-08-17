@@ -35,6 +35,7 @@ from .const import (
     CONF_SOLAR_SENSOR,
     CONF_WALLBOX_CAPACITY_ENTITY,
     CONF_WALLBOX_SOC_ENTITY,
+    CONF_WALLBOX_PRESENT_ENTITY,
     CONF_WALLBOX_TARGET_SOC_ENTITY,
     DOMAIN,
     SELECT_NONE,
@@ -71,6 +72,7 @@ async def async_setup_entry(
             entities.append(PVWallboxCapacitySelect(coordinator, entry, dev))
             entities.append(PVWallboxSocSelect(coordinator, entry, dev))
             entities.append(PVWallboxTargetSocSelect(coordinator, entry, dev))
+            entities.append(PVWallboxPresentSelect(coordinator, entry, dev))
     async_add_entities(entities)
 
 
@@ -328,6 +330,28 @@ class PVWallboxTargetSocSelect(_PVDeviceOptionalEntitySelect):
     ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_target_soc_select"
+
+
+class PVWallboxPresentSelect(_PVDeviceOptionalEntitySelect):
+    """Only meaningful on a wallbox device: a binary_sensor ("plugged
+    in") or device_tracker (the car itself) that tells
+    coordinator._wallbox_reserved_kw whether the car is actually there
+    to charge — without this, the SOC/target-SOC entities only ever
+    hold the last reading from whenever the car left, so the reservation
+    would happily hold surplus back for a car that's nowhere nearby.
+    Unset disables the presence check entirely (matches the prior
+    behavior for installs that don't need one)."""
+
+    _field = CONF_WALLBOX_PRESENT_ENTITY
+    _domain = ("binary_sensor", "device_tracker")
+    _attr_name = "Anwesenheits-Entität Auto"
+    _attr_icon = "mdi:car-connected"
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_present_select"
 
 
 class PVDeviceDependsOnSelect(_PVDeviceSelectBase):

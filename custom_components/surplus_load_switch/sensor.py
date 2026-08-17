@@ -26,6 +26,7 @@ async def async_setup_entry(
     entities: list[SensorEntity] = [
         PVSurplusSensor(coordinator, entry),
         PVBaseLoadSensor(coordinator, entry),
+        PVWallboxReservedSensor(coordinator, entry),
         PVHBatterySensor(coordinator, entry),
         PVHToSolarSensor(coordinator, entry),
         PVModeSensor(coordinator, entry),
@@ -160,6 +161,29 @@ class PVBaseLoadSensor(_PVSensorBase):
         if not self.coordinator.data:
             return {}
         return self.coordinator.data.base_load_floor
+
+
+class PVWallboxReservedSensor(_PVSensorBase):
+    """Sum of every wallbox's dynamic surplus reservation this cycle —
+    same reasoning as PVBaseLoadSensor above: its own entity (not just
+    the wallbox_reserviert_kw attribute on Überschuss, kept there too
+    for convenience) so it gets its own recorder history instead of
+    always opening Überschuss's graph when tapped."""
+
+    _attr_name = "Wallbox reserviert"
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:ev-station"
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_wallbox_reserved"
+
+    @property
+    def native_value(self):
+        if self.coordinator.data:
+            return round(self.coordinator.data.wallbox_reserved_kw, 3)
+        return None
 
 
 class PVHBatterySensor(_PVSensorBase):
@@ -430,13 +454,24 @@ def _switch_countdown(diag: DeviceDiagnostics) -> tuple[int, str | None]:
     off) actually fires, if current conditions keep holding, and which
     direction that is — (0, None) while nothing is pending (stable on,
     stable off, or being force-managed by a window/dependency, which acts
-    immediately with no buffer)."""
+    immediately with no buffer).
+
+    on_counter keeps pre-charging while blocked by an unmet dependency —
+    a deliberate choice (see coordinator._evaluate_devices) so the device
+    is ready to join *instantly* the moment its dependency clears, rather
+    than waiting out a fresh hold afterward. But reaching 0 here does NOT
+    by itself mean it's about to switch on if the dependency is still
+    unmet at that point — the richtung text says so explicitly instead
+    of reading like a plain "switches on in Xs" countdown, which was
+    confirmed live to be genuinely misleading (Pool-WP showing a
+    countdown the whole time its dependency was off)."""
     if diag.off_counter > 0:
         remaining_cycles = max(diag.required_off_cycles - diag.off_counter, 0)
         return remaining_cycles * UPDATE_INTERVAL_SECONDS, "ausschalten"
     if diag.on_counter > 0:
         remaining_cycles = max(diag.required_on_cycles - diag.on_counter, 0)
-        return remaining_cycles * UPDATE_INTERVAL_SECONDS, "einschalten"
+        richtung = "einschalten" if diag.dependency_met else "einschalten — sobald Abhängigkeit erfüllt"
+        return remaining_cycles * UPDATE_INTERVAL_SECONDS, richtung
     return 0, None
 
 

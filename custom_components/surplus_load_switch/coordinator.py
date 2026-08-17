@@ -51,6 +51,7 @@ from .const import (
     CONF_SOLAR_SENSOR,
     CONF_WALLBOX_CAPACITY_ENTITY,
     CONF_WALLBOX_MAX_CHARGE_KW,
+    CONF_WALLBOX_PRESENT_ENTITY,
     CONF_WALLBOX_SATISFIED_KW,
     CONF_WALLBOX_SOC_ENTITY,
     CONF_WALLBOX_TARGET_SOC_ENTITY,
@@ -936,6 +937,18 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         missing_kwh = max(capacity_kwh * (target_soc - current_soc) / 100.0, 0.0)
         if missing_kwh <= 0:
             return 0.0
+
+        # The SOC/target-SOC entities only ever hold the car's last known
+        # reading — if it's away, that's whatever it was when it left,
+        # not "0% missing". Without a presence check there'd be no way to
+        # tell "genuinely needs to charge" apart from "not here to charge
+        # at all" — confirmed live: SOC below target while away held back
+        # real surplus for hours with nothing to actually use it.
+        present_entity = wallbox_dev.get(CONF_WALLBOX_PRESENT_ENTITY)
+        if present_entity:
+            present_state = self.hass.states.get(present_entity)
+            if present_state is None or present_state.state in ("off", "not_home"):
+                return 0.0
 
         reserved_kw = self._wallbox_reservation_rate(missing_kwh, now, available_surplus)
         if reserved_kw is None:
@@ -2123,6 +2136,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # einschalten" countdown) for the rest of the evening right
             # after every window close, even though it can't actually turn
             # on until blocked clears regardless.
+            #
+            # An unmet dependency deliberately does NOT get this treatment
+            # — pre-charging on_counter while waiting on a dependency is
+            # kept on purpose (the user's explicit choice: a device like
+            # Pool-WP should be ready to join *instantly* the moment its
+            # dependency clears, not wait out a fresh ~10-cycle hold
+            # afterward, even though that means it can sit "primed" for a
+            # while with nothing visibly changing). See diag.dependency_met
+            # / _switch_countdown in sensor.py for how the *display* still
+            # tells this apart from a genuine imminent switch-on.
             if window_far_closed and not is_on:
                 tracker.on_counter = 0
                 tracker.off_counter = 0
@@ -2280,11 +2303,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 decision_reason = (
                     f"Überschuss/Akku würden bereits ausreichen ("
                     f"{remaining_surplus:.2f} kW verfügbar, {predicted_power:.2f} kW "
-                    f"benötigt) — wartet noch auf {wartet_auf}"
+                    f"benötigt) — bereit, wartet noch auf {wartet_auf}"
                 )
                 titel = (
                     "Vorbereitet — wartet auf Zeitfenster" if window_closed
-                    else "Vorbereitet — wartet auf Abhängigkeit"
+                    else "Bereit — wartet auf Abhängigkeit"
                 )
                 await self._log_decision(dev, False, titel, decision_reason)
             elif should_on:
