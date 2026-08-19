@@ -184,11 +184,18 @@ cloud passes over or another appliance briefly kicks in.
 - **Minimum daily runtime** — set an optional target (e.g. a pool pump that
   needs to filter for 4h/day for hygiene). It's never denied its normal
   chance to reach that for free on surplus/battery power earlier in the day.
-  Forcing (potentially on grid power) only kicks in once there's no longer
-  enough time left to catch up for free: for a device with a configured time
-  window, that means once the time remaining until the window closes is no
-  longer enough for the still-missing hours plus a safety margin; for a
-  device with no window at all, once today's solar peak has passed.
+  Forcing (potentially on grid power) kicks in from either of two triggers:
+  with an optional solar-forecast sensor configured, as soon as this
+  device's own remaining energy need already amounts to more than about
+  half of *all* the solar the forecast still expects today — catching a
+  visibly weak day around midday instead of only at dusk, before an
+  under-charged battery gets drawn down further right when the coming
+  night needs it most. Otherwise (or as a fallback either way, in case the
+  forecast hasn't flagged trouble yet): once there's no longer enough time
+  left to catch up for free — for a device with a configured time window,
+  once the time remaining until the window closes is no longer enough for
+  the still-missing hours plus a safety margin; for a device with no
+  window at all, once today's solar peak has passed.
 - **Per-device battery reserve** — set an optional SOC floor (%): once the
   battery drops below it, that device gets forced off to protect the
   reserve. This only ever cuts an already-running device off — it never

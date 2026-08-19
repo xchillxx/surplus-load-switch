@@ -368,6 +368,17 @@ MIN_RUNTIME_FORCE_AFTER_HOUR = 12
 # transient block (SOC reserve, unmet dependency) eats into the runway,
 # rather than starting at the exact last possible instant with zero slack.
 MIN_RUNTIME_FORCE_BUFFER_H = 1.0
+# Forecast-based early trigger (see coordinator._force_runtime_active):
+# once this device's own remaining energy need (missing hours × its
+# predicted power) reaches this fraction of *all* solar the forecast
+# still expects today, force now instead of waiting for the deadline
+# trigger above. 0.5 is deliberately conservative — a single device
+# realistically can't count on more than about half of whatever solar
+# is left once the house's own base load and every other device are
+# also competing for it. Only applies when
+# CONF_SOLAR_FORECAST_REMAINING_ENTITY is configured; the deadline
+# trigger is the fallback either way.
+FORCE_RUNTIME_FORECAST_SHARE_MAX = 0.5
 
 # --- Self-calibrating solar-start offset ---
 # Learns DEFAULT_SOLAR_OFFSETS from the system's own historical solar

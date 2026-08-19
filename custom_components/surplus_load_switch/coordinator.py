@@ -67,6 +67,7 @@ from .const import (
     MARGIN_FOR_MAX_PATIENCE_H,
     MAX_BATTERY_OPTIMIZATION_DEVICES,
     MIN_RUNTIME_FORCE_AFTER_HOUR,
+    FORCE_RUNTIME_FORECAST_SHARE_MAX,
     MIN_RUNTIME_FORCE_BUFFER_H,
     MIN_SAMPLES_FOR_MEASURED_AVG,
     OFF_CYCLES_FLOOR,
@@ -818,23 +819,54 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         return local_now >= solar_noon_today
 
     def _force_runtime_active(
-        self, dev: dict, now: datetime, runtime_hours_today: float
+        self, dev: dict, now: datetime, runtime_hours_today: float, predicted_power_kw: float
     ) -> bool:
         """Whether the minimum-daily-runtime target must be forced on
         right now, regardless of surplus/battery.
 
-        A device with a real window (schedule.* or window_end) is forced
-        once the time remaining until that window closes — plus
-        MIN_RUNTIME_FORCE_BUFFER_H of safety margin — is no longer enough
-        to freely reach the still-missing hours on its own, guaranteeing
-        the target lands before the window shuts rather than after.
-        Windowless devices fall back to the fixed solar-noon trigger
-        instead, since there's no window end to measure against.
+        Two independent triggers, whichever fires first:
+
+        1. Forecast-based, early: if CONF_SOLAR_FORECAST_REMAINING_ENTITY
+           is configured, and this device's own remaining energy need
+           (missing hours × its predicted power) already amounts to more
+           than FORCE_RUNTIME_FORECAST_SHARE_MAX of *all* solar the
+           forecast still expects today, the day's unlikely to deliver
+           enough free surplus for this device alongside everything else
+           the house needs — force now rather than wait. This is what
+           lets a device start catching up around midday on a visibly
+           weak day, instead of only in the evening once it's too late
+           to do anything but draw straight off the battery. Confirmed
+           live: waiting for the deadline trigger below meant Pool-Pumpe
+           only started forcing at dusk on a weak day, drawing ~2.5 kWh
+           straight from an already under-charged battery right before
+           an already-tight night.
+
+        2. Deadline-based, the original fallback: a device with a real
+           window (schedule.* or window_end) is forced once the time
+           remaining until that window closes — plus
+           MIN_RUNTIME_FORCE_BUFFER_H of safety margin — is no longer
+           enough to freely reach the still-missing hours on its own,
+           guaranteeing the target lands before the window shuts rather
+           than after. Windowless devices fall back to the fixed
+           solar-noon trigger instead, since there's no window end to
+           measure against. Always active regardless of the forecast
+           trigger above (e.g. no forecast entity configured, or the
+           forecast simply hasn't flagged trouble yet) — the last-resort
+           guarantee that the target still gets hit one way or another.
         """
         min_daily_runtime_h = dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
         if min_daily_runtime_h is None or runtime_hours_today >= min_daily_runtime_h:
             return False
         missing_h = min_daily_runtime_h - runtime_hours_today
+
+        forecast_entity = self._config.get(CONF_SOLAR_FORECAST_REMAINING_ENTITY)
+        forecast_remaining_kwh = (
+            _safe_float(self.hass.states.get(forecast_entity)) if forecast_entity else None
+        )
+        if forecast_remaining_kwh is not None:
+            missing_kwh = missing_h * predicted_power_kw
+            if missing_kwh >= forecast_remaining_kwh * FORCE_RUNTIME_FORECAST_SHARE_MAX:
+                return True
 
         own_window_end = self._own_window_end(dev, now)
         if own_window_end is not None:
@@ -1942,7 +1974,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # ordering reason.
             _runtime_tracker = self._runtime_trackers.get(_device_id)
             _runtime_hours_today = _runtime_tracker.hours_today if _runtime_tracker is not None else 0.0
-            _force_runtime = self._force_runtime_active(_dev, now_dt, _runtime_hours_today)
+            _force_runtime = self._force_runtime_active(
+                _dev, now_dt, _runtime_hours_today, _predicted_power
+            )
 
             _blocked = _window_closed or not _dependency_met
             if _blocked:
@@ -2052,7 +2086,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # never denied its normal surplus/battery-driven chance to reach
             # the target for free earlier in the day.
             min_daily_runtime_h = dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
-            force_runtime = self._force_runtime_active(dev, now_dt, runtime_hours_today)
+            force_runtime = self._force_runtime_active(
+                dev, now_dt, runtime_hours_today, predicted_power
+            )
             diag.force_runtime = force_runtime
 
             # Some devices physically can't do anything unless another
