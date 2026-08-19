@@ -96,23 +96,12 @@ CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that mus
 # _wallbox_satisfied (car not charging at all, sustained) needs no config
 # beyond the wallbox's own required power_sensor.
 CONF_WALLBOX_SATISFIED_KW = "wallbox_satisfied_kw"
-# A wallbox is never itself ranked/switched by the cascade, but on a
-# detected weak day (see WEAK_DAY_* below) it still needs an effective
-# priority to compare other devices against: any candidate device whose
-# own priority is this number or worse (higher) gets held off entirely
-# until the battery's nearly full — the wallbox takes over that priority
-# slot for the day, the car gets first claim on a scarce day and
-# everything from there on down waits. 0/unset disables the feature for
-# this wallbox.
-CONF_WALLBOX_WEAK_DAY_PRIORITY = "wallbox_weak_day_priority"
-# Soft, everyday counterpart to CONF_WALLBOX_WEAK_DAY_PRIORITY above: on
-# an *ordinary* day (not flagged weak), a fixed kW slice of the current
-# surplus is reserved for the wallbox — computed dynamically from how
-# much energy it still needs to reach its target and how much daylight
-# is realistically left, rather than a flat number — before the device
-# cascade even sees the rest. Unlike the weak-day mechanism, this is
-# graduated: it only ever shrinks what other devices compete for, it
-# never blocks them outright, and it eases off on its own as the car
+# On an ordinary day, a fixed kW slice of the current surplus is reserved
+# for the wallbox — computed dynamically from how much energy it still
+# needs to reach its target and how much daylight is realistically left,
+# rather than a flat number — before the device cascade even sees the
+# rest. Graduated: it only ever shrinks what other devices compete for,
+# it never blocks them outright, and it eases off on its own as the car
 # approaches its target or as more raw surplus becomes available. All
 # three optional/0-or-unset means the reservation is inactive.
 # An entity reference, not a plain number — several EV integrations
@@ -171,31 +160,20 @@ WALLBOX_TARGET_MIN_HOURS = 0.25
 # correctly claiming ~100% of whatever's left.
 WALLBOX_FORECAST_MIN_KWH = 0.5
 
-# --- Weak-day detection ---
+# --- Solar-start / battery-full reference tracking ---
 # Solar power (kW) above which today counts as "producing" for the purpose
 # of capturing the battery's baseline SOC at solar start — an absolute
 # value, not a fraction of today's own peak (unlike CALIBRATION_THRESHOLD_
 # RATIO above), since live tracking can't know today's peak in advance the
 # way the historical offset calibration can.
 SOLAR_START_MIN_KW = 0.3
-# Today counts as "weak" once the battery's SOC gain since solar start
-# drops below this fraction of the calibrated reference gain for this
-# calendar month (see SolarOffsetCalibrator.reference_soc_gain) —
-# comparing against a learned normal for the time of year, not a fixed kW
-# or %-SOC value. SOC gain (not raw solar power) is used because charging
-# naturally integrates production over time, so a brief sun break through
-# passing clouds barely moves it, and because it already reflects
-# whatever the house consumed along the way — both of which a simple
-# instantaneous solar-power peak or reading would misjudge.
-WEAK_DAY_RATIO_THRESHOLD = 0.6
-# Don't judge a day "weak" before this local hour — the morning peak may
-# simply not have happened yet, which would otherwise look identical to a
-# genuinely overcast day for the first few hours of every single morning.
+# Local hour before which the calibrated reference SOC-gain-since-solar-
+# start isn't checked — the morning peak may simply not have happened yet.
 WEAK_DAY_EARLIEST_CHECK_HOUR = 11
-# Battery SOC at/above which a weak day's extra caution no longer applies
-# — once the battery's essentially full, there's no reason to keep low-
-# priority devices held back purely because production is weak; the
-# battery doesn't need the surplus either way.
+# Battery SOC at/above which the battery counts as essentially full for
+# the day (see coordinator._battery_full_projection) — there's no reason
+# to keep low-priority devices held back once the battery doesn't need
+# the surplus anymore.
 WEAK_DAY_BATTERY_FULL_SOC = 95.0
 # The house battery's own "will it reach full in time" projection targets
 # sunset minus this many hours, not sunset itself — same reasoning as

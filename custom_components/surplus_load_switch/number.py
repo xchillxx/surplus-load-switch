@@ -26,7 +26,6 @@ from .const import (
     CONF_MIN_SOC,
     CONF_WALLBOX_MAX_CHARGE_KW,
     CONF_WALLBOX_SATISFIED_KW,
-    CONF_WALLBOX_WEAK_DAY_PRIORITY,
     DOMAIN,
 )
 from .coordinator import PVSurplusCoordinator
@@ -44,7 +43,6 @@ async def async_setup_entry(
     for dev in entry.data.get(CONF_DEVICES, []):
         if dev.get(CONF_DEVICE_IS_WALLBOX, False):
             entities.append(PVWallboxSatisfiedKwNumber(coordinator, entry, dev))
-            entities.append(PVWallboxWeakDayPriorityNumber(coordinator, entry, dev))
             entities.append(PVWallboxMaxChargeKwNumber(coordinator, entry, dev))
             continue
         entities.append(PVDevicePriorityNumber(coordinator, entry, dev))
@@ -315,44 +313,6 @@ class PVWallboxSatisfiedKwNumber(_PVDeviceNumberBase):
 
     async def async_set_native_value(self, value: float) -> None:
         await self._async_write(value if value > 0 else None)
-
-
-class PVWallboxWeakDayPriorityNumber(_PVDeviceNumberBase):
-    """Only meaningful on a wallbox device: this wallbox's effective
-    priority on a detected weak day, even though it's never itself
-    switched or ranked by the cascade otherwise. Any candidate device
-    whose own priority is this number or worse (higher) gets held off
-    entirely on that day, until the battery's nearly full — the wallbox
-    takes over that priority slot for the day (a device at the *same*
-    priority number counts as behind it, not tied with it), the car gets
-    first claim on a scarce day and everything from there on down waits.
-    0 ("not set") disables this for the wallbox; it needs the solar-start
-    calibration to actually have a reference peak for the current month
-    before it can do anything either way, so it's off by default even
-    once set on a fresh or not-yet-calibrated install."""
-
-    _field = CONF_WALLBOX_WEAK_DAY_PRIORITY
-    _attr_name = "Schwacher-Tag-Priorität (0 = aus)"
-    _attr_icon = "mdi:weather-partly-cloudy"
-    _attr_native_min_value = 0
-    _attr_native_max_value = 99
-    _attr_native_step = 1
-    _attr_mode = NumberMode.BOX
-    _attr_suggested_display_precision = 0
-
-    def __init__(
-        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
-    ) -> None:
-        super().__init__(coordinator, entry, device)
-        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_weak_day_priority"
-
-    @property
-    def native_value(self) -> float:
-        dev = self._device
-        return (dev.get(CONF_WALLBOX_WEAK_DAY_PRIORITY) or 0) if dev else 0
-
-    async def async_set_native_value(self, value: float) -> None:
-        await self._async_write(int(value) if value > 0 else None)
 
 
 class PVWallboxMaxChargeKwNumber(_PVDeviceNumberBase):

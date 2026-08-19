@@ -13,12 +13,11 @@ import logging
 import statistics
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -56,7 +55,6 @@ from .const import (
     CONF_WALLBOX_SATISFIED_KW,
     CONF_WALLBOX_SOC_ENTITY,
     CONF_WALLBOX_TARGET_SOC_ENTITY,
-    CONF_WALLBOX_WEAK_DAY_PRIORITY,
     CORE_SENSOR_GRACE_PERIOD,
     DAYTIME_PROJECTION_HORIZON_H,
     DEFAULT_MAX_ASSUMED_RUNTIME_H,
@@ -71,7 +69,6 @@ from .const import (
     MIN_RUNTIME_FORCE_BUFFER_H,
     MIN_SAMPLES_FOR_MEASURED_AVG,
     OFF_CYCLES_FLOOR,
-    POWER_STORE_SAVE_DELAY,
     RE_INCLUSION_COMFORT_BUFFER_H,
     STABLE_OFF_CYCLES,
     STABLE_OFF_CYCLES_MAX,
@@ -79,7 +76,6 @@ from .const import (
     STAGGER_CYCLES_PER_PRIORITY_STEP,
     STALENESS_MIN_REFRESHES,
     SOLAR_START_MIN_KW,
-    STORAGE_VERSION,
     SURPLUS_OFF_THRESHOLD,
     SURPLUS_ON_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
@@ -88,8 +84,6 @@ from .const import (
     WALLBOX_TARGET_MIN_HOURS,
     WALLBOX_TARGET_TIME_BUFFER_H,
     WEAK_DAY_BATTERY_FULL_SOC,
-    WEAK_DAY_EARLIEST_CHECK_HOUR,
-    WEAK_DAY_RATIO_THRESHOLD,
 )
 from .device_control import async_turn_off, async_turn_on, control_entity_id, is_device_on
 from .power_tracker import DevicePowerTracker
@@ -189,10 +183,6 @@ class CoordinatorData:
     load_profile: dict = field(default_factory=dict)
     active_solar_offset_h: float = 0.0
     next_cycle_at: datetime | None = None
-    soc_gain_today: float | None = None
-    peak_soc_gain_today: float = 0.0
-    reference_soc_gain: float | None = None
-    is_weak_day: bool = False
     # See coordinator._battery_full_projection.
     battery_full_missing_kwh: float = 0.0
     battery_full_hours_needed: float | None = None
@@ -322,32 +312,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # Consecutive cycles a wallbox's own power draw has been below the
         # idle threshold — see _wallbox_satisfied's idle-release check.
         self._wallbox_idle_counters: dict[str, int] = {}
-        # Battery SOC captured the moment solar production starts today
-        # (see SOLAR_START_MIN_KW), for weak-day detection — reset to None
-        # whenever the local calendar date changes, then set exactly once
-        # for the rest of that day.
-        self._today_date: date | None = None
-        self._today_solar_start_soc: float | None = None
-        # Highest SOC gain (and highest raw SOC) seen so far today — weak-
-        # day status is decided from these peaks, not the live/current
-        # values, so it can't flap back to "weak" once disproven just
-        # because the battery is discharging again in the evening (SOC
-        # gain, unlike the old peak-solar-kW metric, isn't monotonic
-        # within a day on its own). Reset alongside _today_solar_start_soc.
-        self._today_peak_soc_gain: float = 0.0
-        self._today_peak_soc: float = 0.0
-        # Persists the four values above across restarts/reloads — in-
-        # memory-only tracking meant "already proved itself today" got
-        # silently forgotten by every restart during that same day (e.g. a
-        # round of updates), re-exposing devices to a weak-day block a
-        # battery that actually topped up hours earlier no longer
-        # deserved. Loaded once via async_load_daily_state() (called from
-        # __init__.py before the first refresh); only trusted if the
-        # stored date is still today, so a restart on a genuinely new day
-        # starts fresh exactly like before.
-        self._daily_state_store: Store = Store(
-            hass, STORAGE_VERSION, f"surplus_load_switch_daily_{entry_id}"
-        )
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -394,14 +358,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """Load persisted per-device state: power samples (only if a power
         sensor is configured) and today's accumulated runtime (always, so
         the minimum daily runtime feature has history even if it's enabled
-        later). Also loads the last computed solar-offset calibration and
-        today's weak-day peak-tracking state."""
+        later). Also loads the last computed solar-offset calibration."""
         await self._calibrator.async_load()
         await self._base_load_floor_calibrator.async_load()
         for calibrator in self._wallbox_charge_calibrators.values():
             await calibrator.async_load()
         await self._load_profile_learner.async_load()
-        await self._async_load_daily_state()
         for dev in self._config.get(CONF_DEVICES, []):
             if dev.get(CONF_DEVICE_IS_WALLBOX, False):
                 continue
@@ -417,54 +379,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             await runtime_tracker.async_load()
             self._runtime_trackers[device_id] = runtime_tracker
 
-    async def _async_load_daily_state(self) -> None:
-        data = await self._daily_state_store.async_load()
-        if not data:
-            return
-        stored_date = data.get("date")
-        if stored_date != dt_util.now().date().isoformat():
-            # Stale from a previous day — today starts fresh exactly like
-            # a first-ever run would, via the normal date-change reset in
-            # _async_update_data.
-            return
-        self._today_date = dt_util.now().date()
-        self._today_solar_start_soc = data.get("solar_start_soc")
-        self._today_peak_soc_gain = data.get("peak_soc_gain", 0.0)
-        self._today_peak_soc = data.get("peak_soc", 0.0)
-
-    def _daily_state_to_save(self) -> dict:
-        return {
-            "date": self._today_date.isoformat(),
-            "solar_start_soc": self._today_solar_start_soc,
-            "peak_soc_gain": self._today_peak_soc_gain,
-            "peak_soc": self._today_peak_soc,
-        }
-
-    def _save_daily_state(self) -> None:
-        if self._today_date is None:
-            return
-        self._daily_state_store.async_delay_save(
-            self._daily_state_to_save,
-            POWER_STORE_SAVE_DELAY,
-        )
-
     async def async_flush_stores(self) -> None:
         """Force-write every debounced Store immediately — runtime
-        trackers, power trackers, and the daily-state (weak-day peak)
-        store all re-trigger their own debounce timer on every single
-        coordinator cycle while active, which can leave them without a
-        quiet window to actually flush to disk on their own for an entire
-        day (see DailyRuntimeTracker.async_save_now). Call this right
-        before the integration unloads — every version update reloads it —
-        so today's tracking survives instead of reverting to a stale disk
-        copy on the next load.
+        trackers and power trackers re-trigger their own debounce timer
+        on every single coordinator cycle while active, which can leave
+        them without a quiet window to actually flush to disk on their
+        own for an entire day (see DailyRuntimeTracker.async_save_now).
+        Call this right before the integration unloads — every version
+        update reloads it — so today's tracking survives instead of
+        reverting to a stale disk copy on the next load.
         """
         for tracker in self._runtime_trackers.values():
             await tracker.async_save_now()
         for tracker in self._power_trackers.values():
             await tracker.async_save_now()
-        if self._today_date is not None:
-            await self._daily_state_store.async_save(self._daily_state_to_save())
         await self._load_profile_learner.async_save_now()
 
     @property
@@ -934,11 +862,8 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self, wallbox_dev: dict, now: datetime, available_surplus: float
     ) -> float:
         """How much of the current surplus (kW) to set aside for this
-        wallbox before the device cascade gets to compete for the rest —
-        the everyday, graduated counterpart to
-        CONF_WALLBOX_WEAK_DAY_PRIORITY (which only fires on a detected
-        weak day and blocks candidate devices outright, rather than just
-        shrinking the pool). Computed dynamically from how many kWh are
+        wallbox before the device cascade gets to compete for the rest.
+        Computed dynamically from how many kWh are
         still missing to reach the charge target and how many hours are
         realistically left to get there (sunset minus a safety buffer),
         so it eases off on its own as the car approaches its target or
@@ -985,7 +910,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         present_entity = wallbox_dev.get(CONF_WALLBOX_PRESENT_ENTITY)
         if present_entity:
             present_state = self.hass.states.get(present_entity)
-            if present_state is None or present_state.state in ("off", "not_home"):
+            # "Present" is an allowlist ("on" for a binary_sensor, "home"
+            # for a device_tracker/person), not a denylist of specific
+            # away-values — a device_tracker's state is the name of
+            # whichever zone it's currently in, and a *named* zone other
+            # than home (e.g. "Arbeit") is just as much "not here" as the
+            # generic "not_home" state is, but wasn't being recognized as
+            # such. Confirmed live: the reservation kept claiming surplus
+            # for hours after the car left for a zone called "Arbeit".
+            if present_state is None or present_state.state not in ("on", "home"):
                 return 0.0
 
         reserved_kw = self._wallbox_reservation_rate(missing_kwh, now, available_surplus)
@@ -1430,45 +1363,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             battery_full_on_track,
         ) = self._battery_full_projection(soc, batt, battery_kwh, dt_util.utcnow())
 
-        # Weak-day detection: capture the battery's SOC the moment solar
-        # production starts today (see SOLAR_START_MIN_KW), then compare
-        # how much it's gained since against the calibrated "normal" gain
-        # for this month, once it's late enough that a genuinely strong
-        # morning would already have shown it (see
-        # WEAK_DAY_EARLIEST_CHECK_HOUR — before that, a low gain-so-far
-        # just means the sun hasn't gotten going yet, not that today is
-        # weak). SOC gain (not raw solar power) is used so a brief sun
-        # break through passing clouds doesn't swing the reading, and so
-        # household consumption along the way is naturally accounted for.
-        local_now = dt_util.now()
-        if self._today_date != local_now.date():
-            self._today_date = local_now.date()
-            self._today_solar_start_soc = None
-            self._today_peak_soc_gain = 0.0
-            self._today_peak_soc = 0.0
-        if self._today_solar_start_soc is None and solar >= SOLAR_START_MIN_KW:
-            self._today_solar_start_soc = soc
-        soc_gain_today = (
-            soc - self._today_solar_start_soc
-            if self._today_solar_start_soc is not None else None
-        )
-        self._today_peak_soc = max(self._today_peak_soc, soc)
-        if soc_gain_today is not None:
-            self._today_peak_soc_gain = max(self._today_peak_soc_gain, soc_gain_today)
-        self._save_daily_state()
-        reference_soc_gain = self._calibrator.effective_reference_soc_gain(local_now.month)
-        # Decided from today's *peak* gain/SOC, not the live values — SOC
-        # gain naturally falls again once the battery starts discharging
-        # in the evening, and a day that already proved itself strong
-        # (or the battery topped up) earlier on shouldn't flip back to
-        # "weak" just because it's evening now.
-        is_weak_day = (
-            reference_soc_gain is not None
-            and reference_soc_gain > 0
-            and local_now.hour >= WEAK_DAY_EARLIEST_CHECK_HOUR
-            and self._today_peak_soc_gain < WEAK_DAY_RATIO_THRESHOLD * reference_soc_gain
-        )
-
         discharge = max(-batt, 0.0)
         # h_battery is a division by discharge rate, which would otherwise
         # project a brief spike (e.g. a stove running for 10-15 min) forward
@@ -1559,10 +1453,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             },
             active_solar_offset_h=self._last_offset_h,
             next_cycle_at=dt_util.utcnow() + timedelta(seconds=UPDATE_INTERVAL_SECONDS),
-            soc_gain_today=soc_gain_today,
-            peak_soc_gain_today=self._today_peak_soc_gain,
-            reference_soc_gain=reference_soc_gain,
-            is_weak_day=is_weak_day,
             battery_full_missing_kwh=battery_full_missing_kwh,
             battery_full_hours_needed=battery_full_hours_needed,
             battery_full_hours_until_deadline=battery_full_hours_until_deadline,
@@ -1808,30 +1698,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             wb["_id"]: self._wallbox_satisfied(wb) for wb in wallbox_devices
         }
 
-        # The most protective (lowest/most-important) configured weak-day
-        # priority across all wallboxes — a candidate device worse than
-        # this gets held off entirely on a weak day (see the per-device
-        # loop below). None if no wallbox has this set.
-        wallbox_weak_day_priorities = [
-            wb[CONF_WALLBOX_WEAK_DAY_PRIORITY] for wb in wallbox_devices
-            if wb.get(CONF_WALLBOX_WEAK_DAY_PRIORITY)
-        ]
-        weak_day_priority_threshold = (
-            min(wallbox_weak_day_priorities) if wallbox_weak_day_priorities else None
-        )
-        # Once every wallbox actually protecting a weak-day priority is
-        # satisfied (car full or gone — the same idle/threshold detection
-        # _wallbox_satisfied already uses for the dependency feature),
-        # there's nothing left to hold surplus back for: letting other
-        # devices use it beats it going unused to the grid. Vacuously
-        # True (but never consulted) when no wallbox has a weak-day
-        # priority configured at all.
-        weak_day_wallboxes_satisfied = all(
-            wallbox_satisfied.get(wb["_id"], True)
-            for wb in wallbox_devices
-            if wb.get(CONF_WALLBOX_WEAK_DAY_PRIORITY)
-        )
-
         # Battery discharge currently attributable to managed devices already
         # running is whatever part of their draw a *positive* surplus doesn't
         # cover — a negative surplus (base load alone exceeding solar) isn't
@@ -1912,7 +1778,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         horizon_end = now_dt + timedelta(hours=data.effective_h_to_solar + BATT_OK_BUFFER_H)
 
         # Read-only pre-pass mirroring the main loop's hard-boundary checks
-        # below (weak day / legacy off-only / window-far-closed / blocked),
+        # below (legacy off-only / window-far-closed / blocked),
         # just to sort every device into exactly one of three buckets before
         # any decision is made, for _select_battery_optimal_set:
         #   - mandatory_segments: always-on regardless of the battery check
@@ -1943,15 +1809,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 continue
 
             _in_window = self._in_window(_dev)
-            _weak_day_block = (
-                data.is_weak_day
-                and weak_day_priority_threshold is not None
-                and _priority >= weak_day_priority_threshold
-                and self._today_peak_soc < WEAK_DAY_BATTERY_FULL_SOC
-                and data.sun_above_horizon
-                and not weak_day_wallboxes_satisfied
-            )
-            if _weak_day_block or (_in_window is None and _dev.get(CONF_DEVICE_OFF_ONLY, False)):
+            if _in_window is None and _dev.get(CONF_DEVICE_OFF_ONLY, False):
                 continue
 
             _window_closed = _in_window is False
@@ -2161,58 +2019,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 )
                 continue
 
-            # On a detected weak day (see _async_update_data), a device at
-            # or worse than a wallbox's configured weak-day priority is
-            # held back the same hard way — the wallbox effectively takes
-            # over that priority slot for the day (a device configured
-            # with the *same* priority number as the wallbox's weak-day
-            # value counts as behind it, not tied with it), pushing
-            # everything from there on down behind it. No point spending
-            # scarce surplus on low-priority devices while today's
-            # production is running well below normal for the season,
-            # unless the battery's already basically full anyway (then
-            # there's nothing left to protect it for) — checked against
-            # today's *peak* SOC, not the live value, so a battery that
-            # topped up earlier and is now discharging in the evening
-            # doesn't reopen the block it already earned its way out of.
-            # Also only while the sun's actually up: the whole point is
-            # protecting surplus for the wallbox, and overnight there's no
-            # surplus at all for it to compete over — holding a device
-            # back after dark wouldn't save anything for the car, only
-            # cost the device a night's runtime for nothing. And only
-            # while the wallbox actually still needs it: once it's
-            # satisfied (car full or gone), holding other devices back
-            # any longer wouldn't protect anything — the surplus would
-            # just go unused to the grid instead of being used here.
-            weak_day_block = (
-                data.is_weak_day
-                and weak_day_priority_threshold is not None
-                and diag.priority >= weak_day_priority_threshold
-                and self._today_peak_soc < WEAK_DAY_BATTERY_FULL_SOC
-                and data.sun_above_horizon
-                and not weak_day_wallboxes_satisfied
-            )
-
-            # A detected weak day is a hard boundary with no known future
-            # "opens at" moment — no point pre-charging the on-hold for
-            # it, so it still resets immediately and skips the rest of
-            # the evaluation entirely. A device with the legacy off_only
-            # flag and no window behaves like a window that's always
-            # closed, same as before.
-            if weak_day_block or (in_window is None and legacy_off_only):
+            # A device configured with the legacy off_only flag and no
+            # window behaves like a window that's always closed.
+            if in_window is None and legacy_off_only:
                 tracker.on_counter = 0
                 tracker.off_counter = 0
                 diag.should_be_on = False
-                hard_off_reason = (
-                    f"schwacher Tag (bester Akku-Zuwachs heute +{data.peak_soc_gain_today:.1f}% "
-                    f"von normal +{data.reference_soc_gain:.1f}%, Akku heute nie über "
-                    f"{WEAK_DAY_BATTERY_FULL_SOC:.0f}%)"
+                await self._log_decision(
+                    dev, False, "Kein Zeitfenster",
+                    "kein Zeitfenster konfiguriert und off_only gesetzt",
                 )
-                await self._log_decision(dev, False, "Schwacher Tag", hard_off_reason)
                 if is_on:
-                    _LOGGER.info(
-                        "PV Surplus: turning OFF %s (%s)", dev.get(CONF_DEVICE_NAME), hard_off_reason,
-                    )
                     await async_turn_off(self.hass, dev)
                 continue
 
@@ -2228,12 +2045,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
             # A window that just closed for the day (next open likely
             # tomorrow, well beyond the pre-charge horizon) is a hard
-            # boundary like weak_day_block above — no point pre-charging
-            # on_counter for a reopening hours away. Without this, a device
-            # sits primed (and shows a misleading "wartet noch X min bis
-            # einschalten" countdown) for the rest of the evening right
-            # after every window close, even though it can't actually turn
-            # on until blocked clears regardless.
+            # boundary — no point pre-charging on_counter for a reopening
+            # hours away. Without this, a device sits primed (and shows a
+            # misleading "wartet noch X min bis einschalten" countdown)
+            # for the rest of the evening right after every window close,
+            # even though it can't actually turn on until blocked clears
+            # regardless.
             #
             # An unmet dependency deliberately does NOT get this treatment
             # — pre-charging on_counter while waiting on a dependency is
@@ -2310,10 +2127,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # clears, instead of waiting out a fresh multi-minute hold
             # from zero afterward. Only the actual switch-on call and the
             # cascade-budget reservation are suppressed while blocked —
-            # see the two `not blocked` guards below. A weak-day block
-            # doesn't get this treatment (see above) since it has no
-            # equivalent discrete "clears at" moment worth pre-charging
-            # for.
+            # see the two `not blocked` guards below.
 
             # Forward-looking battery check: would the battery still last
             # until solar start if THIS device — on top of every
