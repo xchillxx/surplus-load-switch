@@ -81,6 +81,7 @@ from .const import (
     UPDATE_INTERVAL_SECONDS,
     WALLBOX_IDLE_THRESHOLD_KW,
     WALLBOX_FORECAST_MIN_KWH,
+    WALLBOX_RELIEF_CYCLES,
     WALLBOX_TARGET_MIN_HOURS,
     WALLBOX_TARGET_TIME_BUFFER_H,
     WEAK_DAY_BATTERY_FULL_SOC,
@@ -258,6 +259,24 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # detect a composition change and reset the discharge smoothing
         # window when one happens (see _evaluate_devices).
         self._last_managed_on: frozenset[str] = frozenset()
+        # Consecutive cycles wallbox_starved has read False — gates how
+        # long a device's own off_counter (which resets to 0 on any
+        # single should_on cycle — see the tracker below) gets to keep
+        # accumulating once the wallbox eases up. Without this, a
+        # passing cloud gap lasting even one cycle would flip
+        # wallbox_starved back to False, immediately re-allow
+        # battery_would_last, and reset every device's off_counter right
+        # as it was building toward actually switching off — on a
+        # partly-cloudy day the wallbox could stay genuinely starved
+        # 90% of the time and devices would still never accumulate
+        # enough consecutive should_off cycles to switch, because the
+        # other 10% keeps landing exactly often enough to zero the
+        # counter first. See its use in _evaluate_devices. Starts fully
+        # relieved, not fully starved — with no reading yet, there's no
+        # evidence of starvation to protect against, so the first real
+        # cycle should reflect wallbox_starved as-is rather than a
+        # phantom starved period nobody observed.
+        self._wallbox_relief_counter = WALLBOX_RELIEF_CYCLES
         # Tracks the managed-device mix a still-unrefreshed load/discharge
         # reading was last known to actually reflect — see the staleness
         # correction in _evaluate_devices. TWO independent freezes, not
@@ -1696,6 +1715,25 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             wallbox_reserved_kw > 0.0
             and wallbox_reserved_kw >= smoothed_available_surplus - 0.05
         )
+        # Debounced: takes effect on the very first starved cycle (never
+        # delay protecting the wallbox), but only releases once
+        # wallbox_starved has read False for WALLBOX_RELIEF_CYCLES in a
+        # row. Without this, a single clear cycle on a partly-cloudy day
+        # would flip battery_eligible_ids back open, which resets every
+        # device's own off_counter (see the tracker below — it zeroes on
+        # any should_on cycle) right as it was accumulating toward
+        # actually switching off. A device could then never accumulate
+        # enough *consecutive* should_off cycles to switch, even though
+        # the wallbox was starved the clear majority of the time.
+        if wallbox_starved:
+            self._wallbox_relief_counter = 0
+        else:
+            self._wallbox_relief_counter = min(
+                self._wallbox_relief_counter + 1, WALLBOX_RELIEF_CYCLES
+            )
+        wallbox_starved_effective = (
+            wallbox_starved or self._wallbox_relief_counter < WALLBOX_RELIEF_CYCLES
+        )
         available_surplus -= wallbox_reserved_kw
         data.wallbox_reserved_kw = wallbox_reserved_kw
 
@@ -1893,10 +1931,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             max_priority_number,
         )
 
-        if wallbox_starved:
+        if wallbox_starved_effective:
             # Every device below would run on battery, not on live
             # surplus, while the wallbox is still short of what it needs
-            # right now — see wallbox_starved above. force_runtime
+            # right now (or was, within the last WALLBOX_RELIEF_CYCLES —
+            # see wallbox_starved_effective above). force_runtime
             # devices are unaffected: they never go through
             # battery_eligible_ids, they're already in mandatory_segments
             # and win via their own should_on branch further down.

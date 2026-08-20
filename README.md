@@ -154,7 +154,14 @@ cloud passes over or another appliance briefly kicks in.
   because the house battery could afford to run them: that draw is
   exactly what a surplus-based wallbox charger would otherwise pick up
   the moment it's freed. A device with its own forced minimum runtime
-  is unaffected and keeps its priority regardless.
+  is unaffected and keeps its priority regardless. The gate itself
+  releases with a delay (10 minutes of consecutively *not* being
+  starved) rather than the instant the wallbox eases up — takes effect
+  immediately going into the starved state, but on a partly-cloudy day
+  a single clear gap releasing it right away would reset a device's own
+  switch-on-cooldown before it ever finished counting down, and the
+  device would end up never actually switching despite the wallbox
+  being starved most of the time.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's

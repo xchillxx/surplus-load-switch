@@ -309,6 +309,15 @@ MARGIN_FOR_MAX_PATIENCE_H = 4.0
 # sustained change within roughly half the window's length.
 DISCHARGE_SMOOTHING_SAMPLES = _minutes_to_cycles(20)  # 20 min rolling median
 
+# How many consecutive cycles wallbox_starved must read False before a
+# device is actually allowed back into battery_eligible_ids — asymmetric
+# on purpose: starving takes effect immediately (protecting the wallbox
+# should never wait), but relief requires this many *consecutive* clear
+# cycles first. Deliberately the same length as STABLE_ON_CYCLES — a
+# single brief gap shouldn't be enough to reset a device's own
+# off_counter before it ever reaches required_off_cycles.
+WALLBOX_RELIEF_CYCLES = STABLE_ON_CYCLES
+
 # Default monthly solar offsets (hours after sunrise until PV is useful)
 DEFAULT_SOLAR_OFFSETS = [3.5, 3.0, 2.5, 2.0, 2.0, 2.2, 2.2, 2.0, 2.5, 3.0, 3.5, 4.0]
 
