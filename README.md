@@ -174,7 +174,17 @@ cloud passes over or another appliance briefly kicks in.
   spoken for. Once starved, the wallbox's full real draw counts as
   ordinary, unavoidable load ahead of every other device instead —
   effectively priority 0 — rather than only affecting the
-  battery-affordability path above.
+  battery-affordability path above. "Starved" itself covers two
+  independent cases, either one enough on its own: the forecast-based
+  reservation needing essentially the whole day's remaining surplus, or
+  — regardless of what the forecast says — the wallbox's real draw
+  already exceeding what was actually reserved for it by more than
+  plausible cross-algorithm noise. The second case exists because the
+  reservation only ever protects up to its own calculated fair share;
+  it has nothing to say about a wallbox that isn't limiting itself to
+  that share at all, which the forecast-based case alone would miss
+  entirely on a day it otherwise still comfortably covers the deficit
+  on paper.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's

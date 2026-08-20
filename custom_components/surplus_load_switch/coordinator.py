@@ -84,6 +84,7 @@ from .const import (
     UPDATE_INTERVAL_SECONDS,
     WALLBOX_IDLE_THRESHOLD_KW,
     WALLBOX_FORECAST_MIN_KWH,
+    WALLBOX_OVERDRAW_MARGIN_KW,
     WALLBOX_RELIEF_CYCLES,
     WALLBOX_TARGET_MIN_HOURS,
     WALLBOX_TARGET_TIME_BUFFER_H,
@@ -1722,22 +1723,41 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             for wb in wallbox_devices
             if wb.get(CONF_WALLBOX_CAPACITY_ENTITY)
         )
-        # True only when the reservation consumed essentially the whole
-        # surplus that existed before it — capped by *availability*, not
-        # by the wallbox's own max-charge-rate or a small fractional
-        # need. Only in this state has every watt genuinely been claimed:
-        # a device granted "on" below purely because the battery could
-        # afford it would draw power the inverter's own surplus-based
-        # wallbox charging would otherwise route to the car — confirmed
-        # live, the car's charge rate visibly rises the moment SLS's
-        # managed devices go off. "The battery can afford it" and "the
-        # wallbox doesn't need it more" are different questions; this
-        # flag answers the second one. See its use against
-        # battery_eligible_ids below.
+        # True when either of two independent conditions holds — either
+        # one alone means every watt is genuinely spoken for, whether or
+        # not the other agrees:
+        #
+        # 1. The reservation itself consumed essentially the whole
+        #    surplus that existed before it — capped by *availability*,
+        #    not by the wallbox's own max-charge-rate or a small
+        #    fractional need. This is the forecast's own verdict: even a
+        #    perfectly surplus-limited wallbox would need everything
+        #    there is today.
+        # 2. The wallbox's real measured draw already exceeds what was
+        #    actually reserved for it, by more than could plausibly be
+        #    ordinary disagreement between two independent algorithms
+        #    (see WALLBOX_OVERDRAW_MARGIN_KW). The reservation only ever
+        #    protects up to its own calculated fair share — it has
+        #    nothing to say about a wallbox that isn't limiting itself to
+        #    that share at all (a manual override, for instance), which
+        #    condition 1 alone would miss entirely on a day the forecast
+        #    still comfortably covers the deficit on paper. Confirmed
+        #    live: exactly this case, a wallbox drawing 7.7 kW against a
+        #    4.0 kW reservation while share_needed was still comfortably
+        #    under 1 — condition 1 read false the whole time, and every
+        #    managed device kept running on the difference, drawn
+        #    straight from the battery.
+        #
+        # Either way: a device granted "on" below purely because the
+        # battery could afford it would draw power the inverter's own
+        # surplus-based wallbox charging would otherwise route to the
+        # car. "The battery can afford it" and "the wallbox doesn't need
+        # it more" are different questions; this flag answers the
+        # second one. See its use against battery_eligible_ids below.
         wallbox_starved = (
             wallbox_reserved_kw > 0.0
             and wallbox_reserved_kw >= smoothed_available_surplus - 0.05
-        )
+        ) or (wallbox_power_kw > wallbox_reserved_kw + WALLBOX_OVERDRAW_MARGIN_KW)
         # Debounced: takes effect on the very first starved cycle (never
         # delay protecting the wallbox), but only releases once
         # wallbox_starved has read False for WALLBOX_RELIEF_CYCLES in a

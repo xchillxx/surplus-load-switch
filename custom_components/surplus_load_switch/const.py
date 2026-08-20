@@ -159,6 +159,23 @@ WALLBOX_TARGET_MIN_HOURS = 0.25
 # missing/forecast fraction up to an absurd multiple instead of just
 # correctly claiming ~100% of whatever's left.
 WALLBOX_FORECAST_MIN_KWH = 0.5
+# How far a wallbox's real measured draw may exceed what was actually
+# reserved for it before that alone counts as "starved" (see
+# wallbox_starved in coordinator.py), independent of whether the
+# forecast-based math itself thinks the deficit is large. The
+# reservation assumes the wallbox only ever draws its own calculated
+# fair share — true for a genuinely surplus-limited charger, false the
+# moment it isn't (e.g. a manual "charge now" override on the charger's
+# own side): confirmed live, a wallbox drawing 7.7 kW against a 4.0 kW
+# reservation (the forecast still comfortably covering the day's
+# remaining deficit on its own) kept every managed device on via
+# "genuine surplus" while the battery quietly drained the difference.
+# Sized as tolerance for two independent algorithms (this reservation's
+# forecast-based rate vs. whatever curve the charger's own PV-surplus
+# logic actually follows) legitimately disagreeing by a bit even when
+# both are behaving normally — not as a detector for small, ordinary
+# mismatch.
+WALLBOX_OVERDRAW_MARGIN_KW = 1.0
 
 # --- Solar-start / battery-full reference tracking ---
 # Solar power (kW) above which today counts as "producing" for the purpose
