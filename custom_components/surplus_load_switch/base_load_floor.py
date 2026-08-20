@@ -42,6 +42,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BASE_LOAD_FLOOR_LOOKBACK_DAYS,
     BASE_LOAD_FLOOR_PERCENTILE,
+    CALIBRATION_MIN_HOURLY_POINTS,
     CALIBRATION_RETRY_INTERVAL,
     STORAGE_VERSION,
 )
@@ -122,15 +123,17 @@ class BaseLoadFloorCalibrator:
 
         points = result.get(self._load_entity_id, [])
         mins = [p["min"] for p in points if p.get("min") is not None]
-        if not mins:
-            # No history yet (fresh install) or the recorder's statistics
-            # index isn't ready right at startup — retry sooner than the
-            # normal cadence rather than locking in "no floor" for a
+        if len(mins) < CALIBRATION_MIN_HOURLY_POINTS:
+            # Too little history yet (fresh install, sensor just added, or
+            # the recorder's statistics index isn't ready right at
+            # startup) to trust a percentile computed from it — retry
+            # sooner than the normal cadence rather than locking in a
+            # floor derived from a couple of hours, or "no floor" for a
             # full day.
             _LOGGER.debug(
-                "Base load floor: no statistics returned for %s (queried %s to %s) "
-                "— will retry sooner than the normal cadence",
-                self._load_entity_id, start, end,
+                "Base load floor: only %d hourly point(s) for %s (need %d, queried "
+                "%s to %s) — will retry sooner than the normal cadence",
+                len(mins), self._load_entity_id, CALIBRATION_MIN_HOURLY_POINTS, start, end,
             )
             self._last_calibrated = dt_util.utcnow()
             self._last_query_empty = True

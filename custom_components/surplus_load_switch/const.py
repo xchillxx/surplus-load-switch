@@ -392,6 +392,19 @@ BASE_LOAD_FLOOR_PERCENTILE = 5
 # change, etc.) instead of a number that has to be updated by hand every
 # time reality changes. See wallbox_charge_calibrator.py.
 WALLBOX_MAX_CHARGE_LOOKBACK_DAYS = 30
+# Percentile (not the outright maximum) so a single glitched-high hour
+# can't poison the cap upward for the rest of its lookback window — the
+# same protection BASE_LOAD_FLOOR_PERCENTILE gives the floor above, from
+# the other end of the distribution.
+WALLBOX_MAX_CHARGE_PERCENTILE = 95
+# Both calibrators above need at least this many hourly points before
+# trusting their computed percentile — without it, a fresh install (or a
+# just-added sensor) with only a couple of hourly readings so far would
+# treat whatever those happen to be as a fully-calibrated, stable bound.
+# The solar-offset calibrator already closes this gap for itself via
+# CALIBRATION_MIN_GOOD_DAYS; these two never had an equivalent. One day's
+# worth is enough to have crossed a full day/night cycle at least once.
+CALIBRATION_MIN_HOURLY_POINTS = 24
 
 # A day only counts toward calibration if its peak production reaches this
 # fraction of the 90th-percentile peak in the surrounding window — filters

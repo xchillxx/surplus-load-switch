@@ -8,11 +8,15 @@ the moment reality changes (3-phase summer charging vs. a single-phase
 winter fallback, an amperage limit change, a different car) — nobody
 remembers to come back and update a config number for that.
 
-The wallbox's own power sensor already knows the answer: its rolling
-maximum over the last WALLBOX_MAX_CHARGE_LOOKBACK_DAYS. Re-derived
-periodically from the recorder's own hourly statistics (already retained
-regardless of the recorder's raw-history purge period), mirroring
-base_load_floor.py's approach — no sample storage of its own needed.
+The wallbox's own power sensor already knows the answer: a high
+percentile of its hourly maximums over the last
+WALLBOX_MAX_CHARGE_LOOKBACK_DAYS, not the outright maximum — a single
+glitched-high hour otherwise poisons the cap upward for the rest of its
+lookback window. Re-derived periodically from the recorder's own hourly
+statistics (already retained regardless of the recorder's raw-history
+purge period), mirroring base_load_floor.py's approach exactly, from
+the other end of the distribution — no sample storage of its own
+needed.
 """
 from __future__ import annotations
 
@@ -24,20 +28,22 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CALIBRATION_MIN_HOURLY_POINTS,
     CALIBRATION_RETRY_INTERVAL,
     STORAGE_VERSION,
     WALLBOX_MAX_CHARGE_LOOKBACK_DAYS,
+    WALLBOX_MAX_CHARGE_PERCENTILE,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class WallboxChargeCalibrator:
-    """Rolling maximum of a wallbox's own power sensor over the last
-    WALLBOX_MAX_CHARGE_LOOKBACK_DAYS — used as the learned fallback for
-    CONF_WALLBOX_MAX_CHARGE_KW when that field is left unset. None
-    (no cap beyond whatever surplus exists) until enough recorder
-    history exists, e.g. right after a fresh install."""
+    """A high percentile of a wallbox's own power sensor's hourly
+    maximums over the last WALLBOX_MAX_CHARGE_LOOKBACK_DAYS — used as the
+    learned fallback for CONF_WALLBOX_MAX_CHARGE_KW when that field is
+    left unset. None (no cap beyond whatever surplus exists) until
+    enough recorder history exists, e.g. right after a fresh install."""
 
     def __init__(self, hass: HomeAssistant, entry_id: str, device_id: str, power_entity_id: str) -> None:
         self._hass = hass
@@ -80,10 +86,10 @@ class WallboxChargeCalibrator:
         return dt_util.utcnow() - self._last_calibrated >= effective_interval
 
     async def async_recalibrate(self) -> None:
-        """Pull the wallbox power sensor's hourly statistics and take the
-        maximum over the last WALLBOX_MAX_CHARGE_LOOKBACK_DAYS. The
-        recorder query is blocking, so it runs in the executor — safe to
-        call from the event loop."""
+        """Pull the wallbox power sensor's hourly statistics and take a
+        high percentile over the last WALLBOX_MAX_CHARGE_LOOKBACK_DAYS.
+        The recorder query is blocking, so it runs in the executor — safe
+        to call from the event loop."""
         try:
             from homeassistant.components.recorder import get_instance
             from homeassistant.components.recorder.statistics import statistics_during_period
@@ -107,21 +113,29 @@ class WallboxChargeCalibrator:
 
         points = result.get(self._power_entity_id, [])
         maxes = [p["max"] for p in points if p.get("max") is not None]
-        if not maxes:
-            # No history yet (fresh install) or the recorder's statistics
-            # index isn't ready right at startup — retry sooner than the
-            # normal cadence rather than locking in "no cap" for a full
-            # day.
+        if len(maxes) < CALIBRATION_MIN_HOURLY_POINTS:
+            # Too little history yet (fresh install, wallbox just added,
+            # or the recorder's statistics index isn't ready right at
+            # startup) to trust a percentile computed from it — retry
+            # sooner than the normal cadence rather than locking in a cap
+            # derived from a couple of hours, or "no cap" for a full day.
             _LOGGER.debug(
-                "Wallbox max charge: no statistics returned for %s (queried %s to %s) "
-                "— will retry sooner than the normal cadence",
-                self._power_entity_id, start, end,
+                "Wallbox max charge: only %d hourly point(s) for %s (need %d, "
+                "queried %s to %s) — will retry sooner than the normal cadence",
+                len(maxes), self._power_entity_id, CALIBRATION_MIN_HOURLY_POINTS, start, end,
             )
             self._last_calibrated = dt_util.utcnow()
             self._last_query_empty = True
             return
 
-        self._max_charge_kw = round(max(maxes), 2)
+        # Nearest-rank percentile: sort ascending and take the value at
+        # index round(percentile/100 * (n-1)) — same formula
+        # base_load_floor.py uses from the low end, mirrored here from the
+        # high end. Robust to a single glitched-high hour instead of being
+        # fully determined by it.
+        maxes.sort()
+        index = round(WALLBOX_MAX_CHARGE_PERCENTILE / 100 * (len(maxes) - 1))
+        self._max_charge_kw = round(maxes[index], 2)
         self._sample_count = len(maxes)
         self._last_calibrated = dt_util.utcnow()
         self._last_query_empty = False
@@ -131,7 +145,8 @@ class WallboxChargeCalibrator:
             "last_calibrated": self._last_calibrated.isoformat(),
         })
         _LOGGER.info(
-            "Wallbox max charge: recalibrated to %.2f kW from %d hourly point(s) "
-            "over the last %d day(s)",
-            self._max_charge_kw, self._sample_count, WALLBOX_MAX_CHARGE_LOOKBACK_DAYS,
+            "Wallbox max charge: recalibrated to %.2f kW (p%d) from %d hourly "
+            "point(s) over the last %d day(s)",
+            self._max_charge_kw, WALLBOX_MAX_CHARGE_PERCENTILE, self._sample_count,
+            WALLBOX_MAX_CHARGE_LOOKBACK_DAYS,
         )
