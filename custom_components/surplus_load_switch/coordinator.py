@@ -338,6 +338,22 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # Consecutive cycles a wallbox's own power draw has been below the
         # idle threshold — see _wallbox_satisfied's idle-release check.
         self._wallbox_idle_counters: dict[str, int] = {}
+        # Last successfully-computed _wallbox_reserved_kw result per
+        # wallbox, and when — bridges a transient gap in the car's own
+        # SOC/target/capacity/presence entities (a cloud-API blip, same
+        # class of problem CORE_SENSOR_GRACE_PERIOD already covers for
+        # the core solar/load/soc/battery sensors) so a single missing
+        # reading doesn't collapse the reservation straight to 0 for that
+        # cycle. Confirmed live: a ~1-minute Tesla-integration outage
+        # made the reservation flicker 8kW -> 0 -> 8kW, and because
+        # wallbox_starved's protection is now folded into base_load
+        # itself (see _evaluate_devices), that flicker showed up as a
+        # real, if brief, false "everything's free" surplus spike each
+        # time. Only bridges genuine data gaps — a real 0 (target
+        # reached, or the car confirmed away) is remembered as the new
+        # last-good value, not bridged past.
+        self._wallbox_last_good_reserved_kw: dict[str, float] = {}
+        self._wallbox_last_good_at: dict[str, datetime] = {}
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -909,6 +925,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         held back from other devices for a share the wallbox couldn't
         draw anyway.
         """
+        wallbox_id = wallbox_dev["_id"]
         capacity_entity = wallbox_dev.get(CONF_WALLBOX_CAPACITY_ENTITY)
         soc_entity = wallbox_dev.get(CONF_WALLBOX_SOC_ENTITY)
         target_entity = wallbox_dev.get(CONF_WALLBOX_TARGET_SOC_ENTITY)
@@ -919,11 +936,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         current_soc = _safe_float(self.hass.states.get(soc_entity))
         target_soc = _safe_float(self.hass.states.get(target_entity))
         if capacity_kwh is None or current_soc is None or target_soc is None:
-            return 0.0
+            # A genuine data gap (entity briefly unavailable/unknown),
+            # not a real answer — bridge to the last known-good value
+            # instead of collapsing to 0. See _wallbox_last_good_reserved_kw.
+            return self._wallbox_bridge_last_good(wallbox_id, now)
 
         missing_kwh = max(capacity_kwh * (target_soc - current_soc) / 100.0, 0.0)
         if missing_kwh <= 0:
-            return 0.0
+            return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
         # The SOC/target-SOC entities only ever hold the car's last known
         # reading — if it's away, that's whatever it was when it left,
@@ -943,11 +963,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # such. Confirmed live: the reservation kept claiming surplus
             # for hours after the car left for a zone called "Arbeit".
             if present_state is None or present_state.state not in ("on", "home"):
-                return 0.0
+                return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
         reserved_kw = self._wallbox_reservation_rate(missing_kwh, now, available_surplus)
         if reserved_kw is None:
-            return 0.0
+            # Also a genuine data gap (missing sun.sun with no forecast
+            # configured), not "no reservation" — same bridge as above.
+            return self._wallbox_bridge_last_good(wallbox_id, now)
 
         # A manually-entered cap always wins if set; otherwise fall back
         # to the learned rolling max from this wallbox's own charging
@@ -960,7 +982,31 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             max_charge_kw = calibrator.max_charge_kw if calibrator else None
         if max_charge_kw:
             reserved_kw = min(reserved_kw, max_charge_kw)
-        return min(reserved_kw, max(available_surplus, 0.0))
+        result = min(reserved_kw, max(available_surplus, 0.0))
+        return self._wallbox_remember_reserved(wallbox_id, now, result)
+
+    def _wallbox_remember_reserved(self, wallbox_id: str, now: datetime, value: float) -> float:
+        """Stash a genuinely-computed _wallbox_reserved_kw result (real
+        zeros included — target reached or confirmed away are themselves
+        the correct thing to bridge FROM on a later data gap, not stale
+        leftovers to bridge past)."""
+        self._wallbox_last_good_reserved_kw[wallbox_id] = value
+        self._wallbox_last_good_at[wallbox_id] = now
+        return value
+
+    def _wallbox_bridge_last_good(self, wallbox_id: str, now: datetime) -> float:
+        """The last genuinely-computed reservation, as long as it's
+        within CORE_SENSOR_GRACE_PERIOD — same tolerance the core
+        solar/load/soc/battery sensors already get for a transient
+        outage. Falls back to 0.0 once no recent good value exists at
+        all (fresh start) or the gap has gone on too long to still trust
+        it (a real, extended outage should eventually give up, not
+        bridge forever)."""
+        last_value = self._wallbox_last_good_reserved_kw.get(wallbox_id)
+        last_at = self._wallbox_last_good_at.get(wallbox_id)
+        if last_value is not None and last_at is not None and now - last_at <= CORE_SENSOR_GRACE_PERIOD:
+            return last_value
+        return 0.0
 
     def _battery_full_projection(
         self, soc: float, batt: float, battery_kwh: float, now: datetime

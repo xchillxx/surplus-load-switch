@@ -190,7 +190,12 @@ cloud passes over or another appliance briefly kicks in.
   mode, its real draw can sit at ~0 for a few cycles while it ramps up,
   and protecting only that real draw would leave everything it's about
   to need looking completely free to every other device for as long as
-  the ramp-up takes.
+  the ramp-up takes. A brief gap in the car's own SOC/target/capacity/
+  presence entities (a flaky cloud API, for instance) bridges to the
+  last successfully-computed reservation for a while rather than
+  collapsing straight to 0 for that cycle — the same tolerance the core
+  solar/load/SOC/battery sensors already get elsewhere for exactly this
+  kind of transient outage.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's
