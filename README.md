@@ -142,6 +142,19 @@ cloud passes over or another appliance briefly kicks in.
   leaving the capacity or either SOC sensor unset disables the whole
   reservation. This is separate from and complements the weak-day
   priority above, which still applies unchanged on a detected weak day.
+  The rate itself is computed from a smoothed (20-minute rolling
+  median) surplus figure, not the raw instantaneous one, so it holds
+  steady while the underlying deficit and time-remaining are themselves
+  barely moving — a brief cloud, or the wallbox's own draw beating on a
+  laggy few-minutes-stale house-load reading, no longer shows up as a
+  swing in the reserved kW on the dashboard. And once the reservation
+  has claimed essentially the entire surplus that exists (not merely a
+  partial share of it — the wallbox is capped by availability, not by
+  its own charge rate), other devices stop being allowed on purely
+  because the house battery could afford to run them: that draw is
+  exactly what a surplus-based wallbox charger would otherwise pick up
+  the moment it's freed. A device with its own forced minimum runtime
+  is unaffected and keeps its priority regardless.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's

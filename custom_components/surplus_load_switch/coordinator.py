@@ -1621,17 +1621,80 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # The true, physical surplus — captured before any wallbox
         # reservation narrows what the device cascade gets to see below,
         # so the diagnostic sensor always reflects reality, not an
-        # artificially-shrunk figure.
+        # artificially-shrunk figure. Raw base_load is exactly right
+        # here — this is the device cascade's own moment-to-moment
+        # surplus check, which should react immediately to a cloud
+        # clearing, not lag behind a rolling median.
         data.surplus_kw = available_surplus
+
+        # smoothed_base_load: same reasoning as smoothed_discharge_kw
+        # above, but NOT the same "once per 60s cycle" admission —
+        # data.load_kw itself is a cloud-polled reading that only
+        # actually changes every ~5 minutes (confirmed directly against
+        # real data: 20:40:00, 20:41:27, 20:45:30, 20:50:20, 20:55:22 —
+        # roughly 4-5.5 min apart), so appending unconditionally every
+        # cycle would fill "20 samples" with only ~4 genuinely distinct
+        # readings, each duplicated 4-5x — letting 1-2 real bad readings
+        # dominate a median that looks far more robust than it actually
+        # is. Only admitting a sample when the raw reading itself has
+        # genuinely changed makes the window mean what its name says
+        # (DISCHARGE_SMOOTHING_SAMPLES genuinely independent
+        # measurements, spanning however long that takes in wall-clock
+        # time) regardless of the coordinator's own polling cadence or
+        # any drift in how often the cloud source actually refreshes.
+        if data.load_kw != self._last_appended_load_kw:
+            self._base_load_samples.append(base_load)
+            self._last_appended_load_kw = data.load_kw
+        # Same composition-change bridge as smoothed_discharge above —
+        # the first sample into a freshly-reset deque is otherwise fully
+        # exposed, right when it's most likely to be transiently wrong.
+        if len(self._base_load_samples) >= 2:
+            smoothed_base_load = statistics.median(self._base_load_samples)
+            self._last_trusted_base_load = smoothed_base_load
+        elif self._last_trusted_base_load is not None:
+            smoothed_base_load = self._last_trusted_base_load
+        else:
+            smoothed_base_load = base_load
 
         # Narrows what the cascade below actually competes over — each
         # wallbox's own reservation is already capped at the surplus
         # that exists, so this can't push available_surplus any lower
         # than "nothing left for anyone", never negative beyond that.
+        #
+        # Fed smoothed_available_surplus, not the raw available_surplus
+        # above — the reservation is a *rate* meant to hold for hours
+        # until the target is reached, the same kind of multi-hour
+        # figure as the overnight battery projection below, not an
+        # instant on/off decision. Feeding it raw surplus meant a cloud
+        # passing over for two minutes — or the wallbox's own draw
+        # beating on a laggy ~5-min-cadence house-load reading, same
+        # staleness smoothed_base_load exists to filter — directly
+        # became a jump in the reserved kW shown on the dashboard, even
+        # though what actually changed (the car's still-missing kWh, the
+        # hours left to get there) barely moved at all. Confirmed live:
+        # reserved kW swinging between ~2 and ~10 within a single hour
+        # while the underlying deficit was constant.
+        smoothed_available_surplus = data.solar_kw - smoothed_base_load
         wallbox_reserved_kw = sum(
-            self._wallbox_reserved_kw(wb, now, available_surplus)
+            self._wallbox_reserved_kw(wb, now, smoothed_available_surplus)
             for wb in wallbox_devices
             if wb.get(CONF_WALLBOX_CAPACITY_ENTITY)
+        )
+        # True only when the reservation consumed essentially the whole
+        # surplus that existed before it — capped by *availability*, not
+        # by the wallbox's own max-charge-rate or a small fractional
+        # need. Only in this state has every watt genuinely been claimed:
+        # a device granted "on" below purely because the battery could
+        # afford it would draw power the inverter's own surplus-based
+        # wallbox charging would otherwise route to the car — confirmed
+        # live, the car's charge rate visibly rises the moment SLS's
+        # managed devices go off. "The battery can afford it" and "the
+        # wallbox doesn't need it more" are different questions; this
+        # flag answers the second one. See its use against
+        # battery_eligible_ids below.
+        wallbox_starved = (
+            wallbox_reserved_kw > 0.0
+            and wallbox_reserved_kw >= smoothed_available_surplus - 0.05
         )
         available_surplus -= wallbox_reserved_kw
         data.wallbox_reserved_kw = wallbox_reserved_kw
@@ -1648,47 +1711,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         )
         self._load_profile_learner.record(base_load, hausmodus)
         data.load_profile = self._load_profile_learner.diagnostics
-
-        # Raw base_load is exactly right for the *live* figures above
-        # (display, and the surplus check's own moment-to-moment
-        # responsiveness) — but the overnight energy projection below
-        # multiplies whatever rate it's given by however many hours remain
-        # until solar start, so an unsmoothed, noisy base_load gets
-        # amplified into a total-kWh swing large enough to flip a
-        # borderline device's feasibility verdict every cycle. Confirmed
-        # on a real installation: a device with no cutoff (correctly
-        # assumed to run all the way to solar start, per its own
-        # unbounded-duration design) switched on/off roughly every 15-20
-        # minutes all night, driven by exactly this — the live numbers
-        # underneath its "would it last" check genuinely flickering, not a
-        # hysteresis bug. Same composition-change reset as
-        # smoothed_discharge_kw above, but NOT the same "once per 60s
-        # cycle" admission — data.load_kw itself is a cloud-polled reading
-        # that only actually changes every ~5 minutes (confirmed directly
-        # against real data: 20:40:00, 20:41:27, 20:45:30, 20:50:20,
-        # 20:55:22 — roughly 4-5.5 min apart), so appending unconditionally
-        # every cycle would fill "20 samples" with only ~4 genuinely
-        # distinct readings, each duplicated 4-5x — letting 1-2 real bad
-        # readings dominate a median that looks far more robust than it
-        # actually is. Only admitting a sample when the raw reading itself
-        # has genuinely changed makes the window mean what its name says
-        # (DISCHARGE_SMOOTHING_SAMPLES genuinely independent measurements,
-        # spanning however long that takes in wall-clock time) regardless
-        # of the coordinator's own polling cadence or any drift in how
-        # often the cloud source actually refreshes.
-        if data.load_kw != self._last_appended_load_kw:
-            self._base_load_samples.append(base_load)
-            self._last_appended_load_kw = data.load_kw
-        # Same composition-change bridge as smoothed_discharge above —
-        # the first sample into a freshly-reset deque is otherwise fully
-        # exposed, right when it's most likely to be transiently wrong.
-        if len(self._base_load_samples) >= 2:
-            smoothed_base_load = statistics.median(self._base_load_samples)
-            self._last_trusted_base_load = smoothed_base_load
-        elif self._last_trusted_base_load is not None:
-            smoothed_base_load = self._last_trusted_base_load
-        else:
-            smoothed_base_load = base_load
 
         # Computed once per cycle, not per dependent device — several
         # devices could depend on the same wallbox, and calling
@@ -1870,6 +1892,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             base_discharge_kw, available_surplus, data.avail_kwh, data.soc, data.min_soc,
             max_priority_number,
         )
+
+        if wallbox_starved:
+            # Every device below would run on battery, not on live
+            # surplus, while the wallbox is still short of what it needs
+            # right now — see wallbox_starved above. force_runtime
+            # devices are unaffected: they never go through
+            # battery_eligible_ids, they're already in mandatory_segments
+            # and win via their own should_on branch further down.
+            battery_eligible_ids = frozenset()
 
         # A device *re-joining* the set (wasn't eligible last cycle) must
         # also clear a more comfortable margin than the one that excluded
