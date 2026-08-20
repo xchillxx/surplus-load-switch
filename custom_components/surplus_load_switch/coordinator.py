@@ -348,9 +348,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # state history isn't meaningful to record anyway, only its current
         # (live-templated) attribute value is.
         self.log_entries: deque[dict] = deque(maxlen=1000)
-        self._calibrator = SolarOffsetCalibrator(
-            hass, entry_id, config[CONF_SOLAR_SENSOR], config[CONF_SOC_SENSOR]
-        )
+        self._calibrator = SolarOffsetCalibrator(hass, entry_id, config[CONF_SOLAR_SENSOR])
         self._base_load_floor_calibrator = BaseLoadFloorCalibrator(
             hass, entry_id, config[CONF_LOAD_SENSOR]
         )

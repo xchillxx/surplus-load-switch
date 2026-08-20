@@ -43,10 +43,7 @@ from .const import (
     CALIBRATION_MIN_GOOD_DAYS,
     CALIBRATION_RETRY_INTERVAL,
     CALIBRATION_THRESHOLD_RATIO,
-    RECENT_SOC_GAIN_WINDOW_DAYS,
-    SOLAR_START_MIN_KW,
     STORAGE_VERSION,
-    WEAK_DAY_EARLIEST_CHECK_HOUR,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,31 +56,13 @@ class SolarOffsetCalibrator:
     """
 
     def __init__(
-        self, hass: HomeAssistant, entry_id: str, solar_entity_id: str, soc_entity_id: str
+        self, hass: HomeAssistant, entry_id: str, solar_entity_id: str
     ) -> None:
         self._hass = hass
         self._solar_entity_id = solar_entity_id
-        self._soc_entity_id = soc_entity_id
         self._store: Store = Store(hass, STORAGE_VERSION, f"surplus_load_switch_calibration_{entry_id}")
         self._offsets: dict[int, float] = {}
         self._good_day_counts: dict[int, int] = {}
-        # Median good-day battery-SOC gain (percentage points) from solar
-        # start to WEAK_DAY_EARLIEST_CHECK_HOUR, per calendar month — a
-        # "how much does the battery normally pick up by this hour, this
-        # time of year" reference, used by the coordinator's weak-day
-        # detection — otherwise unrelated to the solar-start offset this
-        # class exists for, but computed from the exact same good-day data
-        # so it made no sense to duplicate the query/filtering.
-        self._reference_soc_gains: dict[int, float] = {}
-        # Median SOC gain over the last RECENT_SOC_GAIN_WINDOW_DAYS
-        # calendar days, unfiltered (no cloud/good-day logic) — a much
-        # simpler, always-available fallback reference for weak-day
-        # detection whenever the current month doesn't have its own
-        # calibrated reference yet (e.g. right after install, or a system
-        # too young for a full month of good-day data). Computed from the
-        # exact same query as the calibration above, just without its
-        # filtering.
-        self._recent_soc_gain: float | None = None
         self._last_calibrated: datetime | None = None
         self._last_sources: dict[int, str] = {}
         self._last_query_empty = False
@@ -94,39 +73,8 @@ class SolarOffsetCalibrator:
             return
         self._offsets = {int(k): v for k, v in data.get("offsets", {}).items()}
         self._good_day_counts = {int(k): v for k, v in data.get("good_day_counts", {}).items()}
-        self._reference_soc_gains = {
-            int(k): v for k, v in data.get("reference_soc_gains", {}).items()
-        }
-        self._recent_soc_gain = data.get("recent_soc_gain")
         last = data.get("last_calibrated")
         self._last_calibrated = dt_util.parse_datetime(last) if last else None
-        # If there's genuinely no usable weak-day reference after loading
-        # — no calibrated month AND no recent-window fallback — treat that
-        # the same as never having calibrated, forcing a recalibration
-        # attempt on the very next cycle instead of waiting out whatever
-        # the stored "last_calibrated" interval says. This covers both a
-        # pre-SOC-gain version's storage (no keys at all) *and* a result
-        # saved by a version that ran the query but ended up with nothing
-        # usable (e.g. one entity's statistics not ready yet at query
-        # time) — checking the actual loaded state instead of just
-        # whether specific keys are present in the raw JSON is what makes
-        # this catch the second case too. A fresh install's empty Store
-        # never reaches this line (caught by "if not data: return" above),
-        # so this can't misfire there.
-        if not self._reference_soc_gains and self._recent_soc_gain is None:
-            self._last_calibrated = None
-
-    def reference_soc_gain(self, month: int) -> float | None:
-        """This month's typical good-day SOC gain from solar start to
-        WEAK_DAY_EARLIEST_CHECK_HOUR, or None if it hasn't been
-        calibrated yet."""
-        return self._reference_soc_gains.get(month)
-
-    def effective_reference_soc_gain(self, month: int) -> float | None:
-        """The calibrated monthly reference if there is one, otherwise the
-        simple last-N-days fallback — whichever is available. What weak-
-        day detection should actually call."""
-        return self._reference_soc_gains.get(month) or self._recent_soc_gain
 
     def offsets_for(self, configured_defaults: list[float]) -> list[float]:
         """12-element list (Jan..Dec).
@@ -203,8 +151,6 @@ class SolarOffsetCalibrator:
             "gelernte_werte_h": dict(self._offsets),
             "gute_tage_pro_monat": dict(self._good_day_counts),
             "quelle_pro_monat": dict(self._last_sources),
-            "referenz_soc_zuwachs_pro_monat": dict(self._reference_soc_gains),
-            "referenz_soc_zuwachs_letzte_14_tage": self._recent_soc_gain,
             "zuletzt_kalibriert": self._last_calibrated.isoformat() if self._last_calibrated else None,
         }
 
@@ -232,8 +178,7 @@ class SolarOffsetCalibrator:
 
         def _query() -> dict:
             return statistics_during_period(
-                self._hass, start, end,
-                {self._solar_entity_id, self._soc_entity_id}, "hour", None, {"mean"},
+                self._hass, start, end, {self._solar_entity_id}, "hour", None, {"mean"},
             )
 
         try:
@@ -243,38 +188,27 @@ class SolarOffsetCalibrator:
             return
 
         solar_points = result.get(self._solar_entity_id, [])
-        soc_points = result.get(self._soc_entity_id, [])
         _LOGGER.debug(
-            "Solar offset calibration: query returned %d solar point(s), %d SOC "
-            "point(s) (%s to %s)",
-            len(solar_points), len(soc_points), start, end,
+            "Solar offset calibration: query returned %d solar point(s) (%s to %s)",
+            len(solar_points), start, end,
         )
-        if not solar_points or not soc_points:
+        if not solar_points:
             # Doesn't set _last_calibrated to a value that blocks the normal
             # 24h cadence — an empty result right after startup (recorder
             # or its statistics index not fully ready yet) should be
-            # retried soon, not locked out for a full day. Once a real
-            # result comes back for *both* entities (even with 0
-            # calibrated months from too little good data), the normal
-            # cadence takes over. Checking both, not just the solar one —
-            # a query landing right at startup has been seen to return the
-            # solar sensor's statistics but not yet the SOC sensor's,
-            # which would otherwise silently lock in an empty weak-day
-            # reference for a full day.
+            # retried soon, not locked out for a full day.
             _LOGGER.warning(
                 "Solar offset calibration: no statistics returned for %s "
-                "(queried %s to %s, solar points: %d, SOC points: %d) — "
-                "will retry sooner than the normal 24h cadence",
-                self._solar_entity_id if not solar_points else self._soc_entity_id,
-                start, end, len(solar_points), len(soc_points),
+                "(queried %s to %s) — will retry sooner than the normal 24h cadence",
+                self._solar_entity_id, start, end,
             )
             self._last_calibrated = dt_util.utcnow()
             self._last_query_empty = True
             return
 
         try:
-            offsets, good_counts, reference_soc_gains, recent_soc_gain = (
-                await self._hass.async_add_executor_job(self._compute, solar_points, soc_points)
+            offsets, good_counts = await self._hass.async_add_executor_job(
+                self._compute, solar_points
             )
         except Exception:  # noqa: BLE001 — same: never let this break the coordinator
             _LOGGER.exception("Solar offset calibration: failed to compute offsets")
@@ -282,27 +216,21 @@ class SolarOffsetCalibrator:
 
         self._offsets = offsets
         self._good_day_counts = good_counts
-        self._reference_soc_gains = reference_soc_gains
-        self._recent_soc_gain = recent_soc_gain
         self._last_calibrated = dt_util.utcnow()
         self._last_query_empty = False
         await self._store.async_save({
             "offsets": self._offsets,
             "good_day_counts": self._good_day_counts,
-            "reference_soc_gains": self._reference_soc_gains,
-            "recent_soc_gain": self._recent_soc_gain,
             "last_calibrated": self._last_calibrated.isoformat(),
         })
         _LOGGER.info(
-            "Solar offset calibration: %d month(s) calibrated from %d good day(s) total, "
-            "recent-14-day reference SOC gain %s",
+            "Solar offset calibration: %d month(s) calibrated from %d good day(s) total",
             len(self._offsets), sum(good_counts.values()),
-            f"{recent_soc_gain:.1f} %" if recent_soc_gain is not None else "not enough data yet",
         )
 
     def _compute(
-        self, solar_points: list[dict], soc_points: list[dict]
-    ) -> tuple[dict[int, float], dict[int, int], dict[int, float], float | None]:
+        self, solar_points: list[dict]
+    ) -> tuple[dict[int, float], dict[int, int]]:
         """CPU-bound: sunrise lookup + day grouping + the cloud filter.
         Must run in the executor, not the event loop."""
         from astral import LocationInfo
@@ -331,55 +259,8 @@ class SolarOffsetCalibrator:
             start_dt = dt_util.utc_from_timestamp(p["start"]).astimezone(tz)
             by_day[start_dt.date()].append((start_dt, mean))
 
-        by_day_soc: dict[date, list[tuple[datetime, float]]] = defaultdict(list)
-        for p in soc_points:
-            mean = p.get("mean")
-            if mean is None:
-                continue
-            start_dt = dt_util.utc_from_timestamp(p["start"]).astimezone(tz)
-            by_day_soc[start_dt.date()].append((start_dt, mean))
-
         days = sorted(by_day.keys())
         peaks = {d: max(v for _, v in by_day[d]) for d in days}
-
-        # Per-day SOC gain from solar start (first hour reaching
-        # SOLAR_START_MIN_KW — the same live-computable threshold the
-        # coordinator uses, not a fraction of that day's peak, since this
-        # has to match what the live tracking can actually know in the
-        # moment) to WEAK_DAY_EARLIEST_CHECK_HOUR local time. Computed for
-        # every day with both solar and SOC data, independent of the
-        # cloud/good-day filter below — that filter is applied separately
-        # per use (calibrated monthly reference vs. simple recent-window
-        # fallback).
-        day_soc_gain: dict[date, float] = {}
-        for d in days:
-            solar_entries = sorted(by_day[d])
-            soc_entries = sorted(by_day_soc.get(d, []))
-            if not soc_entries:
-                continue
-            start_t = next((t for t, v in solar_entries if v >= SOLAR_START_MIN_KW), None)
-            if start_t is None:
-                continue
-            ref_t = start_t.replace(
-                hour=WEAK_DAY_EARLIEST_CHECK_HOUR, minute=0, second=0, microsecond=0
-            )
-            if ref_t <= start_t:
-                continue  # solar started at/after the reference hour that day
-            soc_start = next((v for t, v in soc_entries if t >= start_t), None)
-            soc_at_ref = next((v for t, v in soc_entries if t >= ref_t), None)
-            if soc_start is None or soc_at_ref is None:
-                continue
-            day_soc_gain[d] = soc_at_ref - soc_start
-
-        # Simple recent-days fallback reference — no cloud/good-day
-        # filtering, just the last RECENT_SOC_GAIN_WINDOW_DAYS *complete*
-        # calendar days (today's excluded: it isn't over yet).
-        today = dt_util.now(tz).date()
-        recent_days = [d for d in days if d < today][-RECENT_SOC_GAIN_WINDOW_DAYS:]
-        recent_gains = [day_soc_gain[d] for d in recent_days if d in day_soc_gain]
-        recent_soc_gain = (
-            round(statistics.median(recent_gains), 3) if len(recent_gains) >= 5 else None
-        )
 
         good_days: list[date] = []
         rejected_no_neighbors = 0
@@ -397,12 +278,9 @@ class SolarOffsetCalibrator:
                 rejected_too_cloudy += 1
 
         by_month: dict[int, list[float]] = defaultdict(list)
-        by_month_soc_gain: dict[int, list[float]] = defaultdict(list)
         rejected_no_threshold_hour = 0
         rejected_no_sunrise = 0
         for d in good_days:
-            if d in day_soc_gain:
-                by_month_soc_gain[d.month].append(day_soc_gain[d])
             entries = sorted(by_day[d])
             threshold = CALIBRATION_THRESHOLD_RATIO * peaks[d]
             first_above = next((t for t, v in entries if v >= threshold), None)
@@ -424,23 +302,14 @@ class SolarOffsetCalibrator:
             if len(vals) >= CALIBRATION_MIN_GOOD_DAYS:
                 offsets[m] = round(statistics.median(vals), 2)
 
-        reference_soc_gains: dict[int, float] = {
-            m: round(statistics.median(vals), 3)
-            for m, vals in by_month_soc_gain.items()
-            if len(vals) >= CALIBRATION_MIN_GOOD_DAYS
-        }
-
         _LOGGER.info(
-            "Solar offset calibration detail: %d day(s) with solar data, %d day(s) "
-            "with an SOC gain computed, %d good day(s) (%d rejected: too few "
-            "neighbouring days with data, %d rejected: too cloudy vs. neighbours), "
-            "%d rejected (no hour reached the start threshold), %d rejected "
-            "(sunrise lookup failed) -- %d month(s) got a calibrated offset, %d "
-            "month(s) got a reference SOC gain, %d recent day(s) used for the "
-            "fallback reference (%d available)",
-            len(days), len(day_soc_gain), len(good_days), rejected_no_neighbors,
-            rejected_too_cloudy, rejected_no_threshold_hour, rejected_no_sunrise,
-            len(offsets), len(reference_soc_gains), len(recent_gains), len(recent_days),
+            "Solar offset calibration detail: %d day(s) with solar data, %d good "
+            "day(s) (%d rejected: too few neighbouring days with data, %d "
+            "rejected: too cloudy vs. neighbours), %d rejected (no hour reached "
+            "the start threshold), %d rejected (sunrise lookup failed) -- %d "
+            "month(s) got a calibrated offset",
+            len(days), len(good_days), rejected_no_neighbors, rejected_too_cloudy,
+            rejected_no_threshold_hour, rejected_no_sunrise, len(offsets),
         )
 
-        return offsets, good_counts, reference_soc_gains, recent_soc_gain
+        return offsets, good_counts

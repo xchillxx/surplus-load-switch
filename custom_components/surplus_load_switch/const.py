@@ -167,9 +167,6 @@ WALLBOX_FORECAST_MIN_KWH = 0.5
 # RATIO above), since live tracking can't know today's peak in advance the
 # way the historical offset calibration can.
 SOLAR_START_MIN_KW = 0.3
-# Local hour before which the calibrated reference SOC-gain-since-solar-
-# start isn't checked — the morning peak may simply not have happened yet.
-WEAK_DAY_EARLIEST_CHECK_HOUR = 11
 # Battery SOC at/above which the battery counts as essentially full for
 # the day (see coordinator._battery_full_projection) — there's no reason
 # to keep low-priority devices held back once the battery doesn't need
@@ -421,9 +418,3 @@ CALIBRATION_MIN_GOOD_DAYS = 5
 # than the static default, but a gap wider than this isn't trusted since
 # the seasonal relationship isn't necessarily linear over that distance.
 CALIBRATION_MAX_INTERP_MONTHS = 2
-# How many recent complete calendar days to use for weak-day detection's
-# simple fallback reference SOC gain, whenever the current month doesn't
-# have its own calibrated one yet (see SolarOffsetCalibrator.
-# effective_reference_soc_gain) — short enough to reflect current
-# conditions quickly, long enough to smooth out a single cloudy day.
-RECENT_SOC_GAIN_WINDOW_DAYS = 14
