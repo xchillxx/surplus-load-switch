@@ -1788,12 +1788,24 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # there isn't enough left over after the wallbox's actual
             # draw, nothing else gets to compete for what's left, the
             # same way base_load already leaves nothing for the cascade
-            # once it alone exceeds solar. No separate reservation
-            # subtraction on top here — the wallbox's real draw is
-            # already fully accounted for in base_load itself, so
-            # subtracting wallbox_reserved_kw again would double-count it.
+            # once it alone exceeds solar.
+            #
+            # Protects max(wallbox_power_kw, wallbox_reserved_kw), not
+            # just the real draw — confirmed live: right after switching
+            # a wallbox back to surplus-following mode, its real draw was
+            # still ~0 (hadn't ramped up yet) while the reservation still
+            # called for ~6 kW, and using only the real draw here left
+            # that entire 6 kW looking "free" to every other device for
+            # as long as the ramp-up took, exactly the gap this max()
+            # closes. Written as topping up load_kw by whatever the
+            # reservation still calls for beyond the real draw, since
+            # load_kw already includes that real draw once it exists —
+            # adding the full max() on top of a load_kw that already
+            # contains wallbox_power_kw would double-count it.
             base_load = max(
-                data.load_kw - effective_managed_power_kw,
+                data.load_kw
+                - effective_managed_power_kw
+                + max(wallbox_reserved_kw - wallbox_power_kw, 0.0),
                 self._base_load_floor_calibrator.floor_kw,
             )
             available_surplus = data.solar_kw - base_load

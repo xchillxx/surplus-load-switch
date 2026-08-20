@@ -184,7 +184,13 @@ cloud passes over or another appliance briefly kicks in.
   it has nothing to say about a wallbox that isn't limiting itself to
   that share at all, which the forecast-based case alone would miss
   entirely on a day it otherwise still comfortably covers the deficit
-  on paper.
+  on paper. What's actually protected while starved is the *larger* of
+  the wallbox's real draw and its calculated reservation, not just the
+  real draw — right after switching a wallbox back to surplus-following
+  mode, its real draw can sit at ~0 for a few cycles while it ramps up,
+  and protecting only that real draw would leave everything it's about
+  to need looking completely free to every other device for as long as
+  the ramp-up takes.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's
