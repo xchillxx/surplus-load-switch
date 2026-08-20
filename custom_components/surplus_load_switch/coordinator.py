@@ -25,11 +25,13 @@ from .const import (
     BATTERY_FULL_TARGET_TIME_BUFFER_H,
     BATT_OK_BUFFER_H,
     CALIBRATION_INTERVAL_HOURS,
+    CLIMATE_STABILITY_MULTIPLIER,
     CONF_BATT_SENSOR,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_DEVICES,
     CONF_DEVICE_DEPENDS_ON,
     CONF_DEVICE_ENABLED,
+    CONF_DEVICE_IS_CLIMATE,
     CONF_DEVICE_IS_WALLBOX,
     CONF_DEVICE_MIN_DAILY_RUNTIME_H,
     CONF_DEVICE_MIN_SOC_PERCENT,
@@ -1279,7 +1281,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         return frozenset(candidates[i][0] for i in best_subset)
 
     @staticmethod
-    def _required_off_cycles(data: CoordinatorData, priority_rank: int = 0) -> int:
+    def _required_off_cycles(
+        data: CoordinatorData, priority_rank: int = 0, is_climate: bool = False
+    ) -> int:
         """More battery margin beyond what's needed until solar resumes ->
         wait longer before reacting to a deficit, since it's more likely a
         short-lived spike than a real trend. No margin -> react fast.
@@ -1291,13 +1295,32 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         dropping off a cliff at sunset) would all finish their hold at the
         same cycle count and switch off simultaneously instead of shedding
         lowest-priority first.
+
+        is_climate stretches the final result by CLIMATE_STABILITY_
+        MULTIPLIER, applied after staggering/flooring rather than to the
+        base margin math — every device's OFF timing for this device type
+        is uniformly slower, not just its floor or its stagger offset.
         """
         margin_h = max(min(data.h_battery, 999.0) - data.effective_h_to_solar, 0.0)
         fraction = min(margin_h / MARGIN_FOR_MAX_PATIENCE_H, 1.0)
         extra = (STABLE_OFF_CYCLES_MAX - STABLE_OFF_CYCLES) * fraction
         base = round(STABLE_OFF_CYCLES + extra)
         staggered = base - priority_rank * STAGGER_CYCLES_PER_PRIORITY_STEP
-        return max(staggered, OFF_CYCLES_FLOOR)
+        result = max(staggered, OFF_CYCLES_FLOOR)
+        if is_climate:
+            result = round(result * CLIMATE_STABILITY_MULTIPLIER)
+        return result
+
+    @staticmethod
+    def _stable_on_cycles_for(dev: dict) -> int:
+        """STABLE_ON_CYCLES, stretched by CLIMATE_STABILITY_MULTIPLIER for
+        a climate-controlled device (compressor wear from short-cycling)
+        — see CLIMATE_STABILITY_MULTIPLIER. Used both for the actual
+        on_counter threshold and for how far ahead of a window opening
+        pre-charging starts, so the two stay consistent with each other."""
+        if dev.get(CONF_DEVICE_IS_CLIMATE, False):
+            return round(STABLE_ON_CYCLES * CLIMATE_STABILITY_MULTIPLIER)
+        return STABLE_ON_CYCLES
 
     def _get_solar_start(self) -> datetime:
         sun = self.hass.states.get("sun.sun")
@@ -1871,7 +1894,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 continue
 
             _window_closed = _in_window is False
-            _precharge_horizon = timedelta(seconds=STABLE_ON_CYCLES * UPDATE_INTERVAL_SECONDS)
+            _precharge_horizon = timedelta(
+                seconds=self._stable_on_cycles_for(_dev) * UPDATE_INTERVAL_SECONDS
+            )
             if _window_closed and not _is_on and not self._window_reopens_within(
                 _dev, now_dt, _precharge_horizon
             ):
@@ -2106,7 +2131,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # it's on, either one is enforced immediately, no hysteresis,
             # same as before.
             window_closed = in_window is False
-            precharge_horizon = timedelta(seconds=STABLE_ON_CYCLES * UPDATE_INTERVAL_SECONDS)
+            precharge_horizon = timedelta(
+                seconds=self._stable_on_cycles_for(dev) * UPDATE_INTERVAL_SECONDS
+            )
             window_far_closed = window_closed and not self._window_reopens_within(
                 dev, now_dt, precharge_horizon
             )
@@ -2254,9 +2281,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 # schedule, when shedding the lower-priority one wouldn't
                 # even have helped. See _select_battery_optimal_set.
                 battery_would_last = device_id in battery_eligible_ids
-            required_off_cycles = self._required_off_cycles(data, priority_rank)
+            is_climate_dev = dev.get(CONF_DEVICE_IS_CLIMATE, False)
+            required_off_cycles = self._required_off_cycles(data, priority_rank, is_climate_dev)
+            stable_on_cycles = self._stable_on_cycles_for(dev)
             diag.required_off_cycles = required_off_cycles
-            diag.required_on_cycles = STABLE_ON_CYCLES
+            diag.required_on_cycles = stable_on_cycles
 
             should_on = (
                 force_runtime
@@ -2349,11 +2378,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 # pre-charged to the full hold while blocked, there's
                 # nothing more to gain from counting further cycles, and an
                 # uncapped counter would just be an ever-growing number
-                # that means the same thing as STABLE_ON_CYCLES already
+                # that means the same thing as stable_on_cycles already
                 # did.
-                tracker.on_counter = min(tracker.on_counter + 1, STABLE_ON_CYCLES)
+                tracker.on_counter = min(tracker.on_counter + 1, stable_on_cycles)
                 tracker.off_counter = 0
-                if tracker.on_counter >= STABLE_ON_CYCLES and not blocked:
+                if tracker.on_counter >= stable_on_cycles and not blocked:
                     _LOGGER.info(
                         "PV Surplus: turning ON %s (remaining_surplus=%.2f, need=%.2f, "
                         "battery_would_last=%s, force_runtime=%s)",

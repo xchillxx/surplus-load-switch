@@ -231,6 +231,13 @@ cloud passes over or another appliance briefly kicks in.
   `climate.*` entity and which mode counts as "on" (e.g. `heat`) — the
   cascade otherwise treats it exactly like a switch-controlled device
   (priority, power measurement, time windows, minimum runtime all apply).
+  One difference: a compressor wears out measurably faster from frequent
+  short cycles than from the same total runtime in fewer, longer ones — a
+  resistive load (boiler, pump) doesn't have that problem, so this only
+  applies to climate devices. Both the on-hold and the off-hold (and how
+  far ahead of a schedule window pre-charging starts) are automatically
+  doubled for any device added this way, so the same surplus swings that
+  are fine to chase for a boiler switch fewer times a day for a heat pump.
 - **Device dependencies** — some devices physically can't do anything unless
   another one is already running (e.g. a heat pump with a flow switch that
   only lets the compressor start while its pool pump is circulating water).

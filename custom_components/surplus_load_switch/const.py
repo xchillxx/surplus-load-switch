@@ -209,6 +209,15 @@ STABLE_ON_CYCLES = _minutes_to_cycles(10)   # 10 min before turning ON
 STABLE_OFF_CYCLES = _minutes_to_cycles(10)  # 10 min minimum — used when there's no battery margin to spare
 STABLE_OFF_CYCLES_MAX = _minutes_to_cycles(20)  # 20 min — used when margin is comfortable
 
+# A compressor (heat pump, AC) wears measurably faster from short-cycling
+# than from running the same total hours in fewer, longer cycles — the
+# same surplus-chasing responsiveness that's fine for a resistive load
+# (boiler, pump) actively shortens a compressor's service life. Applied
+# to both STABLE_ON_CYCLES and _required_off_cycles for any device with
+# CONF_DEVICE_IS_CLIMATE set, nothing else — a plain switch-controlled
+# device keeps reacting at the normal pace.
+CLIMATE_STABILITY_MULTIPLIER = 2.0
+
 # Priority staggering: when several devices cross their off-threshold in the
 # same cycle (e.g. solar drops off a cliff at sunset), they'd otherwise all
 # finish their off-hold at the same cycle count and switch off together.
