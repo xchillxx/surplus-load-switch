@@ -324,6 +324,14 @@ DISCHARGE_SMOOTHING_SAMPLES = _minutes_to_cycles(20)  # 20 min rolling median
 # off_counter before it ever reaches required_off_cycles.
 WALLBOX_RELIEF_CYCLES = STABLE_ON_CYCLES
 
+# Same asymmetric-debounce reasoning as WALLBOX_RELIEF_CYCLES above, for
+# battery_behind_schedule (see _evaluate_devices): a device shouldn't be
+# allowed back onto battery_would_last just because the house battery's
+# own charge rate ticked positive for one cycle while it's still
+# genuinely behind where it needs to be to reach WEAK_DAY_BATTERY_FULL_SOC
+# in time.
+BATTERY_FULL_RELIEF_CYCLES = STABLE_ON_CYCLES
+
 # Default monthly solar offsets (hours after sunrise until PV is useful)
 DEFAULT_SOLAR_OFFSETS = [3.5, 3.0, 2.5, 2.0, 2.0, 2.2, 2.2, 2.0, 2.5, 3.0, 3.5, 4.0]
 

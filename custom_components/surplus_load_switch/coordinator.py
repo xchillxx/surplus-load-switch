@@ -22,6 +22,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BATTERY_FULL_RELIEF_CYCLES,
     BATTERY_FULL_TARGET_TIME_BUFFER_H,
     BATT_OK_BUFFER_H,
     CALIBRATION_INTERVAL_HOURS,
@@ -279,6 +280,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # cycle should reflect wallbox_starved as-is rather than a
         # phantom starved period nobody observed.
         self._wallbox_relief_counter = WALLBOX_RELIEF_CYCLES
+        # Same starts-relieved reasoning as _wallbox_relief_counter above,
+        # for battery_behind_schedule (see _evaluate_devices).
+        self._battery_full_relief_counter = BATTERY_FULL_RELIEF_CYCLES
         # Tracks the managed-device mix a still-unrefreshed load/discharge
         # reading was last known to actually reflect — see the staleness
         # correction in _evaluate_devices. TWO independent freezes, not
@@ -1506,8 +1510,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """Cascade surplus across devices in priority order.
 
         The wallbox is excluded from switching (it's controlled by its own PV
-        logic already) but its measured power is subtracted from the load so
-        it doesn't count as "unavoidable base load" for our devices.
+        logic already). Its measured power is normally subtracted from the
+        load so it doesn't count as "unavoidable base load" for our devices —
+        correct as long as the wallbox is genuinely self-limiting to surplus,
+        since a squeeze then shows up as the wallbox drawing less on its own,
+        not as competing load. That assumption breaks the moment it isn't
+        self-limiting (a manual "charge now regardless of surplus" override,
+        or simply needing more than the day can give): see wallbox_starved
+        below, which stops excluding it once that's the case — its full real
+        draw then counts as ordinary, unavoidable load ahead of everyone
+        else, effectively priority 0.
         """
         all_devices = self.devices
         devices_by_id = {d["_id"]: d for d in all_devices}
@@ -1651,21 +1663,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # this negative and floor it at a physically implausible 0 —
         # making base_discharge_kw below look more favorable than reality
         # for that cycle. See base_load_floor.py.
-        base_load = max(
+        base_load_excl_wallbox = max(
             data.load_kw - wallbox_power_kw - effective_managed_power_kw,
             self._base_load_floor_calibrator.floor_kw,
         )
-        available_surplus = data.solar_kw - base_load
-
-        data.base_load_kw = base_load
-        # The true, physical surplus — captured before any wallbox
-        # reservation narrows what the device cascade gets to see below,
-        # so the diagnostic sensor always reflects reality, not an
-        # artificially-shrunk figure. Raw base_load is exactly right
-        # here — this is the device cascade's own moment-to-moment
-        # surplus check, which should react immediately to a cloud
-        # clearing, not lag behind a rolling median.
-        data.surplus_kw = available_surplus
+        available_surplus_excl_wallbox = data.solar_kw - base_load_excl_wallbox
 
         # smoothed_base_load: same reasoning as smoothed_discharge_kw
         # above, but NOT the same "once per 60s cycle" admission —
@@ -1683,7 +1685,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # time) regardless of the coordinator's own polling cadence or
         # any drift in how often the cloud source actually refreshes.
         if data.load_kw != self._last_appended_load_kw:
-            self._base_load_samples.append(base_load)
+            self._base_load_samples.append(base_load_excl_wallbox)
             self._last_appended_load_kw = data.load_kw
         # Same composition-change bridge as smoothed_discharge above —
         # the first sample into a freshly-reset deque is otherwise fully
@@ -1694,7 +1696,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         elif self._last_trusted_base_load is not None:
             smoothed_base_load = self._last_trusted_base_load
         else:
-            smoothed_base_load = base_load
+            smoothed_base_load = base_load_excl_wallbox
 
         # Narrows what the cascade below actually competes over — each
         # wallbox's own reservation is already capped at the surplus
@@ -1755,8 +1757,69 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         wallbox_starved_effective = (
             wallbox_starved or self._wallbox_relief_counter < WALLBOX_RELIEF_CYCLES
         )
-        available_surplus -= wallbox_reserved_kw
         data.wallbox_reserved_kw = wallbox_reserved_kw
+
+        if wallbox_starved_effective:
+            # The wallbox needs essentially everything there is — the
+            # "it's self-limiting, so exclude its draw" assumption above
+            # no longer holds, so its full real draw stops being invisible
+            # and counts as ordinary, unavoidable load instead, exactly
+            # like any other real consumer. Effectively priority 0: if
+            # there isn't enough left over after the wallbox's actual
+            # draw, nothing else gets to compete for what's left, the
+            # same way base_load already leaves nothing for the cascade
+            # once it alone exceeds solar. No separate reservation
+            # subtraction on top here — the wallbox's real draw is
+            # already fully accounted for in base_load itself, so
+            # subtracting wallbox_reserved_kw again would double-count it.
+            base_load = max(
+                data.load_kw - effective_managed_power_kw,
+                self._base_load_floor_calibrator.floor_kw,
+            )
+            available_surplus = data.solar_kw - base_load
+        else:
+            # Normal case: the wallbox is (for now) genuinely
+            # self-limiting, so its real draw stays excluded from
+            # base_load, and only the smaller, forward-looking
+            # reservation — not its full draw — is set aside ahead of
+            # the cascade below.
+            base_load = base_load_excl_wallbox
+            available_surplus = available_surplus_excl_wallbox - wallbox_reserved_kw
+
+        data.base_load_kw = base_load
+        # The true, physical surplus actually left over for everyone
+        # else this cycle, wallbox included — so the diagnostic sensor
+        # reflects reality instead of a number that assumes a
+        # self-limiting wallbox even when it isn't currently one.
+        data.surplus_kw = available_surplus
+
+        # battery_full_on_track (see _battery_full_projection) is a
+        # second, independent signal on top of wallbox_starved above —
+        # computed from the battery's own real charge rate rather than
+        # from surplus/base_load at all, so it still catches the battery
+        # genuinely falling behind for a reason wallbox_starved wouldn't
+        # (an unusually high house base load, for instance), not just the
+        # wallbox-draw case that's now folded into base_load itself. Only
+        # meaningful during the day — at night, or before the morning
+        # charge has ramped up, the
+        # battery routinely isn't gaining charge for reasons that have
+        # nothing to do with anything being wrong (that's exactly when
+        # "Akku reicht" is supposed to let devices draw it down), so this
+        # only applies while the sun is above the horizon. Same
+        # instant-engage/debounced-release shape as wallbox_starved
+        # above, and the same scope: only battery_would_last, never
+        # force_runtime or a genuine live-surplus turn-on.
+        battery_behind_schedule = data.sun_above_horizon and not data.battery_full_on_track
+        if battery_behind_schedule:
+            self._battery_full_relief_counter = 0
+        else:
+            self._battery_full_relief_counter = min(
+                self._battery_full_relief_counter + 1, BATTERY_FULL_RELIEF_CYCLES
+            )
+        battery_behind_schedule_effective = (
+            battery_behind_schedule
+            or self._battery_full_relief_counter < BATTERY_FULL_RELIEF_CYCLES
+        )
 
         # Diagnostic only for now — see load_profile.py. Sampled here
         # (not gated on day/night or anything else) so every cycle
@@ -1954,14 +2017,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             max_priority_number,
         )
 
-        if wallbox_starved_effective:
+        if wallbox_starved_effective or battery_behind_schedule_effective:
             # Every device below would run on battery, not on live
-            # surplus, while the wallbox is still short of what it needs
-            # right now (or was, within the last WALLBOX_RELIEF_CYCLES —
-            # see wallbox_starved_effective above). force_runtime
-            # devices are unaffected: they never go through
-            # battery_eligible_ids, they're already in mandatory_segments
-            # and win via their own should_on branch further down.
+            # surplus, while either the wallbox is still short of what it
+            # needs right now, or the house battery itself is behind
+            # where it needs to be to reach WEAK_DAY_BATTERY_FULL_SOC in
+            # time (or either was true within the last relief window —
+            # see wallbox_starved_effective/battery_behind_schedule_
+            # effective above). force_runtime devices are unaffected:
+            # they never go through battery_eligible_ids, they're already
+            # in mandatory_segments and win via their own should_on
+            # branch further down.
             battery_eligible_ids = frozenset()
 
         # A device *re-joining* the set (wasn't eligible last cycle) must

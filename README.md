@@ -163,7 +163,18 @@ cloud passes over or another appliance briefly kicks in.
   a single clear gap releasing it right away would reset a device's own
   switch-on-cooldown before it ever finished counting down, and the
   device would end up never actually switching despite the wallbox
-  being starved most of the time.
+  being starved most of the time. The same starved state also changes
+  what counts as surplus in the first place: normally the wallbox's own
+  measured draw is excluded from the house's base load, since a
+  genuinely self-limiting wallbox draws only what's left over anyway —
+  but that assumption breaks the moment it isn't self-limiting (a
+  manual "charge now" override on the charger's own side, for
+  instance), and excluding its draw would then make the house look like
+  it has surplus to spare when in reality that power is already
+  spoken for. Once starved, the wallbox's full real draw counts as
+  ordinary, unavoidable load ahead of every other device instead —
+  effectively priority 0 — rather than only affecting the
+  battery-affordability path above.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's
@@ -292,8 +303,17 @@ cloud passes over or another appliance briefly kicks in.
   charge rate whether the battery is on track to reach its "essentially
   full" threshold by sunset minus a safety margin — a "Akku wird
   rechtzeitig voll" binary sensor, with the missing kWh and both hour
-  figures as attributes. Diagnostic only, doesn't affect any switching
-  decision.
+  figures as attributes. Not diagnostic-only: whenever it's off during
+  the day (the battery isn't gaining charge fast enough to make the
+  target), the battery-affordability path is blocked the same way the
+  wallbox-starved gate above blocks it — a device otherwise granted "on"
+  purely because the battery could afford it would be drawing power the
+  battery itself is behind on needing. Same debounced-release shape as
+  the wallbox gate, and the same scope: force_runtime and a genuine
+  live-surplus turn-on are both unaffected. Only evaluated while the sun
+  is above the horizon — at night, or before the morning charge has
+  ramped up, the battery not gaining charge is completely normal, not a
+  sign of anything behind schedule.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
   Devices & Services, nested under the integration's hub device, instead of
