@@ -106,7 +106,15 @@ cloud passes over or another appliance briefly kicks in.
   for the load to turn out to have already recovered after the first
   one alone. Releases the instant the load sensor produces fresh
   confirmation, holding the device's own countdown at its finish line
-  in the meantime rather than restarting the wait from scratch.
+  in the meantime rather than restarting the wait from scratch. Uses
+  its own dedicated freeze, armed only by a genuine device actually
+  toggling on/off — not the load/discharge attribution freeze
+  elsewhere in this section, which also (correctly, for its own
+  purpose) re-arms on a real power sensor's ordinary cycle-to-cycle
+  measurement noise. Sharing that one here would mean a
+  continuously-drawing metered device could keep it re-arming
+  indefinitely the moment it cleared, holding every pending shed at a
+  finished countdown that never actually executes.
 - **Tolerant of brief sensor outages** — the four core sensors (solar,
   load, SOC, battery power) hold their last known good reading for up to
   20 minutes if one goes `unavailable`/`unknown`, instead of freezing the

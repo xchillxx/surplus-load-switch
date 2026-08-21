@@ -347,6 +347,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._stale_since_discharge: datetime | None = None
         self._last_seen_discharge_kw: float | None = None
         self._discharge_refresh_count: int = 0
+        # Dedicated freeze for the "wait for confirmation between sheds"
+        # gate (see managed_on_now in _evaluate_devices) — deliberately
+        # separate from _stale_managed_power_kw_load above, which arms
+        # on any change in the summed managed-device power reading, not
+        # just a genuine device toggling on/off. A device with a real,
+        # continuously-fluctuating power sensor (measurement noise, not
+        # an actual state change) would otherwise keep re-arming that
+        # freeze indefinitely the instant it cleared.
+        self._shed_gate_active_since: datetime | None = None
+        self._shed_gate_last_seen_load_kw: float | None = None
+        self._shed_gate_refresh_count: int = 0
         # Whether each core sensor was readable as of the last cycle — a
         # system-log entry is written only on the transition (goes
         # unavailable / comes back), not every cycle it stays that way.
@@ -1688,6 +1699,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # looking like the battery is draining fast right after a
         # windowed device's cutoff actually frees up that margin.
         managed_on_now = frozenset(dev_id for dev_id, on in device_is_on.items() if on)
+        now = dt_util.utcnow()
         if managed_on_now != self._last_managed_on:
             self._discharge_samples.clear()
             self._charge_samples.clear()
@@ -1695,7 +1707,42 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._last_appended_load_kw = None
             self._last_appended_discharge_kw = None
             self._last_appended_charge_kw = None
+            # A dedicated freeze for the "wait for confirmation between
+            # sheds" gate below (see its use against off_counter further
+            # down) — deliberately NOT the same _stale_managed_power_kw_load
+            # used just above for load/discharge attribution. That one
+            # re-arms on *any* change in the summed managed-device power
+            # reading, including a real power sensor's own normal
+            # cycle-to-cycle measurement noise with zero devices actually
+            # toggling — confirmed live: reusing it here meant a
+            # continuously-drawing device (a Shelly-metered miner, in
+            # this case) kept the freeze re-arming indefinitely the
+            # instant it cleared, so the shed gate effectively never
+            # opened at all — four devices stuck at a 0:00 countdown for
+            # 10+ minutes, each cycle re-logging the same "should switch
+            # off" reason without ever actually doing it. managed_on_now
+            # (the *set* of which devices are on, not a power value) only
+            # changes on a genuine transition, so this only ever arms
+            # when something real happened.
+            self._shed_gate_active_since = now
+            self._shed_gate_last_seen_load_kw = data.load_kw
+            self._shed_gate_refresh_count = 0
         self._last_managed_on = managed_on_now
+
+        # Resolved the same way as the load/discharge staleness freezes
+        # above: cleared once the load sensor has produced
+        # STALENESS_MIN_REFRESHES genuinely new readings since the last
+        # real composition change, or LOAD_SENSOR_STALENESS_GRACE has
+        # passed regardless (a sensor that stalls entirely must not
+        # block shedding forever).
+        if self._shed_gate_active_since is not None:
+            if data.load_kw != self._shed_gate_last_seen_load_kw:
+                self._shed_gate_refresh_count += 1
+                self._shed_gate_last_seen_load_kw = data.load_kw
+            caught_up = self._shed_gate_refresh_count >= STALENESS_MIN_REFRESHES
+            timed_out = now - self._shed_gate_active_since >= LOAD_SENSOR_STALENESS_GRACE
+            if caught_up or timed_out:
+                self._shed_gate_active_since = None
 
         # Our own switch/climate states react within seconds of a
         # transition (window/schedule cutoff, dependency, surplus
@@ -2719,15 +2766,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 tracker.off_counter += 1
                 tracker.on_counter = 0
                 if tracker.off_counter >= required_off_cycles:
-                    if self._stale_managed_power_kw_load is not None:
+                    if self._shed_gate_active_since is not None:
                         # Ready to switch off, but the load sensor hasn't
-                        # produced fresh confirmation of the last
-                        # composition change's effect yet (see the
-                        # freeze logic above) — holding off rather than
-                        # shedding this device on top of one whose
-                        # impact isn't visible yet. Confirmed live: two
-                        # devices switching off ~2 minutes apart, well
-                        # inside the ~5-minute cloud-polled sensor
+                        # produced fresh confirmation of the last real
+                        # composition change's effect yet (see
+                        # _shed_gate_active_since above) — holding off
+                        # rather than shedding this device on top of one
+                        # whose impact isn't visible yet. Confirmed live:
+                        # two devices switching off ~2 minutes apart,
+                        # well inside the ~5-minute cloud-polled sensor
                         # cadence, so the second decision never actually
                         # saw whether the first shutdown alone had
                         # already fixed the shortfall — explicit
