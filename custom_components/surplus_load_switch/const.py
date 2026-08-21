@@ -195,11 +195,6 @@ WEAK_DAY_BATTERY_FULL_SOC = 95.0
 # the two features are conceptually independent even though the number
 # happens to start the same).
 BATTERY_FULL_TARGET_TIME_BUFFER_H = 2.0
-# Floors how few hours-remaining the battery-full reservation's kW/h
-# division uses — same reasoning as WALLBOX_TARGET_MIN_HOURS: without
-# this, a deadline that's already passed (or seconds away) would either
-# divide by ~0 (a wild, meaningless kW spike) or by a negative number.
-BATTERY_FULL_RESERVATION_MIN_HOURS = 0.25
 
 # h_to_solar ("hours until solar_start") is the time until the *next*
 # calibrated morning threshold — once today's has already passed, that's

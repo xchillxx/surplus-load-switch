@@ -341,16 +341,18 @@ cloud passes over or another appliance briefly kicks in.
   reserviert" sensor), not just a veto on other devices leaning on the
   battery. Without this, a device with genuine *live* surplus (not
   battery affordability) would keep consuming it in full on a cloudy
-  day while the battery itself fell further behind. Sized the same way
-  as the wallbox reservation's deadline-based fallback — missing kWh
-  divided by the hours actually left until the deadline, easing off on
-  its own as the battery catches up — and capped at whatever surplus
-  remains once the wallbox has already taken its own share (the
-  wallbox's claim is never reduced to make room for this). Requires no
-  per-priority-tier logic of its own: subtracting it from the surplus
-  pool naturally cascades through the existing priority-ordered device
-  loop the same way any shrinking surplus already does, shedding the
-  lowest-priority device first.
+  day while the battery itself fell further behind. Full priority over
+  every managed device while behind schedule, not a calculated pace or
+  a proportional "fair share" — claims whatever surplus remains once
+  the wallbox has already taken its own share (the wallbox's claim is
+  never reduced to make room for this), mirroring wallbox_starved's own
+  aggressiveness exactly. A minimum daily runtime already in progress
+  is the one exception: it's never overridden, by design, the same as
+  everywhere else force_runtime applies. Requires no per-priority-tier
+  logic of its own: subtracting the reservation from the surplus pool
+  naturally cascades through the existing priority-ordered device loop
+  the same way any shrinking surplus already does — every non-forced
+  managed device simply sees nothing left over while this is active.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
   Devices & Services, nested under the integration's hub device, instead of

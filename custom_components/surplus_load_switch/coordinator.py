@@ -23,7 +23,6 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     BATTERY_FULL_RELIEF_CYCLES,
-    BATTERY_FULL_RESERVATION_MIN_HOURS,
     BATTERY_FULL_TARGET_TIME_BUFFER_H,
     BATT_OK_BUFFER_H,
     CALIBRATION_INTERVAL_HOURS,
@@ -1904,31 +1903,27 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # affordability) kept consuming the entire surplus on a cloudy
         # day while the battery itself fell further behind — confirmed
         # live, every managed device on via "Einschalten — Überschuss"
-        # while battery_full_on_track was already false. Sized the same
-        # way as the wallbox reservation's deadline-based fallback: the
-        # missing kWh divided by however many hours are actually left
-        # until the deadline, so it eases off on its own as the battery
-        # catches up or the deadline draws closer, capped at whatever
-        # surplus remains once the wallbox has already taken its share —
-        # the wallbox's own claim isn't reduced to make room for this.
-        # Subtracting it here (once, after the wallbox branch above,
-        # rather than duplicated inside both of its branches) naturally
-        # cascades through the existing priority-ordered surplus loop
-        # below exactly like a shrinking available_surplus already does:
-        # the lowest-priority device loses its claim first, then the
-        # next, without this needing any per-priority-tier logic of its
-        # own.
+        # while battery_full_on_track was already false.
+        #
+        # Full priority over every managed device, not a calculated
+        # pace: claims whatever surplus remains once the wallbox has
+        # already taken its own share (the wallbox's claim isn't reduced
+        # to make room for this) — mirroring wallbox_starved's own
+        # aggressiveness exactly, not a "fair share" that still lets
+        # lower-priority devices compete for the rest. Explicitly the
+        # user's own priority call: nothing lower-priority (a pool heat
+        # pump, for instance) should run at all if that's what it takes
+        # to still reach the target, not just get a proportional cut of
+        # a scarce day. Subtracting it here (once, after the wallbox
+        # branch above, rather than duplicated inside both of its
+        # branches) naturally cascades through the existing
+        # priority-ordered surplus loop below exactly like any shrinking
+        # available_surplus already does — nothing needs its own
+        # per-priority-tier logic; every managed device simply sees 0
+        # left over while this is active.
         battery_full_reservation_kw = 0.0
-        if (
-            battery_behind_schedule_effective
-            and data.battery_full_missing_kwh > 0
-            and data.battery_full_hours_until_deadline is not None
-        ):
-            battery_full_reservation_kw = min(
-                data.battery_full_missing_kwh
-                / max(data.battery_full_hours_until_deadline, BATTERY_FULL_RESERVATION_MIN_HOURS),
-                max(available_surplus, 0.0),
-            )
+        if battery_behind_schedule_effective and data.battery_full_missing_kwh > 0:
+            battery_full_reservation_kw = max(available_surplus, 0.0)
             available_surplus -= battery_full_reservation_kw
         data.battery_full_reserved_kw = battery_full_reservation_kw
 
