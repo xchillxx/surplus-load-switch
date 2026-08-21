@@ -89,7 +89,24 @@ cloud passes over or another appliance briefly kicks in.
   first reading right after that reset bridges to the last trusted value
   instead of being used on its own — right after a reset is exactly when a
   cloud sensor is most likely to still be catching up, and a single
-  unsmoothed reading has no averaging protection at all.
+  unsmoothed reading has no averaging protection at all. The charging
+  side of the same battery reading gets the identical treatment, feeding
+  the "will the battery reach full in time?" projection below — without
+  it, a single low instantaneous charge reading could flip that
+  projection's verdict for a cycle even while SOC was climbing cleanly
+  minute over minute.
+- **Devices don't shed on top of each other's unconfirmed effect** — a
+  managed device switching off is itself a real, immediate change, but
+  the load sensor confirming its effect can lag by several minutes (the
+  same cloud-polling delay noted throughout this section). If a second,
+  lower-priority device's own switch-off threshold is reached in that
+  same unconfirmed window, it holds rather than compounds — better a
+  device runs 5-10 minutes longer than strictly necessary than have two
+  devices shed back-to-back on the same not-yet-confirmed picture, only
+  for the load to turn out to have already recovered after the first
+  one alone. Releases the instant the load sensor produces fresh
+  confirmation, holding the device's own countdown at its finish line
+  in the meantime rather than restarting the wait from scratch.
 - **Tolerant of brief sensor outages** — the four core sensors (solar,
   load, SOC, battery power) hold their last known good reading for up to
   20 minutes if one goes `unavailable`/`unknown`, instead of freezing the
@@ -353,6 +370,25 @@ cloud passes over or another appliance briefly kicks in.
   naturally cascades through the existing priority-ordered device loop
   the same way any shrinking surplus already does — every non-forced
   managed device simply sees nothing left over while this is active.
+
+  Both of the above are reactive — they only act once the battery has
+  already measurably fallen behind. A device is also checked
+  proactively before being granted "on" via genuine live surplus:
+  would its own draw (on top of whatever higher-priority devices
+  already claimed this cycle) push the battery's own projection past
+  its deadline? If so, it's held off (or shed, if already on) even
+  though surplus alone would otherwise be enough — confirmed needed on
+  a run of weak days, where the purely reactive gate would let a
+  device requalify via genuine surplus, its own draw would immediately
+  tip the battery back off-track, and only the *next* cycle's reactive
+  check would notice and start shedding again, repeating every time
+  conditions recovered enough. Worst-case, not an exact simulation:
+  assumes the device's whole draw comes directly at the battery's own
+  expense, since there's no way to know in advance how much of it the
+  inverter's own "battery first" priority would actually still
+  protect. Scoped to the surplus path only — a device already running
+  because the battery can currently afford it is already fully covered
+  by the reactive gate above.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
   Devices & Services, nested under the integration's hub device, instead of

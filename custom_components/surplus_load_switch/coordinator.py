@@ -165,6 +165,13 @@ class CoordinatorData:
     # for the house battery itself instead of a wallbox — see
     # battery_full_reservation_kw in _evaluate_devices.
     battery_full_reserved_kw: float = 0.0
+    # The smoothed charge rate battery_full_projection actually used
+    # this cycle (see _charge_samples) — kept here so
+    # _battery_would_still_reach_full in _evaluate_devices can reuse it
+    # instead of recomputing, and so a device's own proactive "would
+    # this delay the battery" check works off the same rate the
+    # reactive battery_full_on_track verdict itself was based on.
+    battery_smoothed_charge_kw: float = 0.0
     base_load_kw: float = 0.0
     avail_kwh: float = 0.0
     # Set twice: a naive avail_kwh/discharge_rate placeholder in
@@ -234,6 +241,23 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # new deque earns that same trust again. None only pre-first-ever
         # reading, when there's nothing to bridge to.
         self._last_trusted_discharge_kw: float | None = None
+        # Mirrors _discharge_samples above, for the *charging* side of
+        # the same batt reading — feeds _battery_full_projection, which
+        # divides missing_kwh by this rate to decide battery_full_
+        # on_track. That projection became a real switching input in
+        # 2.5.0/2.6.0 (see battery_full_reservation_kw), not just
+        # diagnostic — confirmed live: a single low instantaneous
+        # reading (the same kind of noise smoothed_discharge_kw already
+        # exists to filter) flipped on_track false for a cycle even
+        # while SOC was climbing cleanly minute over minute, triggering
+        # the full reservation and shedding devices that a moment's
+        # patience would have shown were unnecessary — then flipping
+        # back once the noise cleared, only to repeat a few cycles
+        # later. Same median-of-genuinely-distinct-readings shape as
+        # every other smoothing in this file.
+        self._charge_samples: deque[float] = deque(maxlen=DISCHARGE_SMOOTHING_SAMPLES)
+        self._last_appended_charge_kw: float | None = None
+        self._last_trusted_charge_kw: float | None = None
         # Smooths base_load specifically for the overnight base_discharge_kw
         # projection — raw, unsmoothed cycle-to-cycle noise in the live load
         # reading gets multiplied by however many hours remain until solar
@@ -1013,19 +1037,21 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         return 0.0
 
     def _battery_full_projection(
-        self, soc: float, batt: float, battery_kwh: float, now: datetime
+        self, soc: float, smoothed_charge_kw: float, battery_kwh: float, now: datetime
     ) -> tuple[float, float | None, float | None, bool]:
         """Whether the house battery is on track to reach
         WEAK_DAY_BATTERY_FULL_SOC by sunset minus a safety margin,
-        projected from the *current* live charge rate — a rough,
-        live-snapshot estimate (no smoothing of its own, unlike the
-        discharge-rate projection elsewhere in this file), since this is
-        diagnostic-only and not itself a switching input. Confirmed
-        useful live: on a "weak day" that's nonetheless charging
-        strongly right now, a five-minute mental calculation (missing
-        kWh ÷ current charge rate vs. hours left) already answers "will
-        it make it" far more usefully than the weak-day flag alone,
-        which only looks backward at today's gain so far, never forward.
+        projected from the *smoothed* charge rate (see _charge_samples
+        in __init__) — this became a real switching input in
+        2.5.0/2.6.0 (battery_full_reservation_kw), not just diagnostic
+        as originally written, so a single noisy low reading needs the
+        same protection every other switching-relevant rate in this
+        file already gets, not a raw live snapshot. Confirmed live: on
+        a "weak day" that's nonetheless charging strongly right now, a
+        five-minute mental calculation (missing kWh ÷ current charge
+        rate vs. hours left) already answers "will it make it" far more
+        usefully than the weak-day flag alone, which only looks
+        backward at today's gain so far, never forward.
 
         Returns (missing_kwh, hours_needed, hours_until_deadline,
         on_track). hours_needed is None while the battery isn't
@@ -1038,7 +1064,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if missing_kwh <= 0:
             return 0.0, 0.0, None, True
 
-        charge_kw = max(batt, 0.0)
+        charge_kw = max(smoothed_charge_kw, 0.0)
         hours_needed = missing_kwh / charge_kw if charge_kw > 0.05 else None
 
         sun = self.hass.states.get("sun.sun")
@@ -1056,6 +1082,41 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         hours_until_deadline = max((deadline - now).total_seconds() / 3600.0, 0.0)
         on_track = hours_needed is not None and hours_needed <= hours_until_deadline
         return missing_kwh, hours_needed, hours_until_deadline, on_track
+
+    @staticmethod
+    def _battery_would_still_reach_full(data: CoordinatorData, additional_draw_kw: float) -> bool:
+        """Proactive counterpart to battery_full_reservation_kw: whether
+        the battery would *still* be projected on-track for
+        WEAK_DAY_BATTERY_FULL_SOC if this much more draw competed for
+        the same surplus, not just whether it already has (that's the
+        reactive check — see battery_behind_schedule in
+        _evaluate_devices, which only reacts once the battery has
+        already measurably fallen behind). Purely reactive wasn't
+        catching this early enough on a run of weak days: a device
+        would be granted "on" via genuine live surplus, its own draw
+        would tip the battery from on-track to behind, and only the
+        *next* cycle's reactive check would notice and start shedding
+        again — repeating every time conditions recovered enough for
+        the device to requalify.
+
+        Worst-case, not an exact simulation: assumes the whole
+        additional draw comes directly at the battery's own expense,
+        since there's no way to know in advance how much of it the
+        inverter's own "battery first" priority would actually still
+        protect. True (never blocks) whenever the battery is already at
+        its target, or during any window the reactive projection itself
+        can't evaluate (no sun.sun deadline, or night) — this only ever
+        adds a restriction on top of a real, computable deadline.
+        """
+        if data.battery_full_missing_kwh <= 0 or not data.sun_above_horizon:
+            return True
+        if data.battery_full_hours_until_deadline is None:
+            return True
+        projected_charge_kw = max(data.battery_smoothed_charge_kw - additional_draw_kw, 0.0)
+        if projected_charge_kw <= 0.05:
+            return False
+        hours_needed_after = data.battery_full_missing_kwh / projected_charge_kw
+        return hours_needed_after <= data.battery_full_hours_until_deadline
 
     def _effective_cutoff(
         self,
@@ -1451,13 +1512,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         battery_kwh = self._config.get(CONF_BATTERY_CAPACITY_KWH, 13.8)
         min_soc = self._config.get(CONF_MIN_SOC, 20.0)
 
-        (
-            battery_full_missing_kwh,
-            battery_full_hours_needed,
-            battery_full_hours_until_deadline,
-            battery_full_on_track,
-        ) = self._battery_full_projection(soc, batt, battery_kwh, dt_util.utcnow())
-
         discharge = max(-batt, 0.0)
         # h_battery is a division by discharge rate, which would otherwise
         # project a brief spike (e.g. a stove running for 10-15 min) forward
@@ -1489,6 +1543,31 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             smoothed_discharge = discharge
         avail_kwh = max((soc - min_soc) / 100.0 * battery_kwh, 0.0)
         h_battery = avail_kwh / smoothed_discharge if smoothed_discharge > 0.05 else 999.0
+
+        # Mirrors the discharge smoothing directly above, for the
+        # charging side of the same batt reading — see _charge_samples
+        # in __init__ for why this exists (battery_full_projection below
+        # is a real switching input now, not just diagnostic, so it
+        # needs the same noise protection every other switching-relevant
+        # rate in this file already gets).
+        charge = max(batt, 0.0)
+        if batt != self._last_appended_charge_kw:
+            self._charge_samples.append(charge)
+            self._last_appended_charge_kw = batt
+        if len(self._charge_samples) >= 2:
+            smoothed_charge = statistics.median(self._charge_samples)
+            self._last_trusted_charge_kw = smoothed_charge
+        elif self._last_trusted_charge_kw is not None:
+            smoothed_charge = self._last_trusted_charge_kw
+        else:
+            smoothed_charge = charge
+
+        (
+            battery_full_missing_kwh,
+            battery_full_hours_needed,
+            battery_full_hours_until_deadline,
+            battery_full_on_track,
+        ) = self._battery_full_projection(soc, smoothed_charge, battery_kwh, dt_util.utcnow())
 
         solar_start = self._get_solar_start()
         now = dt_util.utcnow()
@@ -1552,6 +1631,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             battery_full_hours_needed=battery_full_hours_needed,
             battery_full_hours_until_deadline=battery_full_hours_until_deadline,
             battery_full_on_track=battery_full_on_track,
+            battery_smoothed_charge_kw=smoothed_charge,
         )
 
         await self._evaluate_devices(data)
@@ -1610,9 +1690,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         managed_on_now = frozenset(dev_id for dev_id, on in device_is_on.items() if on)
         if managed_on_now != self._last_managed_on:
             self._discharge_samples.clear()
+            self._charge_samples.clear()
             self._base_load_samples.clear()
             self._last_appended_load_kw = None
             self._last_appended_discharge_kw = None
+            self._last_appended_charge_kw = None
         self._last_managed_on = managed_on_now
 
         # Our own switch/climate states react within seconds of a
@@ -2032,6 +2114,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         device_diagnostics: dict[str, DeviceDiagnostics] = {}
         cumulative_committed = 0.0
         committed_segments: list[tuple[float, datetime | None]] = []
+        # Accumulates the predicted draw of every device already granted
+        # "on" via genuine live surplus this cycle — used by
+        # _battery_would_still_reach_full below so each device's own
+        # proactive check sees what higher-priority devices have already
+        # claimed, not just its own isolated draw in a vacuum. Mirrors
+        # cumulative_committed above; kept separate since this one only
+        # ever grows from surplus-path grants (battery_would_last is
+        # already covered by the reactive battery_eligible_ids gate, and
+        # force_runtime is exempt everywhere).
+        cumulative_battery_competing_draw = 0.0
         now_dt = dt_util.utcnow()
         horizon_end = now_dt + timedelta(hours=data.effective_h_to_solar + BATT_OK_BUFFER_H)
 
@@ -2467,15 +2559,40 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             diag.required_off_cycles = required_off_cycles
             diag.required_on_cycles = stable_on_cycles
 
+            # Proactive counterpart to battery_full_reservation_kw above:
+            # would granting this device's share (on top of whatever
+            # higher-priority devices already claimed this cycle — see
+            # cumulative_battery_competing_draw) push the battery's own
+            # "reach full in time" projection past its deadline? The
+            # reactive gate (battery_behind_schedule_effective, via
+            # battery_eligible_ids) only reacts once the battery has
+            # already measurably fallen behind; confirmed live that
+            # wasn't catching this soon enough on a run of weak days —
+            # a device would qualify via genuine surplus, its own draw
+            # would tip the battery off-track, and only the next cycle's
+            # reactive check would notice, repeating every time
+            # conditions recovered enough to requalify. Scoped to the
+            # surplus path only (see should_on/should_off below) —
+            # battery_would_last is already fully covered by the
+            # reactive gate.
+            would_delay_battery_full = not self._battery_would_still_reach_full(
+                data, cumulative_battery_competing_draw + predicted_power
+            )
             should_on = (
                 force_runtime
-                or (remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD)
+                or (
+                    remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD
+                    and not would_delay_battery_full
+                )
                 or battery_would_last
             )
             should_off = (
                 not force_runtime
-                and (remaining_surplus < predicted_power + SURPLUS_OFF_THRESHOLD)
                 and not battery_would_last
+                and (
+                    remaining_surplus < predicted_power + SURPLUS_OFF_THRESHOLD
+                    or would_delay_battery_full
+                )
             )
             # In the small hysteresis dead zone between the on/off
             # thresholds, neither condition holds — the target is simply
@@ -2528,6 +2645,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                         f"(SOC {data.soc:.0f}% < {device_min_soc:.0f}%) — Akku darf für dieses "
                         f"Gerät nicht einspringen"
                     )
+                elif would_delay_battery_full:
+                    decision_titel = "Ausschalten — Akku würde nicht rechtzeitig voll"
+                    decision_reason = (
+                        f"{predicted_power:.2f} kW zusätzlich würden den Akku vom "
+                        f"rechtzeitigen Vollladen abhalten (fehlend {data.battery_full_missing_kwh:.2f} "
+                        f"kWh, noch {data.battery_full_hours_until_deadline:.1f}h Zeit)"
+                    )
                 else:
                     decision_titel = "Ausschalten — Überschuss/Akku reichen nicht"
                     decision_reason = (
@@ -2552,6 +2676,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 # yet, so it has nothing to reserve.
                 cumulative_committed += predicted_power
                 committed_segments.append((predicted_power, own_cutoff))
+                # Same reasoning as cumulative_committed, for
+                # would_delay_battery_full above — every device actually
+                # granted "on" this cycle (regardless of which branch
+                # granted it) competes for the same underlying capacity,
+                # so a lower-priority device's own check needs to see
+                # what's already been committed ahead of it, not just its
+                # own isolated draw in a vacuum.
+                cumulative_battery_competing_draw += predicted_power
 
             if should_on and not is_on:
                 # Capped rather than incremented without bound: once
@@ -2575,14 +2707,34 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 tracker.off_counter += 1
                 tracker.on_counter = 0
                 if tracker.off_counter >= required_off_cycles:
-                    _LOGGER.info(
-                        "PV Surplus: turning OFF %s (remaining_surplus=%.2f, need=%.2f, "
-                        "battery_would_last=%s, waited=%d cycles)",
-                        dev.get(CONF_DEVICE_NAME), remaining_surplus, predicted_power,
-                        battery_would_last, required_off_cycles,
-                    )
-                    await async_turn_off(self.hass, dev)
-                    tracker.off_counter = 0
+                    if self._stale_managed_power_kw_load is not None:
+                        # Ready to switch off, but the load sensor hasn't
+                        # produced fresh confirmation of the last
+                        # composition change's effect yet (see the
+                        # freeze logic above) — holding off rather than
+                        # shedding this device on top of one whose
+                        # impact isn't visible yet. Confirmed live: two
+                        # devices switching off ~2 minutes apart, well
+                        # inside the ~5-minute cloud-polled sensor
+                        # cadence, so the second decision never actually
+                        # saw whether the first shutdown alone had
+                        # already fixed the shortfall — explicit
+                        # trade-off, a device running 5-10 minutes
+                        # longer than strictly needed beats switching
+                        # more often. Held at the ceiling, not reset to
+                        # 0, so this fires the instant the freeze
+                        # clears instead of restarting the wait from
+                        # scratch.
+                        tracker.off_counter = required_off_cycles
+                    else:
+                        _LOGGER.info(
+                            "PV Surplus: turning OFF %s (remaining_surplus=%.2f, need=%.2f, "
+                            "battery_would_last=%s, waited=%d cycles)",
+                            dev.get(CONF_DEVICE_NAME), remaining_surplus, predicted_power,
+                            battery_would_last, required_off_cycles,
+                        )
+                        await async_turn_off(self.hass, dev)
+                        tracker.off_counter = 0
             else:
                 tracker.on_counter = 0
                 tracker.off_counter = 0
