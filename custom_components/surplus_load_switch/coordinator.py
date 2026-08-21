@@ -23,6 +23,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     BATTERY_FULL_RELIEF_CYCLES,
+    BATTERY_FULL_RESERVATION_MIN_HOURS,
     BATTERY_FULL_TARGET_TIME_BUFFER_H,
     BATT_OK_BUFFER_H,
     CALIBRATION_INTERVAL_HOURS,
@@ -161,6 +162,10 @@ class CoordinatorData:
     # cascade competes over, kept here purely for visibility into why
     # devices see less than the raw surplus_kw above.
     wallbox_reserved_kw: float = 0.0
+    # Same reasoning as wallbox_reserved_kw above, but reserving surplus
+    # for the house battery itself instead of a wallbox — see
+    # battery_full_reservation_kw in _evaluate_devices.
+    battery_full_reserved_kw: float = 0.0
     base_load_kw: float = 0.0
     avail_kwh: float = 0.0
     # Set twice: a naive avail_kwh/discharge_rate placeholder in
@@ -1864,13 +1869,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             base_load = base_load_excl_wallbox
             available_surplus = available_surplus_excl_wallbox - wallbox_reserved_kw
 
-        data.base_load_kw = base_load
-        # The true, physical surplus actually left over for everyone
-        # else this cycle, wallbox included — so the diagnostic sensor
-        # reflects reality instead of a number that assumes a
-        # self-limiting wallbox even when it isn't currently one.
-        data.surplus_kw = available_surplus
-
         # battery_full_on_track (see _battery_full_projection) is a
         # second, independent signal on top of wallbox_starved above —
         # computed from the battery's own real charge rate rather than
@@ -1879,14 +1877,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # (an unusually high house base load, for instance), not just the
         # wallbox-draw case that's now folded into base_load itself. Only
         # meaningful during the day — at night, or before the morning
-        # charge has ramped up, the
-        # battery routinely isn't gaining charge for reasons that have
-        # nothing to do with anything being wrong (that's exactly when
-        # "Akku reicht" is supposed to let devices draw it down), so this
-        # only applies while the sun is above the horizon. Same
-        # instant-engage/debounced-release shape as wallbox_starved
-        # above, and the same scope: only battery_would_last, never
-        # force_runtime or a genuine live-surplus turn-on.
+        # charge has ramped up, the battery routinely isn't gaining
+        # charge for reasons that have nothing to do with anything being
+        # wrong (that's exactly when "Akku reicht" is supposed to let
+        # devices draw it down), so this only applies while the sun is
+        # above the horizon. Same instant-engage/debounced-release shape
+        # as wallbox_starved above.
         battery_behind_schedule = data.sun_above_horizon and not data.battery_full_on_track
         if battery_behind_schedule:
             self._battery_full_relief_counter = 0
@@ -1898,6 +1894,51 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             battery_behind_schedule
             or self._battery_full_relief_counter < BATTERY_FULL_RELIEF_CYCLES
         )
+
+        # Beyond just blocking battery_would_last below (see its use
+        # against battery_eligible_ids further down), a behind-schedule
+        # battery also gets an active reservation of its own — the same
+        # kind of forward-looking claim on surplus the wallbox already
+        # gets, not just a veto on other devices leaning on the battery.
+        # Without this, devices with genuine live surplus (not battery
+        # affordability) kept consuming the entire surplus on a cloudy
+        # day while the battery itself fell further behind — confirmed
+        # live, every managed device on via "Einschalten — Überschuss"
+        # while battery_full_on_track was already false. Sized the same
+        # way as the wallbox reservation's deadline-based fallback: the
+        # missing kWh divided by however many hours are actually left
+        # until the deadline, so it eases off on its own as the battery
+        # catches up or the deadline draws closer, capped at whatever
+        # surplus remains once the wallbox has already taken its share —
+        # the wallbox's own claim isn't reduced to make room for this.
+        # Subtracting it here (once, after the wallbox branch above,
+        # rather than duplicated inside both of its branches) naturally
+        # cascades through the existing priority-ordered surplus loop
+        # below exactly like a shrinking available_surplus already does:
+        # the lowest-priority device loses its claim first, then the
+        # next, without this needing any per-priority-tier logic of its
+        # own.
+        battery_full_reservation_kw = 0.0
+        if (
+            battery_behind_schedule_effective
+            and data.battery_full_missing_kwh > 0
+            and data.battery_full_hours_until_deadline is not None
+        ):
+            battery_full_reservation_kw = min(
+                data.battery_full_missing_kwh
+                / max(data.battery_full_hours_until_deadline, BATTERY_FULL_RESERVATION_MIN_HOURS),
+                max(available_surplus, 0.0),
+            )
+            available_surplus -= battery_full_reservation_kw
+        data.battery_full_reserved_kw = battery_full_reservation_kw
+
+        data.base_load_kw = base_load
+        # The true, physical surplus actually left over for everyone
+        # else this cycle, wallbox and battery-reservation included — so
+        # the diagnostic sensor reflects reality instead of a number that
+        # assumes a self-limiting wallbox and an on-track battery even
+        # when neither is currently true.
+        data.surplus_kw = available_surplus
 
         # Diagnostic only for now — see load_profile.py. Sampled here
         # (not gated on day/night or anything else) so every cycle

@@ -27,6 +27,7 @@ async def async_setup_entry(
         PVSurplusSensor(coordinator, entry),
         PVBaseLoadSensor(coordinator, entry),
         PVWallboxReservedSensor(coordinator, entry),
+        PVBatteryFullReservedSensor(coordinator, entry),
         PVHBatterySensor(coordinator, entry),
         PVHToSolarSensor(coordinator, entry),
         PVModeSensor(coordinator, entry),
@@ -183,6 +184,28 @@ class PVWallboxReservedSensor(_PVSensorBase):
     def native_value(self):
         if self.coordinator.data:
             return round(self.coordinator.data.wallbox_reserved_kw, 3)
+        return None
+
+
+class PVBatteryFullReservedSensor(_PVSensorBase):
+    """The house battery's own dynamic surplus reservation this cycle —
+    same reasoning as PVWallboxReservedSensor above, active whenever the
+    battery is behind schedule to reach WEAK_DAY_BATTERY_FULL_SOC in
+    time (see battery_full_reservation_kw in _evaluate_devices)."""
+
+    _attr_name = "Akku reserviert"
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:home-battery"
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_battery_full_reserved"
+
+    @property
+    def native_value(self):
+        if self.coordinator.data:
+            return round(self.coordinator.data.battery_full_reserved_kw, 3)
         return None
 
 

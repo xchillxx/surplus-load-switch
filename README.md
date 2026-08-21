@@ -329,12 +329,28 @@ cloud passes over or another appliance briefly kicks in.
   target), the battery-affordability path is blocked the same way the
   wallbox-starved gate above blocks it — a device otherwise granted "on"
   purely because the battery could afford it would be drawing power the
-  battery itself is behind on needing. Same debounced-release shape as
-  the wallbox gate, and the same scope: force_runtime and a genuine
-  live-surplus turn-on are both unaffected. Only evaluated while the sun
-  is above the horizon — at night, or before the morning charge has
-  ramped up, the battery not gaining charge is completely normal, not a
-  sign of anything behind schedule.
+  battery itself is behind on needing. force_runtime is unaffected
+  either way. Same debounced-release shape as the wallbox gate. Only
+  evaluated while the sun is above the horizon — at night, or before the
+  morning charge has ramped up, the battery not gaining charge is
+  completely normal, not a sign of anything behind schedule.
+
+  Beyond blocking the battery-affordability path, a behind-schedule
+  battery also gets an active reservation of its own — the same kind of
+  forward-looking claim on surplus the wallbox already gets ("Akku
+  reserviert" sensor), not just a veto on other devices leaning on the
+  battery. Without this, a device with genuine *live* surplus (not
+  battery affordability) would keep consuming it in full on a cloudy
+  day while the battery itself fell further behind. Sized the same way
+  as the wallbox reservation's deadline-based fallback — missing kWh
+  divided by the hours actually left until the deadline, easing off on
+  its own as the battery catches up — and capped at whatever surplus
+  remains once the wallbox has already taken its own share (the
+  wallbox's claim is never reduced to make room for this). Requires no
+  per-priority-tier logic of its own: subtracting it from the surplus
+  pool naturally cascades through the existing priority-ordered device
+  loop the same way any shrinking surplus already does, shedding the
+  lowest-priority device first.
 - **One Home Assistant device per configured device** — each configured
   device (Miner, Boiler, ...) gets its own device card under Settings →
   Devices & Services, nested under the integration's hub device, instead of
