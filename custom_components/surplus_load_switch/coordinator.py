@@ -1965,7 +1965,19 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # above the horizon. Same instant-engage/debounced-release shape
         # as wallbox_starved above.
         battery_behind_schedule = data.sun_above_horizon and not data.battery_full_on_track
-        if battery_behind_schedule:
+        if not data.sun_above_horizon:
+            # The day is over — there's no more solar coming to help the
+            # battery reach today's target regardless of what it was
+            # tracking toward a moment ago, so there's nothing left to
+            # debounce against (unlike a daytime cloud clearing, which
+            # could still be transient). Jump straight to fully relieved
+            # instead of making every device wait out the normal
+            # BATTERY_FULL_RELIEF_CYCLES window on top of a call that's
+            # already final — individual device floors and "Akku
+            # reicht" take over immediately at sunset, not up to 10
+            # minutes later.
+            self._battery_full_relief_counter = BATTERY_FULL_RELIEF_CYCLES
+        elif battery_behind_schedule:
             self._battery_full_relief_counter = 0
         else:
             self._battery_full_relief_counter = min(

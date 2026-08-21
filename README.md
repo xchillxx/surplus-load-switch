@@ -347,10 +347,17 @@ cloud passes over or another appliance briefly kicks in.
   wallbox-starved gate above blocks it — a device otherwise granted "on"
   purely because the battery could afford it would be drawing power the
   battery itself is behind on needing. force_runtime is unaffected
-  either way. Same debounced-release shape as the wallbox gate. Only
-  evaluated while the sun is above the horizon — at night, or before the
-  morning charge has ramped up, the battery not gaining charge is
-  completely normal, not a sign of anything behind schedule.
+  either way. Same debounced-release shape as the wallbox gate — except
+  right at sunset, where the debounce is skipped entirely and the gate
+  releases immediately instead of making devices wait out the normal
+  window on top of a call that's already final: with no more solar
+  coming, there's nothing transient left to protect against the way a
+  daytime cloud clearing might be, so individual device floors and
+  "Akku reicht" take over exactly at sunset, not up to several minutes
+  later. Only evaluated while the sun is above the horizon in the first
+  place — at night, or before the morning charge has ramped up, the
+  battery not gaining charge is completely normal, not a sign of
+  anything behind schedule.
 
   Beyond blocking the battery-affordability path, a behind-schedule
   battery also gets an active reservation of its own — the same kind of
