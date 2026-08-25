@@ -1707,16 +1707,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """Cascade surplus across devices in priority order.
 
         The wallbox is excluded from switching (it's controlled by its own PV
-        logic already). Its measured power is normally subtracted from the
-        load so it doesn't count as "unavoidable base load" for our devices —
-        correct as long as the wallbox is genuinely self-limiting to surplus,
-        since a squeeze then shows up as the wallbox drawing less on its own,
-        not as competing load. That assumption breaks the moment it isn't
-        self-limiting (a manual "charge now regardless of surplus" override,
-        or simply needing more than the day can give): see wallbox_starved
-        below, which stops excluding it once that's the case — its full real
-        draw then counts as ordinary, unavoidable load ahead of everyone
-        else, effectively priority 0.
+        logic already). Its own reservation (not its real draw — see
+        base_load_excl_wallbox above for why the real draw itself is left
+        out of this arithmetic entirely) is what's set aside ahead of our
+        devices, correct as long as the wallbox is genuinely self-limiting to
+        surplus, since a squeeze then shows up as the wallbox drawing less on
+        its own, not as competing load. That assumption breaks the moment it
+        isn't self-limiting (a manual "charge now regardless of surplus"
+        override, or simply needing more than the day can give): see
+        wallbox_starved below, which switches to protecting its full real
+        draw once that's the case — counted as ordinary, unavoidable load
+        ahead of everyone else, effectively priority 0.
         """
         all_devices = self.devices
         devices_by_id = {d["_id"]: d for d in all_devices}
