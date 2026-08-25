@@ -287,9 +287,16 @@ cloud passes over or another appliance briefly kicks in.
   qualified via "Akku reicht" (the overnight battery-affordability
   check) in the same cycle — about to compete the battery's own margin
   away from the car the moment real surplus reappeared and the wallbox
-  actually started drawing it. Now uses the uncapped target rate, so a
-  wallbox that genuinely needs more than exists gets flagged starved
-  regardless of how low its own capped number currently reads.
+  actually started drawing it. Refined further: rather than comparing
+  the target rate against available surplus (which runs against a
+  *smoothed* surplus figure that can still lag behind a genuinely
+  declining trend), "starved" now compares the reservation directly
+  against its own target as a ratio — below 90% of target counts as
+  starved, regardless of *why* the gap exists. Confirmed live: target
+  7.1 kW, reservation capped at just 2.8 kW (39%), yet the
+  surplus-based comparison still read "not starved" for a stretch,
+  letting a low-priority device keep qualifying for surplus the car
+  was, in reality, already short on.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's

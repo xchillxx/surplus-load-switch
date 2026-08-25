@@ -177,6 +177,21 @@ WALLBOX_FORECAST_MIN_KWH = 0.5
 # mismatch.
 WALLBOX_OVERDRAW_MARGIN_KW = 1.0
 
+# The share of its own true (uncapped) target rate the wallbox's actual
+# protected reservation must reach before it counts as genuinely getting
+# what it needs — below this, "starved" fires regardless of *why* the
+# capped reservation is falling short (available surplus, the wallbox's
+# own max-charge cap, or smoothing lag all land on the same outcome: the
+# car isn't getting close to its target). Confirmed live: target 7.1 kW,
+# reservation capped at 2.8 kW (39%), yet the previous target-vs-surplus
+# comparison alone still read "not starved" for a stretch — this direct
+# reserved/target ratio doesn't depend on correctly modeling every reason
+# the gap can occur, only on measuring the gap itself. Not 1.0 — a
+# reservation within a few percent of its own target is close enough
+# that treating it as still short would flap on ordinary rounding/
+# smoothing noise around the edge.
+WALLBOX_STARVED_RESERVED_RATIO = 0.9
+
 # --- Solar-start / battery-full reference tracking ---
 # Solar power (kW) above which today counts as "producing" for the purpose
 # of capturing the battery's baseline SOC at solar start — an absolute

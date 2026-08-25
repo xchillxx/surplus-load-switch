@@ -86,6 +86,7 @@ from .const import (
     WALLBOX_FORECAST_MIN_KWH,
     WALLBOX_OVERDRAW_MARGIN_KW,
     WALLBOX_RELIEF_CYCLES,
+    WALLBOX_STARVED_RESERVED_RATIO,
     WALLBOX_TARGET_MIN_HOURS,
     WALLBOX_TARGET_TIME_BUFFER_H,
     WEAK_DAY_BATTERY_FULL_SOC,
@@ -2018,22 +2019,24 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # one alone means every watt is genuinely spoken for, whether or
         # not the other agrees:
         #
-        # 1. The wallbox's raw, pre-cap target rate (wallbox_target_kw —
-        #    what it would need at a steady pace regardless of whether
-        #    that much surplus exists right now) already meets or exceeds
-        #    what's actually available. Deliberately the *uncapped* rate,
-        #    not wallbox_reserved_kw — that one is capped to available
-        #    surplus by design, so on a genuinely scarce cycle (surplus
-        #    near or below 0) it collapses to ~0 right along with it,
-        #    which made this condition read false exactly when the
-        #    wallbox's real appetite was largest. Confirmed live: house
-        #    battery topped up (SOC 98%, huge spare margin), general
-        #    surplus briefly negative from cloud cover, wallbox target
-        #    rate a genuine 5+ kW — every managed device qualified via
-        #    "Akku reicht" (battery_eligible_ids, see below) in the same
-        #    cycle, about to compete the house battery's own margin away
-        #    from the car the moment real surplus reappeared and the
-        #    wallbox actually started drawing it.
+        # 1. The actual, protected reservation (wallbox_reserved_kw) falls
+        #    short of the wallbox's true, uncapped target rate
+        #    (wallbox_target_kw) by more than WALLBOX_STARVED_RESERVED_RATIO
+        #    allows. Deliberately a direct reserved-vs-target ratio, not a
+        #    target-vs-available-surplus comparison — an earlier version
+        #    compared the target rate against available surplus instead,
+        #    which mostly worked but could still read "not starved" for a
+        #    stretch even with a large real shortfall, since that
+        #    comparison runs against a *smoothed* surplus figure that can
+        #    lag behind a declining trend. Comparing the reservation
+        #    directly to its own target sidesteps needing to correctly
+        #    model *why* the gap exists (available surplus, the smoothing
+        #    lag itself, or the wallbox's own max-charge cap all land on
+        #    the same outcome) — it only needs to measure the gap itself.
+        #    Confirmed live: target 7.1 kW, reservation capped at 2.8 kW
+        #    (39% of target), yet the previous comparison still read "not
+        #    starved," and Miner kept qualifying for genuine surplus that
+        #    was, in reality, already needed by the car.
         # 2. The wallbox's real measured draw already exceeds what was
         #    actually reserved for it, by more than could plausibly be
         #    ordinary disagreement between two independent algorithms
@@ -2057,7 +2060,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # second one. See its use against battery_eligible_ids below.
         wallbox_starved = (
             data.wallbox_target_kw > 0.0
-            and data.wallbox_target_kw >= smoothed_available_surplus_for_wallbox - 0.05
+            and wallbox_reserved_kw < WALLBOX_STARVED_RESERVED_RATIO * data.wallbox_target_kw
         ) or (wallbox_power_kw > wallbox_reserved_kw + WALLBOX_OVERDRAW_MARGIN_KW)
         # Debounced: takes effect on the very first starved cycle (never
         # delay protecting the wallbox), but only releases once
