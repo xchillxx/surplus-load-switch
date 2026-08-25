@@ -166,12 +166,21 @@ class CoordinatorData:
     # the deadline, regardless of whether that much surplus genuinely
     # exists right now. wallbox_reserved_kw above is this same number
     # after the surplus/max-charge caps are applied, i.e. what's actually
-    # being protected this cycle; this one is purely diagnostic, to
-    # verify the underlying kWh/deadline math independent of current
-    # conditions — a low wallbox_reserved_kw next to a much higher
-    # wallbox_target_kw means the deficit math is fine, there's simply
-    # not enough surplus to act on it yet (e.g. the house battery is
-    # still ahead of it in the queue), not a calculation bug.
+    # being protected this cycle; this one verifies the underlying
+    # kWh/deadline math independent of current conditions — a low
+    # wallbox_reserved_kw next to a much higher wallbox_target_kw means
+    # the deficit math is fine, there's simply not enough surplus to act
+    # on it yet (e.g. the house battery is still ahead of it in the
+    # queue), not a calculation bug. Also a real switching input, not
+    # just diagnostic: see its use in wallbox_starved below, which
+    # deliberately compares against this uncapped rate rather than
+    # wallbox_reserved_kw — a scarce cycle caps the reservation down to
+    # ~0 right along with available surplus, which would otherwise hide
+    # the wallbox's real appetite exactly when it's largest, letting
+    # other devices freely claim the house battery's margin for a car
+    # that's about to want it (confirmed live: SOC 98%, huge spare
+    # battery margin, wallbox target 5+ kW, every managed device
+    # qualifying via "Akku reicht" in the same cycle).
     wallbox_target_kw: float = 0.0
     # Same reasoning as wallbox_reserved_kw above, but reserving surplus
     # for the house battery itself instead of a wallbox — see
@@ -1980,12 +1989,22 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # one alone means every watt is genuinely spoken for, whether or
         # not the other agrees:
         #
-        # 1. The reservation itself consumed essentially the whole
-        #    surplus that existed before it — capped by *availability*,
-        #    not by the wallbox's own max-charge-rate or a small
-        #    fractional need. This is the forecast's own verdict: even a
-        #    perfectly surplus-limited wallbox would need everything
-        #    there is today.
+        # 1. The wallbox's raw, pre-cap target rate (wallbox_target_kw —
+        #    what it would need at a steady pace regardless of whether
+        #    that much surplus exists right now) already meets or exceeds
+        #    what's actually available. Deliberately the *uncapped* rate,
+        #    not wallbox_reserved_kw — that one is capped to available
+        #    surplus by design, so on a genuinely scarce cycle (surplus
+        #    near or below 0) it collapses to ~0 right along with it,
+        #    which made this condition read false exactly when the
+        #    wallbox's real appetite was largest. Confirmed live: house
+        #    battery topped up (SOC 98%, huge spare margin), general
+        #    surplus briefly negative from cloud cover, wallbox target
+        #    rate a genuine 5+ kW — every managed device qualified via
+        #    "Akku reicht" (battery_eligible_ids, see below) in the same
+        #    cycle, about to compete the house battery's own margin away
+        #    from the car the moment real surplus reappeared and the
+        #    wallbox actually started drawing it.
         # 2. The wallbox's real measured draw already exceeds what was
         #    actually reserved for it, by more than could plausibly be
         #    ordinary disagreement between two independent algorithms
@@ -2008,8 +2027,8 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # it more" are different questions; this flag answers the
         # second one. See its use against battery_eligible_ids below.
         wallbox_starved = (
-            wallbox_reserved_kw > 0.0
-            and wallbox_reserved_kw >= smoothed_available_surplus_for_wallbox - 0.05
+            data.wallbox_target_kw > 0.0
+            and data.wallbox_target_kw >= smoothed_available_surplus_for_wallbox - 0.05
         ) or (wallbox_power_kw > wallbox_reserved_kw + WALLBOX_OVERDRAW_MARGIN_KW)
         # Debounced: takes effect on the very first starved cycle (never
         # delay protecting the wallbox), but only releases once

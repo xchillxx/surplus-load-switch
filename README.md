@@ -263,7 +263,24 @@ cloud passes over or another appliance briefly kicks in.
   genuine deficit — which reads as "the math is broken" unless the
   uncapped target rate is visible alongside it to show the deficit/
   deadline calculation is fine, there just isn't enough surplus to act
-  on it yet. Purely diagnostic; never used as a switching input itself.
+  on it yet. Also a real switching input (see next point), not purely
+  diagnostic.
+- **"Starved" now compares against the wallbox's true (uncapped) target
+  rate, not its capped reservation** — closes a real gap where the
+  wallbox's own priority-0 protection (see Dynamic wallbox surplus
+  reservation above) silently failed to engage on a scarce cycle. The
+  capped "Wallbox reserviert" figure collapses toward 0 right along with
+  available surplus, so the old starved check (comparing the capped
+  figure against itself) could never trigger exactly when the wallbox's
+  real appetite was largest — confirmed live: house battery topped up
+  (huge spare margin), general surplus briefly negative from cloud
+  cover, wallbox target a genuine 5+ kW, yet every managed device
+  qualified via "Akku reicht" (the overnight battery-affordability
+  check) in the same cycle — about to compete the battery's own margin
+  away from the car the moment real surplus reappeared and the wallbox
+  actually started drawing it. Now uses the uncapped target rate, so a
+  wallbox that genuinely needs more than exists gets flagged starved
+  regardless of how low its own capped number currently reads.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's
