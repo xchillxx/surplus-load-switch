@@ -161,6 +161,18 @@ class CoordinatorData:
     # cascade competes over, kept here purely for visibility into why
     # devices see less than the raw surplus_kw above.
     wallbox_reserved_kw: float = 0.0
+    # The raw, pre-cap reservation rate (see _wallbox_reservation_rate) —
+    # what the wallbox would need at a steady pace to reach its target by
+    # the deadline, regardless of whether that much surplus genuinely
+    # exists right now. wallbox_reserved_kw above is this same number
+    # after the surplus/max-charge caps are applied, i.e. what's actually
+    # being protected this cycle; this one is purely diagnostic, to
+    # verify the underlying kWh/deadline math independent of current
+    # conditions — a low wallbox_reserved_kw next to a much higher
+    # wallbox_target_kw means the deficit math is fine, there's simply
+    # not enough surplus to act on it yet (e.g. the house battery is
+    # still ahead of it in the queue), not a calculation bug.
+    wallbox_target_kw: float = 0.0
     # Same reasoning as wallbox_reserved_kw above, but reserving surplus
     # for the house battery itself instead of a wallbox — see
     # battery_full_reservation_kw in _evaluate_devices.
@@ -393,6 +405,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # last-good value, not bridged past.
         self._wallbox_last_good_reserved_kw: dict[str, float] = {}
         self._wallbox_last_good_at: dict[str, datetime] = {}
+        # The raw, pre-cap reservation rate per wallbox this cycle — see
+        # CoordinatorData.wallbox_target_kw for why this exists alongside
+        # the capped _wallbox_last_good_reserved_kw above.
+        self._wallbox_target_rate_kw: dict[str, float] = {}
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -1004,6 +1020,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         missing_kwh = max(capacity_kwh * (target_soc - current_soc) / 100.0, 0.0)
         if missing_kwh <= 0:
+            self._wallbox_target_rate_kw[wallbox_id] = 0.0
             return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
         # The SOC/target-SOC entities only ever hold the car's last known
@@ -1024,6 +1041,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # such. Confirmed live: the reservation kept claiming surplus
             # for hours after the car left for a zone called "Arbeit".
             if present_state is None or present_state.state not in ("on", "home"):
+                self._wallbox_target_rate_kw[wallbox_id] = 0.0
                 return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
         reserved_kw = self._wallbox_reservation_rate(missing_kwh, now, available_surplus)
@@ -1031,6 +1049,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # Also a genuine data gap (missing sun.sun with no forecast
             # configured), not "no reservation" — same bridge as above.
             return self._wallbox_bridge_last_good(wallbox_id, now)
+
+        # The raw rate, before either cap below — see
+        # CoordinatorData.wallbox_target_kw. Verifies the underlying
+        # kWh/deadline math on its own diagnostic sensor, independent of
+        # whatever surplus happens to physically exist this cycle.
+        self._wallbox_target_rate_kw[wallbox_id] = reserved_kw
 
         # A manually-entered cap always wins if set; otherwise fall back
         # to the learned rolling max from this wallbox's own charging
@@ -1940,6 +1964,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         )
         wallbox_reserved_kw = sum(
             self._wallbox_reserved_kw(wb, now, smoothed_available_surplus_for_wallbox)
+            for wb in wallbox_devices
+            if wb.get(CONF_WALLBOX_CAPACITY_ENTITY)
+        )
+        # Populated as a side effect of the _wallbox_reserved_kw calls
+        # just above (see self._wallbox_target_rate_kw) — the raw,
+        # pre-cap rate for each wallbox, summed the same way
+        # wallbox_reserved_kw itself is.
+        data.wallbox_target_kw = sum(
+            self._wallbox_target_rate_kw.get(wb["_id"], 0.0)
             for wb in wallbox_devices
             if wb.get(CONF_WALLBOX_CAPACITY_ENTITY)
         )

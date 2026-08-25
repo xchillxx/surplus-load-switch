@@ -27,6 +27,7 @@ async def async_setup_entry(
         PVSurplusSensor(coordinator, entry),
         PVBaseLoadSensor(coordinator, entry),
         PVWallboxReservedSensor(coordinator, entry),
+        PVWallboxTargetSensor(coordinator, entry),
         PVBatteryFullReservedSensor(coordinator, entry),
         PVHBatterySensor(coordinator, entry),
         PVHToSolarSensor(coordinator, entry),
@@ -184,6 +185,32 @@ class PVWallboxReservedSensor(_PVSensorBase):
     def native_value(self):
         if self.coordinator.data:
             return round(self.coordinator.data.wallbox_reserved_kw, 3)
+        return None
+
+
+class PVWallboxTargetSensor(_PVSensorBase):
+    """The raw, pre-cap wallbox reservation rate (see
+    wallbox_target_kw/_wallbox_reservation_rate) — what the wallbox would
+    need at a steady pace to reach its target by the deadline, regardless
+    of whether that much surplus genuinely exists right now. Diagnostic
+    only: verifies the underlying kWh/deadline math independent of
+    current conditions, so a low PVWallboxReservedSensor reading next to
+    a much higher reading here means the deficit math is fine — there's
+    simply not enough surplus to act on it yet, not a calculation bug."""
+
+    _attr_name = "Wallbox Soll-Ladeleistung"
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:ev-station"
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_wallbox_target"
+
+    @property
+    def native_value(self):
+        if self.coordinator.data:
+            return round(self.coordinator.data.wallbox_target_kw, 3)
         return None
 
 

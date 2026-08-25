@@ -254,6 +254,16 @@ cloud passes over or another appliance briefly kicks in.
   physical claim on every single cycle. Never adds surplus back when
   the battery is discharging instead — that's a genuine deficit
   elsewhere, not spare capacity.
+- **Wallbox target-rate sensor** ("Wallbox Soll-Ladeleistung") — the same
+  missing-kWh/deadline rate the wallbox reservation itself computes, but
+  *before* the surplus and max-charge caps are applied. The regular
+  "Wallbox reserviert" sensor is deliberately capped to what's actually
+  achievable right now (see Dynamic wallbox surplus reservation above),
+  so a scarce day makes it read low even when the car still has a large
+  genuine deficit — which reads as "the math is broken" unless the
+  uncapped target rate is visible alongside it to show the deficit/
+  deadline calculation is fine, there just isn't enough surplus to act
+  on it yet. Purely diagnostic; never used as a switching input itself.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's
