@@ -1898,8 +1898,27 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # this negative and floor it at a physically implausible 0 —
         # making base_discharge_kw below look more favorable than reality
         # for that cycle. See base_load_floor.py.
+        #
+        # Deliberately does NOT subtract wallbox_power_kw from load_kw —
+        # an earlier version did, assuming the configured house-load
+        # sensor's reading already includes the wallbox's real draw, so
+        # subtracting it back out would recover the true house-only
+        # base. Confirmed live that assumption is simply wrong on a
+        # system where the wallbox sits on its own separately-metered
+        # circuit (a Huawei FusionCharge charger's own "Load" flow
+        # sensor, for instance, structurally excludes it): the wallbox's
+        # entire real draw ended up invisible to base_load, cascade
+        # devices were then handed solar the wallbox had already
+        # claimed. Whether a given installation's load sensor happens to
+        # include the wallbox or not, the wallbox's claim is fully and
+        # separately accounted for below (wallbox_reserved_kw
+        # subtracted here when self-limiting, or added back in full once
+        # starved) — mixing a second, assumption-dependent adjustment
+        # into load_kw itself was never load-bearing and only risked
+        # silently double-excluding or, as confirmed here, not excluding
+        # it at all.
         base_load_excl_wallbox = max(
-            data.load_kw - wallbox_power_kw - effective_managed_power_kw,
+            data.load_kw - effective_managed_power_kw,
             self._base_load_floor_calibrator.floor_kw,
         )
         available_surplus_excl_wallbox = data.solar_kw - base_load_excl_wallbox
@@ -2069,15 +2088,24 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # called for ~6 kW, and using only the real draw here left
             # that entire 6 kW looking "free" to every other device for
             # as long as the ramp-up took, exactly the gap this max()
-            # closes. Written as topping up load_kw by whatever the
-            # reservation still calls for beyond the real draw, since
-            # load_kw already includes that real draw once it exists —
-            # adding the full max() on top of a load_kw that already
-            # contains wallbox_power_kw would double-count it.
+            # closes. Added in full and unconditionally, not as a gap-fill
+            # on top of load_kw — an earlier version only topped up the
+            # *shortfall* (reserved minus real draw), on the assumption
+            # that load_kw already contained the real draw once it
+            # existed. Confirmed live that assumption doesn't hold on a
+            # system where the wallbox is metered on its own separate
+            # circuit (see base_load_excl_wallbox above): the instant real
+            # draw caught up to and passed the reservation, the gap-fill
+            # dropped to 0 and the wallbox's entire multi-kW real draw
+            # went completely unprotected again, right when it was
+            # largest — SOC 100%, battery idle, wallbox genuinely drawing
+            # 3 kW against a 2.6 kW reservation, every managed device
+            # still saw 2+ kW of "free" surplus that was actually already
+            # spoken for.
             base_load = max(
                 data.load_kw
                 - effective_managed_power_kw
-                + max(wallbox_reserved_kw - wallbox_power_kw, 0.0),
+                + max(wallbox_reserved_kw, wallbox_power_kw),
                 self._base_load_floor_calibrator.floor_kw,
             )
             available_surplus = data.solar_kw - base_load

@@ -226,7 +226,18 @@ cloud passes over or another appliance briefly kicks in.
   mode, its real draw can sit at ~0 for a few cycles while it ramps up,
   and protecting only that real draw would leave everything it's about
   to need looking completely free to every other device for as long as
-  the ramp-up takes. A brief gap in the car's own SOC/target/capacity/
+  the ramp-up takes. Added in full and unconditionally, not as a
+  gap-fill on top of the configured house-load sensor's own reading — an
+  earlier version assumed that reading already included the wallbox's
+  real draw, topping load up by only the shortfall (reservation minus
+  real draw). Confirmed live that assumption doesn't hold on every
+  installation: a wallbox metered on its own separate circuit (e.g. a
+  Huawei FusionCharge charger's own "Load" flow sensor, which
+  structurally excludes it) makes the house-load reading blind to the
+  wallbox entirely, so the moment real draw caught up to and passed the
+  reservation, the gap-fill dropped to 0 and the wallbox's entire
+  multi-kW real draw went completely unprotected again — right when it
+  was largest. A brief gap in the car's own SOC/target/capacity/
   presence entities (a flaky cloud API, for instance) bridges to the
   last successfully-computed reservation for a while rather than
   collapsing straight to 0 for that cycle — the same tolerance the core
