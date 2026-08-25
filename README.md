@@ -416,28 +416,7 @@ cloud passes over or another appliance briefly kicks in.
   and a "next check" timestamp sensor shows when the coordinator will
   re-evaluate everything — so a device that's still holding out its
   stability buffer reads as "waiting X minutes", not as a stuck deviation.
-- **Weak-day detection** — compares the battery's SOC gain since solar
-  start today against the solar-start calibration's learned normal gain
-  for this time of year (once late enough in the morning that a strong
-  day would already show it), falling back to a simple median of the
-  last 14 days whenever the current month isn't calibrated yet. SOC gain
-  (not raw solar power) is used since it's naturally smoothed by the
-  battery's own charging — a brief sun break through passing clouds
-  barely moves it — and it already accounts for household consumption
-  along the way. A wallbox can be given an effective priority "for weak
-  days only" even though it's never itself switched or ranked otherwise
-  — on a day running well below normal, any device at or worse than that
-  priority gets held back entirely until the battery's nearly full, so a
-  car that still needs it gets first claim on a scarce day. The block
-  releases as soon as the wallbox itself no longer needs the surplus —
-  same idle/threshold "satisfied" detection as the wallbox-dependency
-  feature, so it works whether the car finished charging or was never
-  plugged in — rather than holding other devices back for nothing while
-  the surplus would otherwise just go unused to the grid. Optional and
-  off by default.
-- **Will the battery reach full in time?** — a forward-looking
-  counterpart to weak-day detection above, which only ever looks
-  backward at today's gain so far. Projects from the *current* live
+- **Will the battery reach full in time?** — projects from the *current* live
   charge rate whether the battery is on track to reach its "essentially
   full" threshold by sunset minus a safety margin — a "Akku wird
   rechtzeitig voll" binary sensor, with the missing kWh and both hour
