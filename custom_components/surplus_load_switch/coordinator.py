@@ -166,22 +166,22 @@ class CoordinatorData:
     # what the wallbox would need at a steady pace to reach its target by
     # the deadline, regardless of whether that much surplus genuinely
     # exists right now. wallbox_reserved_kw above is this same number
-    # after the surplus/max-charge caps are applied, i.e. what's actually
-    # being protected this cycle; this one verifies the underlying
-    # kWh/deadline math independent of current conditions — a low
-    # wallbox_reserved_kw next to a much higher wallbox_target_kw means
-    # the deficit math is fine, there's simply not enough surplus to act
-    # on it yet (e.g. the house battery is still ahead of it in the
-    # queue), not a calculation bug. Also a real switching input, not
-    # just diagnostic: see its use in wallbox_starved below, which
-    # deliberately compares against this uncapped rate rather than
-    # wallbox_reserved_kw — a scarce cycle caps the reservation down to
-    # ~0 right along with available surplus, which would otherwise hide
-    # the wallbox's real appetite exactly when it's largest, letting
-    # other devices freely claim the house battery's margin for a car
-    # that's about to want it (confirmed live: SOC 98%, huge spare
-    # battery margin, wallbox target 5+ kW, every managed device
-    # qualifying via "Akku reicht" in the same cycle).
+    # after the surplus/max-charge caps are applied — what a self-limiting
+    # (not starved) wallbox gets protected for; a low wallbox_reserved_kw
+    # next to a much higher wallbox_target_kw means the deficit math is
+    # fine, there's simply not enough surplus to act on it yet (e.g. the
+    # house battery is still ahead of it in the queue), not a calculation
+    # bug. A real switching input in two places, not just diagnostic: (1)
+    # wallbox_starved compares against this uncapped rate directly as a
+    # ratio against wallbox_reserved_kw (see WALLBOX_STARVED_RESERVED_RATIO)
+    # rather than against available surplus, since the capped reservation
+    # collapses toward 0 right along with available surplus on a scarce
+    # cycle, which would otherwise hide the wallbox's real appetite
+    # exactly when it's largest; (2) once starved, this uncapped rate —
+    # not the capped reservation — is what's actually protected in
+    # base_load (see wallbox_starved_effective below), since protecting
+    # only the already-capped reservation was a no-op exactly when
+    # starved matters most.
     wallbox_target_kw: float = 0.0
     # Same reasoning as wallbox_reserved_kw above, but reserving surplus
     # for the house battery itself instead of a wallbox — see
@@ -2094,31 +2094,49 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # same way base_load already leaves nothing for the cascade
             # once it alone exceeds solar.
             #
-            # Protects max(wallbox_power_kw, wallbox_reserved_kw), not
-            # just the real draw — confirmed live: right after switching
-            # a wallbox back to surplus-following mode, its real draw was
-            # still ~0 (hadn't ramped up yet) while the reservation still
-            # called for ~6 kW, and using only the real draw here left
-            # that entire 6 kW looking "free" to every other device for
-            # as long as the ramp-up took, exactly the gap this max()
-            # closes. Written as topping up load_kw by whatever the
-            # reservation still calls for beyond the real draw, since
-            # load_kw already includes that real draw once it exists —
-            # see base_load_excl_wallbox above for how that's verified
+            # Protects max(wallbox_power_kw, wallbox_target_kw) — the
+            # wallbox's true, uncapped target rate, not its capped
+            # reservation. Using wallbox_reserved_kw here (as an earlier
+            # version did) was a no-op exactly when it mattered most: the
+            # reservation is itself capped to available surplus/max-charge,
+            # so once starved (surplus genuinely scarce), reserved is
+            # already small — protecting max(reserved, real) then
+            # frequently equals what's already accounted for elsewhere,
+            # changing nothing about available_surplus and defeating the
+            # whole point of flagging starved in the first place.
+            # Confirmed live: target 7.6 kW, reservation capped at 0.1 kW,
+            # wallbox currently drawing 0 kW (between charging pulses) —
+            # starved correctly detected the shortfall (see
+            # WALLBOX_STARVED_RESERVED_RATIO above) but protecting only
+            # the 0.1 kW reservation left the cascade seeing genuine
+            # positive surplus regardless, and Miner switched straight
+            # back on. Protecting the target instead means a starved
+            # wallbox can — deliberately — push available_surplus well
+            # below zero even while its own real draw is 0, correctly
+            # holding every managed device back until the wallbox is
+            # actually getting close to what it needs; explicitly the
+            # user's own priority call, confirmed acceptable even when it
+            # reserves more than currently exists.
+            #
+            # Written as topping up load_kw by whatever the target still
+            # calls for beyond the real draw, since load_kw already
+            # includes that real draw once it exists — see
+            # base_load_excl_wallbox above for how that's verified
             # (multi-session historical correlation, not a single
             # snapshot). Adding the full max() unconditionally on top of a
             # load_kw that already contains wallbox_power_kw would double
-            # -count it: a v2.12.0 revision briefly did exactly that,
-            # based on a since-corrected misreading (cross-source polling
-            # lag between the wallbox's own cloud-polled power reading
-            # and the plant-level load sensor, mistaken for structural
+            # -count it: a v2.12.0 revision briefly did exactly that
+            # (with wallbox_reserved_kw, not wallbox_target_kw), based on
+            # a since-corrected misreading (cross-source polling lag
+            # between the wallbox's own cloud-polled power reading and
+            # the plant-level load sensor, mistaken for structural
             # exclusion) — confirmed live afterward, SOC 100%, wallbox
             # drawing 4 kW, "Grundlast" inflated to 10.1 kW against a true
             # ~6.1 kW base, "Überschuss" reporting a phantom -4.7 kW.
             base_load = max(
                 data.load_kw
                 - effective_managed_power_kw
-                + max(wallbox_reserved_kw - wallbox_power_kw, 0.0),
+                + max(data.wallbox_target_kw - wallbox_power_kw, 0.0),
                 self._base_load_floor_calibrator.floor_kw,
             )
             available_surplus = data.solar_kw - base_load

@@ -297,6 +297,22 @@ cloud passes over or another appliance briefly kicks in.
   surplus-based comparison still read "not starved" for a stretch,
   letting a low-priority device keep qualifying for surplus the car
   was, in reality, already short on.
+- **Once starved, the wallbox's true target — not its capped
+  reservation — is what actually gets protected.** Correctly detecting
+  starved (the point above) turned out to be only half the fix: what
+  gets protected in base_load once starved was still the wallbox's own
+  capped reservation, which is small precisely because it's capped by
+  the same scarce surplus that triggered starved in the first place —
+  protecting it again there was a no-op exactly when it mattered most.
+  Confirmed live: target 7.6 kW, reservation capped at 0.1 kW, wallbox
+  currently drawing 0 kW between charging pulses — starved correctly
+  fired, but with only the 0.1 kW reservation protected, the cascade
+  still saw genuine positive surplus and a low-priority device switched
+  straight back on. Now protects the larger of the wallbox's real draw
+  and its true (uncapped) target, so a starved wallbox correctly holds
+  every other managed device back — deliberately even pushing available
+  surplus below zero while the wallbox's own real draw is still 0 — until
+  it's actually getting close to what it needs.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's
