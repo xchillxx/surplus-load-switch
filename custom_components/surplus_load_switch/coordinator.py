@@ -891,26 +891,34 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         reservation" — the caller distinguishes.
 
         Prefers a forecast-based proportional rate when
-        CONF_SOLAR_FORECAST_REMAINING_ENTITY is configured: claim the
-        same *share* of whatever solar is happening right now as the
-        share of today's still-forecast solar the deficit represents
-        (missing_kwh / forecast_kwh_still_to_come). A flat clock-time
-        average treats a weak 9am and a strong 2pm identically, which is
-        exactly backwards — confirmed live: reserving a flat rate from
-        the morning onward claimed real surplus during hours when actual
-        production was still ramping up, while a large deficit
-        discovered at midday would need an even larger flat rate for the
-        rest of the day than the true solar curve could comfortably
-        supply. The forecast-based rate instead scales naturally with
-        the sun itself: low at 9am when little is forecast to still
-        arrive relative to the whole day, higher once the afternoon peak
-        is actually forecast to deliver it.
+        CONF_SOLAR_FORECAST_REMAINING_ENTITY is configured, but only
+        while that share stays under 1 — claim the same *share* of
+        whatever solar is happening right now as the share of today's
+        still-forecast solar the deficit represents (missing_kwh /
+        forecast_kwh_still_to_come). A flat clock-time average treats a
+        weak 9am and a strong 2pm identically, which is exactly
+        backwards — confirmed live: reserving a flat rate from the
+        morning onward claimed real surplus during hours when actual
+        production was still ramping up. The forecast-based rate instead
+        scales naturally with the sun itself: low at 9am when little is
+        forecast to still arrive relative to the whole day, higher once
+        the afternoon peak is actually forecast to deliver it.
 
-        Falls back to the flat sunset-minus-buffer/hours-remaining
-        formula when no forecast entity is configured (or its reading is
-        unavailable) — worse-shaped, but still deadline-aware and still
-        fully capped downstream, so the feature keeps working without
-        Forecast.Solar or an equivalent integration installed.
+        Once the deficit alone exceeds the entire day's remaining
+        forecast (share >= 1), that proportional formula degenerates
+        into "claim 100% of whatever's flowing this instant" — not the
+        same thing as "claim what's actually needed for a steady pace
+        toward the deadline". Confirmed live: with the deficit already
+        past today's forecast, the reservation tracked raw instantaneous
+        solar 1:1 (starving every managed device even at 1.1 kW, since
+        that was all that existed that moment) instead of settling on
+        the flat rate the car would actually need sustained from now to
+        the deadline — which stays properly capped by whatever surplus
+        genuinely exists downstream either way, but is a meaningfully
+        smaller, steadier number once solar itself picks back up, no
+        longer starving devices for headroom the car couldn't have used
+        at that instant regardless. Falls through to the same
+        deadline-based rate used when no forecast is configured at all.
         """
         forecast_entity = self._config.get(CONF_SOLAR_FORECAST_REMAINING_ENTITY)
         forecast_remaining_kwh = (
@@ -918,8 +926,22 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         )
         if forecast_remaining_kwh is not None:
             share_needed = missing_kwh / max(forecast_remaining_kwh, WALLBOX_FORECAST_MIN_KWH)
-            return share_needed * max(available_surplus, 0.0)
+            if share_needed < 1.0:
+                return share_needed * max(available_surplus, 0.0)
 
+        return self._wallbox_deadline_rate(missing_kwh, now)
+
+    def _wallbox_deadline_rate(self, missing_kwh: float, now: datetime) -> float | None:
+        """Flat sunset-minus-buffer/hours-remaining rate — worse-shaped
+        across the day than the forecast-based share above, but still
+        deadline-aware and still fully capped downstream (surplus and
+        max-charge-rate both), so the feature keeps working without
+        Forecast.Solar or an equivalent integration installed, and
+        serves as the fallback once the forecast share alone would
+        otherwise demand everything regardless of the actual pace
+        needed. None means "can't compute right now" (missing sun.sun
+        data), not "no reservation" — the caller distinguishes.
+        """
         sun = self.hass.states.get("sun.sun")
         next_setting_raw = sun.attributes.get("next_setting") if sun is not None else None
         if isinstance(next_setting_raw, datetime):

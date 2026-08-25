@@ -145,11 +145,22 @@ cloud passes over or another appliance briefly kicks in.
   the reservation claims the same share of whatever surplus is flowing
   right now as the deficit's share of today's forecast remaining
   production — low first thing in the morning when little is forecast
-  yet, higher once the afternoon is genuinely delivering it. Without a
-  forecast sensor configured, falls back to a flatter sunset-minus-a-
-  safety-margin/hours-remaining rate — easing off on its own as the car
-  approaches its target, and ramping up on its own if the deficit isn't
-  closing. Capped at both the
+  yet, higher once the afternoon is genuinely delivering it. But only
+  while that share stays under 1: once the deficit alone already
+  exceeds the entire day's remaining forecast, the proportional formula
+  degenerates into "claim 100% of whatever's flowing this instant",
+  which isn't the same as "claim what's actually needed for a steady
+  pace toward the deadline" — confirmed live, it tracked raw
+  instantaneous solar 1:1 even at just over 1 kW, starving every
+  managed device for headroom the car couldn't have used at that
+  moment regardless, instead of settling on the (properly
+  surplus-capped either way, but meaningfully smaller and steadier)
+  flat rate the car actually needs sustained from now to the deadline.
+  Falls through to that same flat sunset-minus-a-safety-margin/hours-
+  remaining rate whenever the forecast share reaches 1, or whenever no
+  forecast sensor is configured at all — easing off on its own as the
+  car approaches its target, and ramping up on its own if the deficit
+  isn't closing. Capped at both the
   surplus that actually exists right now and the wallbox's own maximum
   charge rate — self-limiting rather than gated to a fixed time of day,
   so a large deficit that genuinely needs a full day to close isn't held
