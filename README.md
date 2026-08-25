@@ -232,6 +232,28 @@ cloud passes over or another appliance briefly kicks in.
   collapsing straight to 0 for that cycle — the same tolerance the core
   solar/load/SOC/battery sensors already get elsewhere for exactly this
   kind of transient outage.
+- **Battery charging takes real priority over every managed device** —
+  the inverter always feeds the house battery before anything else gets
+  access to surplus, so whatever the battery is actively drawing was
+  never actually available to the wallbox or the device cascade in the
+  first place, regardless of what solar-minus-house-load alone
+  suggests. Confirmed live: a wallbox reservation could sit at several
+  kW on paper while the car drew nothing at all, because the battery
+  had already claimed everything ahead of it; separately, with the
+  battery comfortably on track for its daily target yet still genuinely
+  charging at several kW, a lower-priority device was still being
+  granted "surplus" that was actually just the battery's own
+  hardware-priority draw. The battery's smoothed charge rate (same
+  20-minute rolling median the "will it reach full in time?" projection
+  itself trusts, not a raw instantaneous reading) is now subtracted
+  from the surplus figure both the wallbox's own reservation and the
+  general device cascade see, unconditionally — on track or not. This
+  is separate from and complements the behind-schedule-only full
+  reservation described below, which only ever engages once the battery
+  has actually fallen behind; this instead reflects the battery's real
+  physical claim on every single cycle. Never adds surplus back when
+  the battery is discharging instead — that's a genuine deficit
+  elsewhere, not spare capacity.
 - **Time-windowed devices** — restrict a device to a daily window (e.g. a
   pool pump); outside it, it's forced off immediately. Inside the window
   it's a normal cascade device — still only switched on when there's

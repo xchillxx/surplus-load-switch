@@ -1919,8 +1919,27 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # reserved kW swinging between ~2 and ~10 within a single hour
         # while the underlying deficit was constant.
         smoothed_available_surplus = data.solar_kw - smoothed_base_load
+        # The wallbox's own reservation must additionally account for
+        # the house battery's own active charge rate — confirmed live:
+        # the inverter's own "Battery first" priority means whatever the
+        # battery is already drawing was never actually available to the
+        # wallbox in the first place, regardless of what solar-minus-
+        # house-load alone suggests. Without this, a wallbox reservation
+        # could sit at several kW on paper while the car draws nothing
+        # at all, because the battery had already claimed everything
+        # ahead of it — the reservation was "protecting" surplus the
+        # wallbox could never actually have gotten to. Uses the same
+        # smoothed charge rate the battery-full projection itself
+        # trusts (see _charge_samples), not a raw instantaneous reading,
+        # for the same reason base_load itself is smoothed here. Never
+        # ADDS surplus back when the battery is discharging instead —
+        # that's a genuine deficit elsewhere, not spare capacity for the
+        # wallbox — which max(batt, 0.0) already guarantees on its own.
+        smoothed_available_surplus_for_wallbox = max(
+            smoothed_available_surplus - data.battery_smoothed_charge_kw, 0.0
+        )
         wallbox_reserved_kw = sum(
-            self._wallbox_reserved_kw(wb, now, smoothed_available_surplus)
+            self._wallbox_reserved_kw(wb, now, smoothed_available_surplus_for_wallbox)
             for wb in wallbox_devices
             if wb.get(CONF_WALLBOX_CAPACITY_ENTITY)
         )
@@ -1957,7 +1976,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # second one. See its use against battery_eligible_ids below.
         wallbox_starved = (
             wallbox_reserved_kw > 0.0
-            and wallbox_reserved_kw >= smoothed_available_surplus - 0.05
+            and wallbox_reserved_kw >= smoothed_available_surplus_for_wallbox - 0.05
         ) or (wallbox_power_kw > wallbox_reserved_kw + WALLBOX_OVERDRAW_MARGIN_KW)
         # Debounced: takes effect on the very first starved cycle (never
         # delay protecting the wallbox), but only releases once
@@ -2018,6 +2037,24 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # the cascade below.
             base_load = base_load_excl_wallbox
             available_surplus = available_surplus_excl_wallbox - wallbox_reserved_kw
+
+        # The house battery's own active charge rate takes real, physical
+        # priority over every managed device below — the inverter always
+        # feeds the battery before anything else gets access to surplus,
+        # regardless of whether the battery happens to be on track for
+        # today's target or not. Without this, a battery comfortably on
+        # track but still genuinely charging at several kW was completely
+        # invisible to the cascade below: confirmed live at SOC 74%,
+        # battery drawing 5.637 kW, "Akku wird rechtzeitig voll" already
+        # true, yet the boiler was still granted ~0.5 kW of "surplus"
+        # that was actually just the battery's own hardware-priority
+        # draw. Deliberately unconditional and separate from
+        # battery_full_reservation_kw below, which only engages once the
+        # battery has fallen behind schedule — this instead reflects the
+        # battery's real physical claim at every moment, on track or
+        # not. Mirrors the same adjustment already applied to the
+        # wallbox's own reservation above (smoothed_available_surplus_for_wallbox).
+        available_surplus -= data.battery_smoothed_charge_kw
 
         # battery_full_on_track (see _battery_full_projection) is a
         # second, independent signal on top of wallbox_starved above —
