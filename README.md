@@ -166,13 +166,20 @@ cloud passes over or another appliance briefly kicks in.
   so a large deficit that genuinely needs a full day to close isn't held
   back until some arbitrary starting point, while a small one doesn't
   claim more of the morning than it actually needs. The max-charge cap
-  can be entered by hand, or left unset to self-learn from the 95th
-  percentile of this wallbox's own power sensor's hourly maximums over
-  the last 30 days (not the outright maximum — a single glitched-high
-  hour otherwise poisons the cap for the rest of that window) — adjusts
-  on its own as reality changes (3-phase summer charging vs. a
-  single-phase winter fallback, a different car) instead of a number
-  that quietly goes stale. An optional presence entity
+  can be entered by hand, pointed at an external entity (e.g. a
+  companion spot-price charge scheduler add-on that already calibrates
+  the same physical charger from its own charging history — avoids two
+  integrations independently calibrating the same number and silently
+  drifting apart), or left unset to self-learn from the 95th percentile
+  of this wallbox's own power sensor's hourly maximums over the last 30
+  days (not the outright maximum — a single glitched-high hour otherwise
+  poisons the cap for the rest of that window) — adjusts on its own as
+  reality changes (3-phase summer charging vs. a single-phase winter
+  fallback, a different car) instead of a number that quietly goes
+  stale. Whichever source wins also caps the "Wallbox Soll-Ladeleistung"
+  diagnostic sensor — a target the charger could never physically
+  deliver regardless of how much surplus exists isn't a meaningful
+  target either. An optional presence entity
   (a binary_sensor "plugged in" or a device_tracker) keeps the
   reservation from holding surplus back for a car that's simply not
   there — the SOC/target-SOC entities only ever hold the last known

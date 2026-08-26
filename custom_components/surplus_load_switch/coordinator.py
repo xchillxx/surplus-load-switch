@@ -53,6 +53,7 @@ from .const import (
     CONF_SOLAR_OFFSETS,
     CONF_SOLAR_SENSOR,
     CONF_WALLBOX_CAPACITY_ENTITY,
+    CONF_WALLBOX_MAX_CHARGE_ENTITY,
     CONF_WALLBOX_MAX_CHARGE_KW,
     CONF_WALLBOX_PRESENT_ENTITY,
     CONF_WALLBOX_SATISFIED_KW,
@@ -1060,21 +1061,41 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # configured), not "no reservation" — same bridge as above.
             return self._wallbox_bridge_last_good(wallbox_id, now)
 
-        # The raw rate, before either cap below — see
-        # CoordinatorData.wallbox_target_kw. Verifies the underlying
-        # kWh/deadline math on its own diagnostic sensor, independent of
-        # whatever surplus happens to physically exist this cycle.
-        self._wallbox_target_rate_kw[wallbox_id] = reserved_kw
-
-        # A manually-entered cap always wins if set; otherwise fall back
-        # to the learned rolling max from this wallbox's own charging
-        # history (see wallbox_charge_calibrator.py) — self-adjusting to
-        # whatever's actually achievable this month instead of a number
-        # that silently goes stale the moment reality changes.
+        # Priority: a manually-entered fixed number always wins if set;
+        # otherwise an external entity (e.g. a companion charge-scheduler
+        # integration that already calibrates this from real charging
+        # sessions) if configured; otherwise fall back to this
+        # integration's own learned rolling max (see
+        # wallbox_charge_calibrator.py). The entity option exists so two
+        # integrations tracking the same physical charger don't silently
+        # drift apart with two independent calibrations — confirmed live,
+        # this wallbox's own calibrator had settled on 10.0 kW while a
+        # companion scheduler's calibration (same charger, more charging
+        # history to learn from) had already reached 11.0 kW.
         max_charge_kw = wallbox_dev.get(CONF_WALLBOX_MAX_CHARGE_KW)
+        if not max_charge_kw:
+            max_charge_entity = wallbox_dev.get(CONF_WALLBOX_MAX_CHARGE_ENTITY)
+            max_charge_kw = (
+                _safe_float(self.hass.states.get(max_charge_entity))
+                if max_charge_entity else None
+            )
         if not max_charge_kw:
             calibrator = self._wallbox_charge_calibrators.get(wallbox_dev.get("_id"))
             max_charge_kw = calibrator.max_charge_kw if calibrator else None
+
+        # The raw rate, capped only at the wallbox's own physical ceiling
+        # — not at available_surplus — before that surplus cap is applied
+        # below. See CoordinatorData.wallbox_target_kw: verifies the
+        # underlying kWh/deadline math independent of whatever surplus
+        # happens to physically exist this cycle, but a target the
+        # charger could never actually deliver regardless of supply
+        # isn't a meaningful "target" either — capping it here keeps the
+        # diagnostic (and its use in wallbox_starved/base_load) reading a
+        # number the car could genuinely use.
+        self._wallbox_target_rate_kw[wallbox_id] = (
+            min(reserved_kw, max_charge_kw) if max_charge_kw else reserved_kw
+        )
+
         if max_charge_kw:
             reserved_kw = min(reserved_kw, max_charge_kw)
         result = min(reserved_kw, max(available_surplus, 0.0))

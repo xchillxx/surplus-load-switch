@@ -320,7 +320,9 @@ class PVWallboxMaxChargeKwNumber(_PVDeviceNumberBase):
     coordinator._wallbox_reserved_kw at whatever the car/charger can
     actually draw, regardless of how large the remaining deficit is —
     no point reserving surplus the wallbox could never use. 0 ("not
-    set") means no cap beyond whatever surplus genuinely exists."""
+    set") means no cap beyond whatever surplus genuinely exists — falls
+    back to the "Max. Ladeleistung-Entität" select (see select.py) if
+    configured, then to this integration's own learned rolling max."""
 
     _field = CONF_WALLBOX_MAX_CHARGE_KW
     _attr_name = "Maximale Ladeleistung (0 = aus)"

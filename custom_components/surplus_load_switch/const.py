@@ -117,6 +117,14 @@ CONF_WALLBOX_TARGET_SOC_ENTITY = "wallbox_target_soc_entity"
 # large the remaining deficit is. 0/unset means no cap beyond whatever
 # surplus genuinely exists.
 CONF_WALLBOX_MAX_CHARGE_KW = "wallbox_max_charge_kw"
+# Optional entity-reference alternative to the plain number above — same
+# reasoning as CONF_WALLBOX_CAPACITY_ENTITY: a companion integration that
+# already calibrates the charger's own real max charge rate from its
+# charging history (e.g. a spot-price charge scheduler add-on) can be
+# pointed at directly instead of running a second, independent
+# calibration here that can silently drift from the first. Only
+# consulted when the plain number above is unset.
+CONF_WALLBOX_MAX_CHARGE_ENTITY = "wallbox_max_charge_entity"
 # Optional: a binary_sensor ("plugged in"/"connected", on = present) or
 # device_tracker (state "home"/"not_home") — the SOC/target-SOC entities
 # only ever hold the car's *last known* reading, which stays whatever it

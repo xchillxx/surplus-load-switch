@@ -34,6 +34,7 @@ from .const import (
     CONF_SOC_SENSOR,
     CONF_SOLAR_SENSOR,
     CONF_WALLBOX_CAPACITY_ENTITY,
+    CONF_WALLBOX_MAX_CHARGE_ENTITY,
     CONF_WALLBOX_SOC_ENTITY,
     CONF_WALLBOX_PRESENT_ENTITY,
     CONF_WALLBOX_TARGET_SOC_ENTITY,
@@ -73,6 +74,7 @@ async def async_setup_entry(
             entities.append(PVWallboxSocSelect(coordinator, entry, dev))
             entities.append(PVWallboxTargetSocSelect(coordinator, entry, dev))
             entities.append(PVWallboxPresentSelect(coordinator, entry, dev))
+            entities.append(PVWallboxMaxChargeSelect(coordinator, entry, dev))
     async_add_entities(entities)
 
 
@@ -294,6 +296,29 @@ class PVWallboxCapacitySelect(_PVDeviceOptionalEntitySelect):
     ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_capacity_select"
+
+
+class PVWallboxMaxChargeSelect(_PVDeviceOptionalEntitySelect):
+    """Only meaningful on a wallbox device: an entity-reference
+    alternative to the plain "Max. Ladeleistung" number, for the same
+    reason PVWallboxCapacitySelect above exists — a companion
+    integration that already calibrates the charger's real max charge
+    rate from its own charging history (e.g. a spot-price charge
+    scheduler add-on) can be pointed at directly instead of running a
+    second, independent calibration here that silently drifts from the
+    first. Only consulted when the plain number is unset (0); a manually
+    entered number there always wins over this."""
+
+    _field = CONF_WALLBOX_MAX_CHARGE_ENTITY
+    _domain = ("number", "sensor")
+    _attr_name = "Max. Ladeleistung-Entität"
+    _attr_icon = "mdi:ev-station"
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, device: dict
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_wallbox_max_charge_select"
 
 
 class PVWallboxSocSelect(_PVDeviceOptionalEntitySelect):
