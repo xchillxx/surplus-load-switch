@@ -162,10 +162,21 @@ cloud passes over or another appliance briefly kicks in.
   car approaches its target, and ramping up on its own if the deficit
   isn't closing. Capped at both the
   surplus that actually exists right now and the wallbox's own maximum
-  charge rate — self-limiting rather than gated to a fixed time of day,
-  so a large deficit that genuinely needs a full day to close isn't held
-  back until some arbitrary starting point, while a small one doesn't
-  claim more of the morning than it actually needs. The max-charge cap
+  charge rate — self-limiting rather than gated to a fixed starting
+  point *within* the day, so a large deficit that genuinely needs a full
+  day to close isn't held back until some arbitrary starting point,
+  while a small one doesn't claim more of the morning than it actually
+  needs. It IS gated outside the day entirely, though: from (sunset -
+  the same safety buffer used above) until the next calibrated
+  solar_start, the reservation and the "Wallbox Soll-Ladeleistung" target
+  both go to exactly 0, regardless of how large the deficit still is —
+  the deadline-based rate would otherwise keep computing a small but
+  nonzero number deep into the night (hours_remaining just rolls forward
+  to tomorrow's sunset the instant today's has passed), which doesn't
+  reserve anything real on its own but was enough to keep tripping the
+  "starved" detection below and holding every managed device off battery
+  power all night for a target that had nothing to do with what was
+  actually happening. The max-charge cap
   can be entered by hand, pointed at an external entity (e.g. a
   companion spot-price charge scheduler add-on that already calibrates
   the same physical charger from its own charging history — avoids two
