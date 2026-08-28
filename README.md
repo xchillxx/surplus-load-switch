@@ -374,6 +374,26 @@ cloud passes over or another appliance briefly kicks in.
   once the time remaining until the window closes is no longer enough for
   the still-missing hours plus a safety margin; for a device with no
   window at all, once today's solar peak has passed.
+- **Price-optimized forcing** — an optional per-device switch
+  ("Erzwungene Mindest-Laufzeit preisoptimiert"), only meaningful
+  alongside minimum daily runtime above and a real time window/schedule
+  (needs a fixed "must be done by" deadline to schedule against — has
+  no effect on a windowless device). Once forcing becomes necessary at
+  all (the trigger logic above is unchanged), the still-missing hours
+  are scheduled into the cheapest remaining Tibber price slots before
+  the window closes instead of forcing continuously from the moment the
+  trigger fires — same idea as the companion Spot Charge Scheduler
+  add-on already applies to wallbox charging, here applied to any
+  managed device with a runtime target. Same `tibber.get_prices` service
+  call, 15-minute slot resolution. Fetched once per pricing episode and
+  cached (re-fetched only when the missing-hours figure or the deadline
+  itself has genuinely moved, or after 30 minutes regardless) rather
+  than every 60-second cycle. If the price data can't be fetched at all
+  (Tibber API hiccup), or a windowless device is selected, or the
+  remaining window is too short for the deficit to leave any real
+  choice of slots, this safely degrades to the same unconditional
+  forcing as with the switch off — the daily-runtime target is never
+  put at risk for the sake of a cheaper price. Off by default.
 - **Per-device battery reserve** — set an optional SOC floor (%): once the
   battery drops below it, that device gets forced off to protect the
   reserve. This only ever cuts an already-running device off — it never

@@ -86,6 +86,18 @@ DEFAULT_MAX_ASSUMED_RUNTIME_H = 2.0
 # floor beyond the existing global min_soc.
 CONF_DEVICE_MIN_SOC_PERCENT = "device_min_soc_percent"
 CONF_DEVICE_MIN_DAILY_RUNTIME_H = "min_daily_runtime_h"
+# Optional, only meaningful alongside CONF_DEVICE_MIN_DAILY_RUNTIME_H:
+# once forcing becomes necessary at all (see _force_runtime_active),
+# schedule it into the cheapest remaining Tibber price slots before the
+# device's own window closes, rather than forcing continuously from the
+# moment the trigger fires. Requires the device to have a real
+# schedule/window (see _own_window_end) to compute a deadline against —
+# a windowless device falls back to the existing immediate-force
+# behavior regardless of this flag, since there's no fixed "must be
+# done by" time to schedule slots within. Off by default: forcing
+# unconditionally the instant it's needed remains the safer, simpler
+# default for anyone not specifically opting into price awareness.
+CONF_DEVICE_PRICE_OPTIMIZED_FORCE = "price_optimized_force"
 CONF_DEVICE_DEPENDS_ON = "depends_on_device_id"  # another device's _id that must be ON first
 # Wallbox-only, optional: a wallbox is never itself switched by the
 # cascade (it runs its own PV-surplus charging logic), so another device
@@ -339,6 +351,17 @@ STALENESS_MIN_REFRESHES = 2
 # extended one (observed once: ~5 hours) still correctly freezes rather
 # than running forever on an increasingly stale number.
 CORE_SENSOR_GRACE_PERIOD = timedelta(minutes=20)
+
+# How long a price-optimized device's chosen cheap-price slots stay
+# cached before re-fetching Tibber's prices (see price_source.py) —
+# calling tibber.get_prices every 60-second cycle would be wasteful and
+# unnecessary, since the price curve itself only changes when Tibber
+# publishes a new day's prices, far less often than this. Also
+# re-fetched early regardless of this TTL whenever the missing-hours
+# figure or the deadline itself has genuinely moved (see
+# _price_optimized_force_active) — this TTL only bounds the "nothing
+# relevant changed" case.
+PRICE_SLOT_CACHE_TTL = timedelta(minutes=30)
 
 # "Margin" = h_battery - h_to_solar, i.e. how many hours of battery buffer
 # exist beyond what's strictly needed until solar resumes. When margin is

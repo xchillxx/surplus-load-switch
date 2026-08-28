@@ -40,6 +40,7 @@ from .const import (
     CONF_DEVICE_OFF_ONLY,
     CONF_DEVICE_POWER_KW,
     CONF_DEVICE_POWER_SENSOR,
+    CONF_DEVICE_PRICE_OPTIMIZED_FORCE,
     CONF_DEVICE_PRIORITY,
     CONF_DEVICE_SCHEDULE_ENTITY,
     CONF_DEVICE_STOPS_OVERNIGHT,
@@ -73,6 +74,7 @@ from .const import (
     MIN_RUNTIME_FORCE_BUFFER_H,
     MIN_SAMPLES_FOR_MEASURED_AVG,
     OFF_CYCLES_FLOOR,
+    PRICE_SLOT_CACHE_TTL,
     RE_INCLUSION_COMFORT_BUFFER_H,
     STABLE_OFF_CYCLES,
     STABLE_OFF_CYCLES_MAX,
@@ -99,6 +101,7 @@ from .base_load_floor import BaseLoadFloorCalibrator
 from .wallbox_charge_calibrator import WallboxChargeCalibrator
 from .load_profile import WeekdayLoadProfileLearner
 from .solar_calibration import SolarOffsetCalibrator
+from .price_source import SLOT_HOURS, async_cheapest_slot_starts, slot_covers
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -420,6 +423,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # CoordinatorData.wallbox_target_kw for why this exists alongside
         # the capped _wallbox_last_good_reserved_kw above.
         self._wallbox_target_rate_kw: dict[str, float] = {}
+        # Cached price-optimized-forcing slot selection per device (see
+        # _price_optimized_force_active/price_source.py) — avoids
+        # calling tibber.get_prices every 60-second cycle. Keyed by
+        # device_id; each entry holds the chosen slot start-times plus
+        # the missing_h/deadline snapshot they were computed from, so a
+        # genuine change in either forces a re-fetch even before
+        # PRICE_SLOT_CACHE_TTL would have.
+        self._price_slot_cache: dict[str, dict] = {}
         # Serializes every read-modify-write of the config entry's data
         # (device enabled/priority/power/etc. number & select entities, the
         # per-device enabled switch) — without this, toggling several of
@@ -908,6 +919,79 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             return remaining_h <= missing_h + MIN_RUNTIME_FORCE_BUFFER_H
 
         return self._solar_noon_passed()
+
+    async def _force_runtime_active_async(
+        self, dev: dict, now: datetime, runtime_hours_today: float, predicted_power_kw: float
+    ) -> bool:
+        """Async-aware wrapper around _force_runtime_active — the one
+        actually called from _evaluate_devices. Devices without
+        CONF_DEVICE_PRICE_OPTIMIZED_FORCE enabled (the default) get the
+        exact same result _force_runtime_active always gave, just
+        awaited for interface consistency with the ones that do; only a
+        price-optimized device with forcing genuinely needed goes on to
+        check whether *now* happens to be one of the cheapest remaining
+        slots before its deadline (see _price_optimized_force_active).
+        """
+        needed = self._force_runtime_active(dev, now, runtime_hours_today, predicted_power_kw)
+        if not needed or not dev.get(CONF_DEVICE_PRICE_OPTIMIZED_FORCE, False):
+            return needed
+
+        own_window_end = self._own_window_end(dev, now)
+        if own_window_end is None:
+            # No real deadline to schedule slots against for a windowless
+            # device (see _force_runtime_active's own solar-noon
+            # fallback, which has no explicit deadline concept at all) —
+            # price optimization needs a hard "must be done by" time to
+            # work backward from. Falls back to the existing unconditional
+            # force behavior rather than guessing a deadline.
+            return True
+
+        min_daily_runtime_h = dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
+        missing_h = max(min_daily_runtime_h - runtime_hours_today, 0.0)
+        return await self._price_optimized_force_active(dev, now, missing_h, own_window_end)
+
+    async def _price_optimized_force_active(
+        self, dev: dict, now: datetime, missing_h: float, deadline: datetime
+    ) -> bool:
+        """Whether `now` falls inside one of the cheapest Tibber price
+        slots needed to cover `missing_h` of remaining forced runtime
+        before `deadline`. Only reached once _force_runtime_active has
+        already determined forcing is genuinely needed — this only
+        decides *when* within the remaining window, never *whether*.
+
+        Caches the fetched price data/slot selection per device (see
+        self._price_slot_cache in __init__) rather than calling
+        tibber.get_prices every 60-second cycle — only refreshed when
+        missing_h has moved by more than one slot's worth, the deadline
+        itself has shifted by more than a minute (a schedule's own
+        next_event advancing), or PRICE_SLOT_CACHE_TTL has elapsed,
+        whichever comes first.
+
+        On any fetch failure, fails open to unconditional forcing (same
+        posture as CORE_SENSOR_GRACE_PERIOD and the wallbox bridging
+        helpers elsewhere in this file) — the daily-runtime target must
+        never be missed just because the Tibber API had a bad moment.
+        """
+        device_id = dev["_id"]
+        cached = self._price_slot_cache.get(device_id)
+        needs_refresh = (
+            cached is None
+            or now - cached["computed_at"] > PRICE_SLOT_CACHE_TTL
+            or abs(missing_h - cached["missing_h"]) > SLOT_HOURS
+            or abs((deadline - cached["deadline"]).total_seconds()) > 60
+        )
+        if needs_refresh:
+            chosen = await async_cheapest_slot_starts(self.hass, now, deadline, missing_h)
+            if chosen is None:
+                self._price_slot_cache.pop(device_id, None)
+                return True
+            cached = {
+                "chosen": chosen, "computed_at": now,
+                "missing_h": missing_h, "deadline": deadline,
+            }
+            self._price_slot_cache[device_id] = cached
+
+        return slot_covers(cached["chosen"], now)
 
     def _wallbox_reservation_rate(
         self, missing_kwh: float, now: datetime, available_surplus: float
@@ -2434,7 +2518,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # ordering reason.
             _runtime_tracker = self._runtime_trackers.get(_device_id)
             _runtime_hours_today = _runtime_tracker.hours_today if _runtime_tracker is not None else 0.0
-            _force_runtime = self._force_runtime_active(
+            _force_runtime = await self._force_runtime_active_async(
                 _dev, now_dt, _runtime_hours_today, _predicted_power
             )
 
@@ -2559,7 +2643,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # never denied its normal surplus/battery-driven chance to reach
             # the target for free earlier in the day.
             min_daily_runtime_h = dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
-            force_runtime = self._force_runtime_active(
+            force_runtime = await self._force_runtime_active_async(
                 dev, now_dt, runtime_hours_today, predicted_power
             )
             diag.force_runtime = force_runtime

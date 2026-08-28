@@ -16,6 +16,8 @@ from .const import (
     CONF_DEVICES,
     CONF_DEVICE_ENABLED,
     CONF_DEVICE_IS_WALLBOX,
+    CONF_DEVICE_MIN_DAILY_RUNTIME_H,
+    CONF_DEVICE_PRICE_OPTIMIZED_FORCE,
     CONF_DEVICE_PRIORITY,
     CONF_DEVICE_SCHEDULE_ENTITY,
     CONF_DEVICE_STOPS_OVERNIGHT,
@@ -41,6 +43,11 @@ async def async_setup_entry(
     ]
     entities += [PVDeviceEnabledSwitch(coordinator, entry, dev) for dev in non_wallbox]
     entities += [PVDeviceStopsOvernightSwitch(coordinator, entry, dev) for dev in non_wallbox]
+    entities += [
+        PVDevicePriceOptimizedForceSwitch(coordinator, entry, dev)
+        for dev in non_wallbox
+        if dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
+    ]
     async_add_entities(entities)
 
 
@@ -229,6 +236,87 @@ class PVDeviceStopsOvernightSwitch(CoordinatorEntity[PVSurplusCoordinator], Swit
             devices = self._entry.data.get(CONF_DEVICES, [])
             new_devices = [
                 {**d, CONF_DEVICE_STOPS_OVERNIGHT: value} if d.get("_id") == self._device_id else d
+                for d in devices
+            ]
+            new_data = {**self._entry.data, CONF_DEVICES: new_devices}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._async_set(False)
+
+
+class PVDevicePriceOptimizedForceSwitch(CoordinatorEntity[PVSurplusCoordinator], SwitchEntity):
+    """Only meaningful on a device with a configured minimum daily
+    runtime target — see CONF_DEVICE_PRICE_OPTIMIZED_FORCE and
+    coordinator._price_optimized_force_active. When on, once forcing
+    becomes necessary at all (the target is genuinely at risk of being
+    missed), the still-missing hours are scheduled into the cheapest
+    remaining Tibber price slots before the device's own window closes,
+    instead of forcing continuously from the moment the trigger fires.
+    Requires the device to have a real schedule/window configured — a
+    windowless device has no fixed deadline to schedule slots against,
+    so this switch has no effect for one regardless of its state (see
+    extra_state_attributes below). Off by default: unconditional
+    forcing the instant it's needed remains the simpler, safer default
+    for anyone not specifically opting into price awareness."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Erzwungene Mindest-Laufzeit preisoptimiert"
+    _attr_icon = "mdi:currency-eur"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        coordinator: PVSurplusCoordinator,
+        entry: ConfigEntry,
+        device: dict,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._device_id = device["_id"]
+        self._attr_unique_id = f"{entry.entry_id}_{self._device_id}_price_optimized_force"
+
+    @property
+    def device_info(self):
+        return sub_device_info(self._entry.entry_id, self._device or {"_id": self._device_id})
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def _device(self) -> dict | None:
+        devices = self._entry.data.get(CONF_DEVICES, [])
+        return next((d for d in devices if d.get("_id") == self._device_id), None)
+
+    @property
+    def is_on(self) -> bool:
+        dev = self._device
+        return dev.get(CONF_DEVICE_PRICE_OPTIMIZED_FORCE, False) if dev else False
+
+    @property
+    def extra_state_attributes(self):
+        dev = self._device
+        if not dev:
+            return {}
+        has_window = bool(dev.get(CONF_DEVICE_SCHEDULE_ENTITY)) or bool(dev.get(CONF_DEVICE_WINDOW_END))
+        return {
+            "prioritaet": dev.get(CONF_DEVICE_PRIORITY, 99),
+            "wirkung": (
+                "aktiv" if dev.get(CONF_DEVICE_PRICE_OPTIMIZED_FORCE, False) and has_window
+                else "keine — kein Zeitfenster/Helfer konfiguriert" if not has_window
+                else "inaktiv"
+            ),
+        }
+
+    async def _async_set(self, value: bool) -> None:
+        async with self.coordinator.config_write_lock:
+            devices = self._entry.data.get(CONF_DEVICES, [])
+            new_devices = [
+                {**d, CONF_DEVICE_PRICE_OPTIMIZED_FORCE: value} if d.get("_id") == self._device_id else d
                 for d in devices
             ]
             new_data = {**self._entry.data, CONF_DEVICES: new_devices}
