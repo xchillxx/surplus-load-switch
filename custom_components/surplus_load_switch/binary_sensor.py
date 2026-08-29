@@ -94,7 +94,12 @@ class PVBatteryFullOnTimeBinarySensor(CoordinatorEntity[PVSurplusCoordinator], B
     "will it make it today". On (and available) once
     the battery's already reached the target, same as while genuinely on
     track; off while charging too slowly or not charging at all with a
-    real deficit still remaining — the attributes explain which."""
+    real deficit still remaining — the attributes explain which. The
+    `aktiv` attribute says whether this verdict is currently a device-
+    shedding input at all: before the day's solar has started (night, or
+    the pre-solar-start morning gap) it stays purely informational and
+    "Akku reicht" governs instead — see
+    coordinator.battery_full_projection_applies."""
 
     _attr_has_entity_name = True
     _attr_name = "Akku wird rechtzeitig voll"
@@ -123,6 +128,7 @@ class PVBatteryFullOnTimeBinarySensor(CoordinatorEntity[PVSurplusCoordinator], B
             return {}
         d = self.coordinator.data
         return {
+            "aktiv": d.battery_full_projection_applies,
             "fehlende_kwh": round(d.battery_full_missing_kwh, 2),
             "stunden_bis_voll": (
                 round(d.battery_full_hours_needed, 2) if d.battery_full_hours_needed is not None else None

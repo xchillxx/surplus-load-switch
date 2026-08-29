@@ -230,6 +230,20 @@ WEAK_DAY_BATTERY_FULL_SOC = 95.0
 # the two features are conceptually independent even though the number
 # happens to start the same).
 BATTERY_FULL_TARGET_TIME_BUFFER_H = 2.0
+# The "will the battery reach full in time" projection only becomes a
+# device-shedding input once solar has actually started for the day —
+# either today's calibrated solar_start has passed, or the battery is
+# already charging at a rate this fast (the morning ramp has begun).
+# sun_above_horizon alone is a geometric cliff that trips at astronomical
+# sunrise, up to ~2h before any useful PV in this install; in that gap
+# the smoothed charge rate is ~0, so "missing kWh ÷ ~0" always reads
+# "won't make it" and needlessly sheds devices the battery has plenty of
+# reserve to run (confirmed live: miner shed at SOC 43% with 9.6h of
+# runway for a 0.8h wait to solar_start). Before that point
+# battery_full_on_track being false just means "hasn't started yet" —
+# "Akku reicht" and the per-device SOC floors carry things instead, same
+# as overnight.
+BATTERY_FULL_PROJECTION_MIN_CHARGE_KW = 0.5
 
 # h_to_solar ("hours until solar_start") is the time until the *next*
 # calibrated morning threshold — once today's has already passed, that's

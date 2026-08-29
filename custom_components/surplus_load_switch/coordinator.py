@@ -22,6 +22,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BATTERY_FULL_PROJECTION_MIN_CHARGE_KW,
     BATTERY_FULL_RELIEF_CYCLES,
     BATTERY_FULL_TARGET_TIME_BUFFER_H,
     BATT_OK_BUFFER_H,
@@ -230,6 +231,12 @@ class CoordinatorData:
     battery_full_hours_needed: float | None = None
     battery_full_hours_until_deadline: float | None = None
     battery_full_on_track: bool = False
+    # Whether the battery-full projection is a meaningful device-shedding
+    # input right now: sun up AND (calibrated solar_start passed OR the
+    # morning charge has genuinely ramped up). Gates both the reactive
+    # (battery_behind_schedule) and proactive (_battery_would_still_reach_full)
+    # checks — see BATTERY_FULL_PROJECTION_MIN_CHARGE_KW.
+    battery_full_projection_applies: bool = False
 
 
 class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
@@ -1070,27 +1077,31 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         )
         return missing_kwh / hours_remaining
 
-    def _wallbox_solar_window_active(self, now: datetime) -> bool:
+    def _solar_generation_window_active(self, now: datetime) -> bool:
         """True only from today's calibrated solar_start until (sunset -
         WALLBOX_TARGET_TIME_BUFFER_H) — the actual span solar could still
-        arrive today. Outside it (already past today's deadline, full
-        night, or still before today's solar_start) there is nothing left
-        to reserve toward: no more solar is coming until solar_start
-        tomorrow, and _wallbox_deadline_rate's own hours_remaining doesn't
-        express that — it just rolls forward to *tomorrow's* sunset the
-        instant today's has passed, producing a small but nonzero rate
-        deep into the night for as long as the car has any deficit at
-        all. Confirmed live: wallbox_target_kw still positive at 2am,
-        which made wallbox_starved fire every single cycle overnight
+        arrive today. Two consumers: the wallbox forward-looking
+        reservation/target, and battery_full_projection_applies (both
+        buffers happen to be 2.0h). Outside this span (already past
+        today's deadline, full night, or still before today's
+        solar_start) there is nothing left for the wallbox to reserve
+        toward and nothing for the battery-full projection to work with:
+        no more solar is coming until solar_start tomorrow, and
+        _wallbox_deadline_rate's own hours_remaining doesn't express that
+        — it just rolls forward to *tomorrow's* sunset the instant
+        today's has passed, producing a small but nonzero rate deep into
+        the night for as long as the car has any deficit at all.
+        Confirmed live: wallbox_target_kw still positive at 2am, which
+        made wallbox_starved fire every single cycle overnight
         (wallbox_reserved_kw pinned at 0 by available_surplus, itself 0
         with no solar) and kept clearing battery_eligible_ids the entire
         night for a "deadline" that wasn't actually today's anymore.
 
-        Only gates the forward-looking reservation/target — never the
-        WALLBOX_OVERDRAW_MARGIN_KW branch of wallbox_starved, which
-        reacts to the wallbox's real measured draw and stays fully live
-        at any hour: if the car is actually pulling power overnight (a
-        manual charge, or the companion Spot Charge Scheduler running
+        For the wallbox, only gates the forward-looking reservation/target
+        — never the WALLBOX_OVERDRAW_MARGIN_KW branch of wallbox_starved,
+        which reacts to the wallbox's real measured draw and stays fully
+        live at any hour: if the car is actually pulling power overnight
+        (a manual charge, or the companion Spot Charge Scheduler running
         its own cheap-price slot), that's genuine household load either
         way, window or not.
 
@@ -1162,7 +1173,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         wallbox couldn't draw anyway.
 
         There IS a gate outside the daylight window, though (see
-        _wallbox_solar_window_active) — a different concern entirely from
+        _solar_generation_window_active) — a different concern entirely from
         the rejected solar-noon gate above. That one was about *timing
         the start within a day solar is actually happening*; this one is
         about a deficit continuing to compute a nonzero rate deep into
@@ -1196,9 +1207,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # Outside today's solar window (already past sunset - buffer, or
         # not yet at today's solar_start) there is no more solar coming
         # until solar_start tomorrow — a real deficit doesn't change
-        # that. See _wallbox_solar_window_active for why this can't just
+        # that. See _solar_generation_window_active for why this can't just
         # be left to _wallbox_deadline_rate's own hours-remaining math.
-        if not self._wallbox_solar_window_active(now):
+        if not self._solar_generation_window_active(now):
             self._wallbox_target_rate_kw[wallbox_id] = 0.0
             return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
@@ -1361,10 +1372,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         inverter's own "battery first" priority would actually still
         protect. True (never blocks) whenever the battery is already at
         its target, or during any window the reactive projection itself
-        can't evaluate (no sun.sun deadline, or night) — this only ever
-        adds a restriction on top of a real, computable deadline.
+        can't evaluate (no sun.sun deadline, night, or the pre-solar-start
+        morning gap where nothing is charging yet — see
+        battery_full_projection_applies) — this only ever adds a
+        restriction on top of a real, computable deadline.
         """
-        if data.battery_full_missing_kwh <= 0 or not data.sun_above_horizon:
+        if data.battery_full_missing_kwh <= 0 or not data.battery_full_projection_applies:
             return True
         if data.battery_full_hours_until_deadline is None:
             return True
@@ -1858,6 +1871,23 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             else h_to_solar
         )
 
+        # The battery-full projection only counts as a device-shedding
+        # signal once solar has really started for the day: today's
+        # calibrated solar window has opened (_solar_generation_window_active
+        # — despite the wallbox-flavoured name it's a general "solar could
+        # still arrive today" test: today's solar_start passed and still
+        # before sunset - buffer), OR the morning charge has already ramped
+        # past a rate that makes "missing kWh ÷ charge rate" a meaningful
+        # number. sun_above_horizon alone is a geometric cliff that trips at
+        # astronomical sunrise, up to ~2h before any useful PV here — in
+        # that gap smoothed_charge is ~0 and the projection always reads
+        # "won't make it", needlessly shedding devices the battery has
+        # plenty of reserve to run. See BATTERY_FULL_PROJECTION_MIN_CHARGE_KW.
+        battery_full_projection_applies = sun_above_horizon and (
+            self._solar_generation_window_active(now)
+            or smoothed_charge > BATTERY_FULL_PROJECTION_MIN_CHARGE_KW
+        )
+
         batt_ok = h_battery > (effective_h_to_solar + BATT_OK_BUFFER_H) and soc > min_soc
 
         data = CoordinatorData(
@@ -1888,6 +1918,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             battery_full_hours_until_deadline=battery_full_hours_until_deadline,
             battery_full_on_track=battery_full_on_track,
             battery_smoothed_charge_kw=smoothed_charge,
+            battery_full_projection_applies=battery_full_projection_applies,
         )
 
         await self._evaluate_devices(data)
@@ -2363,14 +2394,20 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # genuinely falling behind for a reason wallbox_starved wouldn't
         # (an unusually high house base load, for instance), not just the
         # wallbox-draw case that's now folded into base_load itself. Only
-        # meaningful during the day — at night, or before the morning
-        # charge has ramped up, the battery routinely isn't gaining
-        # charge for reasons that have nothing to do with anything being
-        # wrong (that's exactly when "Akku reicht" is supposed to let
-        # devices draw it down), so this only applies while the sun is
-        # above the horizon. Same instant-engage/debounced-release shape
-        # as wallbox_starved above.
-        battery_behind_schedule = data.sun_above_horizon and not data.battery_full_on_track
+        # meaningful once solar has actually started — at night, or in the
+        # pre-solar-start morning gap before the charge has ramped up, the
+        # battery routinely isn't gaining charge for reasons that have
+        # nothing to do with anything being wrong (that's exactly when
+        # "Akku reicht" is supposed to let devices draw it down), so this
+        # is gated on battery_full_projection_applies, not a bare
+        # sun-above-horizon check (which trips at astronomical sunrise,
+        # ~2h before any useful PV here — confirmed live shedding a
+        # 0.15 kW miner at SOC 43% with 9.6h of runway for a 0.8h wait).
+        # Same instant-engage/debounced-release shape as wallbox_starved
+        # above.
+        battery_behind_schedule = (
+            data.battery_full_projection_applies and not data.battery_full_on_track
+        )
         if not data.sun_above_horizon:
             # The day is over — there's no more solar coming to help the
             # battery reach today's target regardless of what it was
