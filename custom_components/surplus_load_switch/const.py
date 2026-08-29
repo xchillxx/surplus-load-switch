@@ -233,7 +233,8 @@ BATTERY_FULL_TARGET_TIME_BUFFER_H = 2.0
 # The "will the battery reach full in time" projection only becomes a
 # device-shedding input once solar has actually started for the day —
 # either today's calibrated solar_start has passed, or the battery is
-# already charging at a rate this fast (the morning ramp has begun).
+# already charging at a rate this fast (the morning ramp is genuinely
+# underway, not just the first trickle).
 # sun_above_horizon alone is a geometric cliff that trips at astronomical
 # sunrise, up to ~2h before any useful PV in this install; in that gap
 # the smoothed charge rate is ~0, so "missing kWh ÷ ~0" always reads
@@ -243,7 +244,15 @@ BATTERY_FULL_TARGET_TIME_BUFFER_H = 2.0
 # battery_full_on_track being false just means "hasn't started yet" —
 # "Akku reicht" and the per-device SOC floors carry things instead, same
 # as overnight.
-BATTERY_FULL_PROJECTION_MIN_CHARGE_KW = 0.5
+# Set at 1.5 kW, not the battery's ~0.5 kW pre-dawn trickle: at 0.5 the
+# projection switched back on while solar_start was still ~20 min away and
+# the battery was doing barely more than that trickle, then held the miner
+# off because the trickle rate ÷ a still-large morning deficit missed the
+# sunset-minus-buffer deadline — a deadline the real PV ramp clears with
+# hours to spare minutes later. 1.5 kW means "the ramp has actually
+# arrived", so the projection only gates on a rate it can trust to
+# project forward.
+BATTERY_FULL_PROJECTION_MIN_CHARGE_KW = 1.5
 
 # h_to_solar ("hours until solar_start") is the time until the *next*
 # calibrated morning threshold — once today's has already passed, that's
