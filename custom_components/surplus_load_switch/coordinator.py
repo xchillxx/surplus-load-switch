@@ -1077,25 +1077,38 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         )
         return missing_kwh / hours_remaining
 
-    def _solar_generation_window_active(self, now: datetime) -> bool:
+    def _solar_generation_window_active(
+        self, now: datetime, buffer_h: float = WALLBOX_TARGET_TIME_BUFFER_H
+    ) -> bool:
         """True only from today's calibrated solar_start until (sunset -
-        WALLBOX_TARGET_TIME_BUFFER_H) — the actual span solar could still
-        arrive today. Two consumers: the wallbox forward-looking
-        reservation/target, and battery_full_projection_applies (both
-        buffers happen to be 2.0h). Outside this span (already past
-        today's deadline, full night, or still before today's
-        solar_start) there is nothing left for the wallbox to reserve
-        toward and nothing for the battery-full projection to work with:
-        no more solar is coming until solar_start tomorrow, and
-        _wallbox_deadline_rate's own hours_remaining doesn't express that
-        — it just rolls forward to *tomorrow's* sunset the instant
-        today's has passed, producing a small but nonzero rate deep into
-        the night for as long as the car has any deficit at all.
-        Confirmed live: wallbox_target_kw still positive at 2am, which
-        made wallbox_starved fire every single cycle overnight
-        (wallbox_reserved_kw pinned at 0 by available_surplus, itself 0
-        with no solar) and kept clearing battery_eligible_ids the entire
-        night for a "deadline" that wasn't actually today's anymore.
+        buffer_h) — the span solar could still arrive today, optionally
+        pulled in by a trailing safety margin. Two consumers, each
+        passing the buffer that fits its own concern:
+
+        - battery_full_projection_applies uses the default 2.0h: it stops
+          being a device-shedding input once real production is tapering,
+          well before the literal sunset second.
+        - the wallbox forward-looking reservation/target passes
+          buffer_h=0: the reservation should keep protecting surplus for
+          the car right up to actual sunset — the 2.0h buffer belongs in
+          _wallbox_deadline_rate's *rate* (aim to finish 2h early so the
+          car really tops off), not as a hard cut-off that stops
+          reserving while usable sun is still on the roof.
+
+        Outside this span (already past sunset - buffer_h, full night, or
+        still before today's solar_start) there is nothing left to
+        reserve toward or project with: no more solar is coming until
+        solar_start tomorrow, and _wallbox_deadline_rate's own
+        hours_remaining doesn't express that — it just rolls forward to
+        *tomorrow's* sunset the instant today's has passed, producing a
+        small but nonzero rate deep into the night for as long as the car
+        has any deficit at all. Confirmed live: wallbox_target_kw still
+        positive at 2am, which made wallbox_starved fire every single
+        cycle overnight (wallbox_reserved_kw pinned at 0 by
+        available_surplus, itself 0 with no solar) and kept clearing
+        battery_eligible_ids the entire night for a "deadline" that
+        wasn't actually today's anymore. buffer_h=0 still closes the
+        window at real sunset, so that overnight protection is unchanged.
 
         For the wallbox, only gates the forward-looking reservation/target
         — never the WALLBOX_OVERDRAW_MARGIN_KW branch of wallbox_starved,
@@ -1122,7 +1135,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             next_setting = None
         if next_setting is None:
             return True
-        if now >= next_setting - timedelta(hours=WALLBOX_TARGET_TIME_BUFFER_H):
+        if now >= next_setting - timedelta(hours=buffer_h):
             return False
 
         next_rising_raw = sun.attributes.get("next_rising")
@@ -1173,15 +1186,19 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         wallbox couldn't draw anyway.
 
         There IS a gate outside the daylight window, though (see
-        _solar_generation_window_active) — a different concern entirely from
-        the rejected solar-noon gate above. That one was about *timing
-        the start within a day solar is actually happening*; this one is
-        about a deficit continuing to compute a nonzero rate deep into
-        the night, when hours_remaining has quietly rolled forward to
-        tomorrow's sunset and no amount of self-limiting-by-available-
+        _solar_generation_window_active, called here with buffer_h=0 so
+        it closes only at actual sunset) — a different concern entirely
+        from the rejected solar-noon gate above. That one was about
+        *timing the start within a day solar is actually happening*; this
+        one is about a deficit continuing to compute a nonzero rate deep
+        into the night, when hours_remaining has quietly rolled forward
+        to tomorrow's sunset and no amount of self-limiting-by-available-
         surplus stops the *uncapped* target rate (wallbox_target_kw) from
         reading positive and tripping wallbox_starved for the whole
-        night.
+        night. The 2h WALLBOX_TARGET_TIME_BUFFER_H margin still applies —
+        but in _wallbox_deadline_rate's rate (finish 2h early so the car
+        tops off), not as a hard stop that gives up on reserving while
+        usable sun is still on the roof.
         """
         wallbox_id = wallbox_dev["_id"]
         capacity_entity = wallbox_dev.get(CONF_WALLBOX_CAPACITY_ENTITY)
@@ -1204,12 +1221,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._wallbox_target_rate_kw[wallbox_id] = 0.0
             return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
-        # Outside today's solar window (already past sunset - buffer, or
-        # not yet at today's solar_start) there is no more solar coming
-        # until solar_start tomorrow — a real deficit doesn't change
-        # that. See _solar_generation_window_active for why this can't just
-        # be left to _wallbox_deadline_rate's own hours-remaining math.
-        if not self._solar_generation_window_active(now):
+        # Outside today's solar window (past actual sunset, or not yet at
+        # today's solar_start) there is no more solar coming until
+        # solar_start tomorrow — a real deficit doesn't change that. See
+        # _solar_generation_window_active for why this can't just be left
+        # to _wallbox_deadline_rate's own hours-remaining math. buffer_h=0:
+        # keep reserving right up to sunset; the 2h margin lives in the
+        # rate, not this gate.
+        if not self._solar_generation_window_active(now, buffer_h=0.0):
             self._wallbox_target_rate_kw[wallbox_id] = 0.0
             return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
