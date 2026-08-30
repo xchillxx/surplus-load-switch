@@ -88,6 +88,8 @@ from .const import (
     UPDATE_INTERVAL_SECONDS,
     WALLBOX_IDLE_THRESHOLD_KW,
     WALLBOX_FORECAST_MIN_KWH,
+    WALLBOX_MIN_PV_FOR_RESERVATION_KW,
+    WALLBOX_MIN_PV_HYSTERESIS_KW,
     WALLBOX_OVERDRAW_MARGIN_KW,
     WALLBOX_RELIEF_CYCLES,
     WALLBOX_STARVED_RESERVED_RATIO,
@@ -430,6 +432,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # CoordinatorData.wallbox_target_kw for why this exists alongside
         # the capped _wallbox_last_good_reserved_kw above.
         self._wallbox_target_rate_kw: dict[str, float] = {}
+        # Per-wallbox latch for the gross-PV floor below which the
+        # reservation does nothing (see WALLBOX_MIN_PV_FOR_RESERVATION_KW
+        # and _wallbox_reserved_kw). Holds the hysteresis state so a PV
+        # reading sitting on the threshold can't flip the reservation
+        # every cycle. Starts closed (below floor) — a genuine morning
+        # ramp opens it within a cycle or two.
+        self._wallbox_pv_gate_open: dict[str, bool] = {}
         # Cached price-optimized-forcing slot selection per device (see
         # _price_optimized_force_active/price_source.py) — avoids
         # calling tibber.get_prices every 60-second cycle. Keyed by
@@ -1159,7 +1168,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         return now >= solar_start_today
 
     def _wallbox_reserved_kw(
-        self, wallbox_dev: dict, now: datetime, available_surplus: float
+        self,
+        wallbox_dev: dict,
+        now: datetime,
+        available_surplus: float,
+        solar_kw: float,
     ) -> float:
         """How much of the current surplus (kW) to set aside for this
         wallbox before the device cascade gets to compete for the rest.
@@ -1199,6 +1212,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         but in _wallbox_deadline_rate's rate (finish 2h early so the car
         tops off), not as a hard stop that gives up on reserving while
         usable sun is still on the roof.
+
+        And one gate *within* the window: gross PV below
+        WALLBOX_MIN_PV_FOR_RESERVATION_KW (hysteresis-latched) returns 0 —
+        at that little production the charger can't sustain a charge
+        regardless of the house-load math, so holding managed devices off
+        to protect that surplus just wastes their runtime.
         """
         wallbox_id = wallbox_dev["_id"]
         capacity_entity = wallbox_dev.get(CONF_WALLBOX_CAPACITY_ENTITY)
@@ -1229,6 +1248,23 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # keep reserving right up to sunset; the 2h margin lives in the
         # rate, not this gate.
         if not self._solar_generation_window_active(now, buffer_h=0.0):
+            self._wallbox_target_rate_kw[wallbox_id] = 0.0
+            return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
+
+        # Below WALLBOX_MIN_PV_FOR_RESERVATION_KW of gross production the
+        # car's charger can't sustain a charge no matter how the house-load
+        # math works out, so reserving surplus for it only keeps managed
+        # devices off for a car that isn't charging. Hysteresis via a latch
+        # (needs +WALLBOX_MIN_PV_HYSTERESIS_KW to re-arm) so a PV reading
+        # sitting on the threshold doesn't flip the reservation, and every
+        # lower-priority device's on/off state with it, every cycle.
+        gate_open = self._wallbox_pv_gate_open.get(wallbox_id, False)
+        threshold = WALLBOX_MIN_PV_FOR_RESERVATION_KW + (
+            0.0 if gate_open else WALLBOX_MIN_PV_HYSTERESIS_KW
+        )
+        gate_open = solar_kw >= threshold
+        self._wallbox_pv_gate_open[wallbox_id] = gate_open
+        if not gate_open:
             self._wallbox_target_rate_kw[wallbox_id] = 0.0
             return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
@@ -2241,7 +2277,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             smoothed_available_surplus - data.battery_smoothed_charge_kw, 0.0
         )
         wallbox_reserved_kw = sum(
-            self._wallbox_reserved_kw(wb, now, smoothed_available_surplus_for_wallbox)
+            self._wallbox_reserved_kw(
+                wb, now, smoothed_available_surplus_for_wallbox, data.solar_kw
+            )
             for wb in wallbox_devices
             if wb.get(CONF_WALLBOX_CAPACITY_ENTITY)
         )

@@ -179,6 +179,19 @@ WALLBOX_TARGET_MIN_HOURS = 0.25
 # missing/forecast fraction up to an absurd multiple instead of just
 # correctly claiming ~100% of whatever's left.
 WALLBOX_FORECAST_MIN_KWH = 0.5
+# The dynamic wallbox reservation stays at 0 while *gross* PV production
+# is below this. At that little generation the car's charger can't hold a
+# charge at all (a single-phase EVSE needs ~1.4 kW, three-phase far
+# more), so reserving surplus for it only keeps managed devices switched
+# off for a car that isn't charging anyway. Checked against gross solar,
+# not surplus — it's a question of whether the array is producing enough
+# to matter, upstream of house load.
+WALLBOX_MIN_PV_FOR_RESERVATION_KW = 2.0
+# Re-arm only once PV has climbed this far back above the floor, so a
+# reading hovering right at WALLBOX_MIN_PV_FOR_RESERVATION_KW doesn't
+# toggle the reservation — and every lower-priority device's on/off
+# state with it — cycle to cycle.
+WALLBOX_MIN_PV_HYSTERESIS_KW = 0.3
 # How far a wallbox's real measured draw may exceed what was actually
 # reserved for it before that alone counts as "starved" (see
 # wallbox_starved in coordinator.py), independent of whether the
