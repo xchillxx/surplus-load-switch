@@ -169,10 +169,11 @@ class CoordinatorData:
     # cascade competes over, kept here purely for visibility into why
     # devices see less than the raw surplus_kw above.
     wallbox_reserved_kw: float = 0.0
-    # The raw, pre-cap reservation rate (see _wallbox_reservation_rate) —
-    # what the wallbox would need at a steady pace to reach its target by
-    # the deadline, regardless of whether that much surplus genuinely
-    # exists right now. wallbox_reserved_kw above is this same number
+    # The raw, pre-cap target rate (from _wallbox_deadline_rate, set in
+    # _wallbox_reserved_kw) — what the wallbox would need at a steady pace
+    # to reach its target by the deadline, regardless of whether that much
+    # surplus genuinely exists right now, and regardless of which path
+    # _wallbox_reservation_rate took for the actual reservation amount. wallbox_reserved_kw above is this same number
     # after the surplus/max-charge caps are applied — what a self-limiting
     # (not starved) wallbox gets protected for; a low wallbox_reserved_kw
     # next to a much higher wallbox_target_kw means the deficit math is
@@ -1317,17 +1318,31 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             calibrator = self._wallbox_charge_calibrators.get(wallbox_dev.get("_id"))
             max_charge_kw = calibrator.max_charge_kw if calibrator else None
 
-        # The raw rate, capped only at the wallbox's own physical ceiling
-        # — not at available_surplus — before that surplus cap is applied
-        # below. See CoordinatorData.wallbox_target_kw: verifies the
-        # underlying kWh/deadline math independent of whatever surplus
-        # happens to physically exist this cycle, but a target the
-        # charger could never actually deliver regardless of supply
-        # isn't a meaningful "target" either — capping it here keeps the
-        # diagnostic (and its use in wallbox_starved/base_load) reading a
-        # number the car could genuinely use.
+        # wallbox_target_kw is the surplus-INDEPENDENT steady rate the car
+        # needs to reach its target by the deadline (missing kWh / hours
+        # left), capped only at the charger's own ceiling — never the
+        # reservation itself. wallbox_starved (and the base_load fold it
+        # drives) compares the actual reservation against this to decide
+        # whether the cascade may run at all, so a target that collapses
+        # together with available surplus makes that check a no-op exactly
+        # when surplus is scarce and the car most needs protecting.
+        #
+        # _wallbox_reservation_rate's forecast-share branch deliberately
+        # returns only a fraction of *this instant's* surplus — right as a
+        # reservation (don't hold back more than the day's pace needs),
+        # wrong as a target. Confirmed live 2026-08-31: car 26 % vs 80 %,
+        # ~40 kWh missing with a full day of forecast still ahead, yet
+        # share_needed 0.8 x a momentarily cloud-suppressed ~0.2 kW
+        # surplus pinned wallbox_target_kw at 0.17 kW, wallbox_starved
+        # never fired, and every managed device ran off the battery. So
+        # the target is always the deadline rate, whatever path the
+        # reservation amount itself took. None (missing sun.sun) falls
+        # back to the reservation, same as before.
+        target_rate_kw = self._wallbox_deadline_rate(missing_kwh, now)
+        if target_rate_kw is None:
+            target_rate_kw = reserved_kw
         self._wallbox_target_rate_kw[wallbox_id] = (
-            min(reserved_kw, max_charge_kw) if max_charge_kw else reserved_kw
+            min(target_rate_kw, max_charge_kw) if max_charge_kw else target_rate_kw
         )
 
         if max_charge_kw:
