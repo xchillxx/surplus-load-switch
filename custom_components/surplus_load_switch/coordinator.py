@@ -152,6 +152,17 @@ class DeviceDiagnostics:
     enabled: bool = True
     priority: float = 99.0
     device_min_soc: float | None = None
+    # Price-optimized minimum-runtime forcing (see
+    # _price_optimized_force_active). price_optimized_force is True only
+    # when the mode is enabled *and* applicable (device has a real
+    # window to schedule slots against). forced_price_slots is the local
+    # "HH:MM" start of every cheapest slot currently selected to cover
+    # the still-missing hours; next_forced_slot is the first of those at
+    # or after now (None once the target is met or no price data). Both
+    # stay None/empty for devices not using the mode.
+    price_optimized_force: bool = False
+    forced_price_slots: list[str] | None = None
+    next_forced_slot: str | None = None
 
 
 @dataclass
@@ -2860,6 +2871,29 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 dev, now_dt, runtime_hours_today, predicted_power
             )
             diag.force_runtime = force_runtime
+
+            # Surface the price-optimized slot plan (if any) for the
+            # dashboard — purely diagnostic, never feeds a decision.
+            if (
+                dev.get(CONF_DEVICE_PRICE_OPTIMIZED_FORCE, False)
+                and self._own_window_end(dev, now_dt) is not None
+            ):
+                diag.price_optimized_force = True
+                target_met = (
+                    min_daily_runtime_h is not None
+                    and runtime_hours_today >= min_daily_runtime_h
+                )
+                cached = self._price_slot_cache.get(device_id)
+                chosen = sorted(cached["chosen"]) if cached and not target_met else []
+                diag.forced_price_slots = [
+                    dt_util.as_local(slot_start).strftime("%H:%M")
+                    for slot_start in chosen
+                ]
+                slot_len = timedelta(hours=SLOT_HOURS)
+                upcoming = [s for s in chosen if s + slot_len > now_dt]
+                diag.next_forced_slot = (
+                    dt_util.as_local(upcoming[0]).strftime("%H:%M") if upcoming else None
+                )
 
             # Some devices physically can't do anything unless another
             # device is already running — e.g. a heat pump with a flow
