@@ -941,40 +941,60 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self, dev: dict, now: datetime, runtime_hours_today: float, predicted_power_kw: float
     ) -> bool:
         """Async-aware wrapper around _force_runtime_active — the one
-        actually called from _evaluate_devices. Devices without
-        CONF_DEVICE_PRICE_OPTIMIZED_FORCE enabled (the default) get the
-        exact same result _force_runtime_active always gave, just
-        awaited for interface consistency with the ones that do; only a
-        price-optimized device with forcing genuinely needed goes on to
-        check whether *now* happens to be one of the cheapest remaining
-        slots before its deadline (see _price_optimized_force_active).
+        actually called from _evaluate_devices.
+
+        Devices without CONF_DEVICE_PRICE_OPTIMIZED_FORCE enabled (the
+        default) get the exact same result _force_runtime_active always
+        gave, just awaited for interface consistency with the ones that
+        do.
+
+        A price-optimized device *with a real window* skips the
+        deadline/forecast "is forcing needed yet?" gate entirely and
+        hands the whole question to _price_optimized_force_active over
+        the full [now, window-close] span: as long as any runtime is
+        still missing, force iff *now* is one of the cheapest slots in
+        that span. This is what lets the day's genuinely cheapest hour
+        get used even when it falls well before the deadline-buffer
+        would otherwise have tripped forcing — previously the price
+        selection only ever ran across the last `missing_h + buffer`
+        hours of the window, so it could only pick the least-bad slot
+        of the evening peak, never an early-afternoon low. The
+        deadline guarantee is unchanged: once the span shrinks below
+        the missing hours, async_cheapest_slot_starts returns *every*
+        remaining slot (continuous forcing), and a Tibber fetch
+        failure fails open to unconditional forcing.
         """
-        needed = self._force_runtime_active(dev, now, runtime_hours_today, predicted_power_kw)
-        if not needed or not dev.get(CONF_DEVICE_PRICE_OPTIMIZED_FORCE, False):
-            return needed
+        price_optimized = dev.get(CONF_DEVICE_PRICE_OPTIMIZED_FORCE, False)
 
-        own_window_end = self._own_window_end(dev, now)
-        if own_window_end is None:
+        if price_optimized:
+            min_daily_runtime_h = dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
+            if min_daily_runtime_h is None or runtime_hours_today >= min_daily_runtime_h:
+                return False
+            own_window_end = self._own_window_end(dev, now)
+            if own_window_end is not None:
+                missing_h = min_daily_runtime_h - runtime_hours_today
+                return await self._price_optimized_force_active(
+                    dev, now, missing_h, own_window_end
+                )
             # No real deadline to schedule slots against for a windowless
-            # device (see _force_runtime_active's own solar-noon
-            # fallback, which has no explicit deadline concept at all) —
-            # price optimization needs a hard "must be done by" time to
-            # work backward from. Falls back to the existing unconditional
-            # force behavior rather than guessing a deadline.
-            return True
+            # device — price optimization needs a hard "must be done by"
+            # time to work backward from. Fall through to the shared
+            # deadline/forecast/solar-noon logic below.
 
-        min_daily_runtime_h = dev.get(CONF_DEVICE_MIN_DAILY_RUNTIME_H)
-        missing_h = max(min_daily_runtime_h - runtime_hours_today, 0.0)
-        return await self._price_optimized_force_active(dev, now, missing_h, own_window_end)
+        return self._force_runtime_active(dev, now, runtime_hours_today, predicted_power_kw)
 
     async def _price_optimized_force_active(
         self, dev: dict, now: datetime, missing_h: float, deadline: datetime
     ) -> bool:
         """Whether `now` falls inside one of the cheapest Tibber price
         slots needed to cover `missing_h` of remaining forced runtime
-        before `deadline`. Only reached once _force_runtime_active has
-        already determined forcing is genuinely needed — this only
-        decides *when* within the remaining window, never *whether*.
+        before `deadline`. For a windowed price-optimized device this is
+        the sole force decision (called from _force_runtime_active_async
+        whenever any runtime is still missing, spanning the full
+        now..window-close range); the cheapest-slot selection itself is
+        what schedules *when*, and the window-too-short degeneration in
+        async_cheapest_slot_starts is what still guarantees the target
+        is hit before `deadline`.
 
         Caches the fetched price data/slot selection per device (see
         self._price_slot_cache in __init__) rather than calling
