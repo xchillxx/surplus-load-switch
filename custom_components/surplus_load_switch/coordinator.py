@@ -305,6 +305,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._charge_samples: deque[float] = deque(maxlen=DISCHARGE_SMOOTHING_SAMPLES)
         self._last_appended_charge_kw: float | None = None
         self._last_trusted_charge_kw: float | None = None
+        # "charge" / "discharge" / None — the last non-idle battery
+        # direction seen. When it flips, the opposite side's median window
+        # (above / _discharge_samples) is now a stale run of zeros and gets
+        # cleared; see the flip handling in _async_update_data.
+        self._last_batt_direction: str | None = None
         # Smooths base_load specifically for the overnight base_discharge_kw
         # projection — raw, unsmoothed cycle-to-cycle noise in the live load
         # reading gets multiplied by however many hours remain until solar
@@ -1883,6 +1888,36 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         min_soc = self._config.get(CONF_MIN_SOC, 20.0)
 
         discharge = max(-batt, 0.0)
+        # The battery only ever charges *or* discharges at a given moment,
+        # but _charge_samples and _discharge_samples each keep their own
+        # ~100-min median window fed from max(batt, 0) / max(-batt, 0). So
+        # every reading taken while the battery discharges feeds a literal
+        # 0.0 into _charge_samples (and vice versa). Left alone, right
+        # after the battery flips direction the median that now matters
+        # stays pinned to that trailing run of opposite-side zeros for up
+        # to ~50 min, until real same-direction readings finally outnumber
+        # them. Confirmed live 2026-09-04: battery discharged all night,
+        # the PV ramp started charging it at ~08:30, yet smoothed_charge
+        # (and _battery_full_projection with it) still read ~0 at 09:00
+        # with 4 kW on the roof — needlessly shedding the miner + pool for
+        # ~40 min past solar_start. A direction flip is a predictable
+        # regime change, not the external noise the median exists to
+        # filter (same reasoning as the managed_on_now composition-change
+        # reset below), so clear the now-stale side — including its
+        # _last_trusted bridge, which after a stretch of the opposite
+        # direction is structurally ~0 and useless to bridge to.
+        if batt > 0.05 and self._last_batt_direction == "discharge":
+            self._charge_samples.clear()
+            self._last_appended_charge_kw = None
+            self._last_trusted_charge_kw = None
+        elif batt < -0.05 and self._last_batt_direction == "charge":
+            self._discharge_samples.clear()
+            self._last_appended_discharge_kw = None
+            self._last_trusted_discharge_kw = None
+        if batt > 0.05:
+            self._last_batt_direction = "charge"
+        elif batt < -0.05:
+            self._last_batt_direction = "discharge"
         # h_battery is a division by discharge rate, which would otherwise
         # project a brief spike (e.g. a stove running for 10-15 min) forward
         # as if it continued all night. The median over a 20-*reading*
