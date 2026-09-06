@@ -25,6 +25,7 @@ from .const import (
     BATTERY_FULL_PROJECTION_MIN_CHARGE_KW,
     BATTERY_FULL_RELIEF_CYCLES,
     BATTERY_FULL_TARGET_TIME_BUFFER_H,
+    BATTERY_ON_TRACK_COMFORT_FRACTION,
     BATT_OK_BUFFER_H,
     CALIBRATION_INTERVAL_HOURS,
     CLIMATE_STABILITY_MULTIPLIER,
@@ -2425,28 +2426,57 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # already subtracts battery_smoothed_charge_kw, which squeezes
         # wallbox_reserved_kw toward 0 and makes the reserved-vs-target
         # ratio read "starved" even though nothing the cascade could shed
-        # is the cause. Once the battery has actually reached its own
-        # daily target (battery_full_missing_kwh <= 0), that squeeze is
-        # purely the last top-off toward 100%, which the inverter will
-        # export-clip shortly anyway; treating the wallbox as starved
-        # then just folds its whole target into base_load below and
-        # force-empties battery_eligible_ids for a shortfall that
-        # resolves itself the moment the battery tapers. The direct
+        # is the cause. As long as the battery is still going to comfortably
+        # reach its own daily target on its current charge rate, that
+        # squeeze resolves itself the moment the battery tapers, and
+        # treating the wallbox as starved meanwhile just folds its whole
+        # target into base_load below and force-empties battery_eligible_ids
+        # for a shortfall that isn't real. Confirmed live 2026-09-06: a
+        # 0.15 kW miner shed 07:26-09:06 through the entire morning PV ramp
+        # (solar 3.7 -> 8.6 kW, SOC 44% -> 100%, akku reservation 0
+        # throughout) purely because the battery's own charge kept
+        # wallbox_reserved_kw pinned near 0 and base_load pinned at
+        # wallbox_target + real base.
+        #
+        # Two ways in:
+        #  - battery_full_missing_kwh <= 0: already at the daily target, the
+        #    charge is just the last top-off toward 100% (export-clipped
+        #    shortly anyway).
+        #  - projected to finish with comfortable room to spare
+        #    (hours_needed <= BATTERY_ON_TRACK_COMFORT_FRACTION * hours
+        #    until the deadline). The fraction, not a bare "on track <=",
+        #    keeps a marginal day — where the raw on_track verdict itself
+        #    flips cycle to cycle around the boundary — on the strict
+        #    already-at-target path only, so the base_load branch and
+        #    battery_eligible_ids don't flap with it.
+        #
+        # Everything else stays intact: the direct
         # `available_surplus -= battery_smoothed_charge_kw` further down
-        # still accounts for the charge in full, `_battery_would_still_
-        # reach_full` is a no-op once the target is met so nothing on the
-        # battery-fill side is left unprotected, and wallbox_starved
-        # re-engages with no debounce the moment the battery stops
-        # charging. Condition 2 (real overdraw) is deliberately left
-        # outside this exception — a car actually pulling more than its
-        # reservation is a genuine signal whatever the battery is doing.
-        battery_absorbing_at_target = (
-            data.battery_full_projection_applies
-            and data.battery_full_missing_kwh <= 0.0
-            and data.battery_smoothed_charge_kw > BATTERY_FULL_PROJECTION_MIN_CHARGE_KW
+        # still accounts for the charge in full; `_battery_would_still_
+        # reach_full` (surplus path) and _select_battery_optimal_set's own
+        # feasibility projection (battery path) still independently shed
+        # anything whose draw would actually tip the battery off track;
+        # battery_behind_schedule still fires — and re-empties
+        # battery_eligible_ids — the moment the battery does fall behind;
+        # and wallbox_starved re-engages with no debounce the moment the
+        # battery stops charging. Condition 2 (real overdraw) is
+        # deliberately left outside this exception — a car actually pulling
+        # more than its reservation is a genuine signal whatever the
+        # battery is doing.
+        battery_absorbing_on_track = data.battery_full_projection_applies and (
+            data.battery_smoothed_charge_kw > BATTERY_FULL_PROJECTION_MIN_CHARGE_KW
+        ) and (
+            data.battery_full_missing_kwh <= 0.0
+            or (
+                data.battery_full_hours_needed is not None
+                and data.battery_full_hours_until_deadline is not None
+                and data.battery_full_hours_needed
+                <= BATTERY_ON_TRACK_COMFORT_FRACTION
+                * data.battery_full_hours_until_deadline
+            )
         )
         wallbox_starved = (
-            not battery_absorbing_at_target
+            not battery_absorbing_on_track
             and data.wallbox_target_kw > 0.0
             and wallbox_reserved_kw < WALLBOX_STARVED_RESERVED_RATIO * data.wallbox_target_kw
         ) or (wallbox_power_kw > wallbox_reserved_kw + WALLBOX_OVERDRAW_MARGIN_KW)

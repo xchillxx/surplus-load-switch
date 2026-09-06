@@ -267,6 +267,19 @@ BATTERY_FULL_TARGET_TIME_BUFFER_H = 2.0
 # project forward.
 BATTERY_FULL_PROJECTION_MIN_CHARGE_KW = 1.5
 
+# How far inside its own deadline the house battery's charge must be
+# projected to finish before the battery's ongoing charge is treated as
+# "not a real shortfall for the wallbox" (see battery_absorbing_on_track
+# in coordinator.py). hours_needed <= this * hours_until_deadline. A bare
+# "on track" (<= 1.0) would let the wallbox-starved base_load branch and
+# battery_eligible_ids flap with the raw on_track verdict on a marginal
+# day, where hours_needed sits right on the deadline and crosses it cycle
+# to cycle; 0.7 means the projection has to clear the deadline with a
+# comfortable third of the remaining window to spare before the exception
+# engages, so a genuinely tight day stays on the strict already-at-target
+# path. Deadline itself is already sunset - BATTERY_FULL_TARGET_TIME_BUFFER_H.
+BATTERY_ON_TRACK_COMFORT_FRACTION = 0.7
+
 # h_to_solar ("hours until solar_start") is the time until the *next*
 # calibrated morning threshold — once today's has already passed, that's
 # tomorrow's, roughly a full day away, even at high noon with a cloud
