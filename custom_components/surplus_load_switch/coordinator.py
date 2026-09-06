@@ -2416,8 +2416,38 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # car. "The battery can afford it" and "the wallbox doesn't need
         # it more" are different questions; this flag answers the
         # second one. See its use against battery_eligible_ids below.
+        #
+        # Exception to condition 1 only: while the house battery is still
+        # actively charging it has hardware priority ahead of both the
+        # wallbox and every managed device, so whatever it draws was
+        # never available to the wallbox regardless of the
+        # solar-minus-house math — smoothed_available_surplus_for_wallbox
+        # already subtracts battery_smoothed_charge_kw, which squeezes
+        # wallbox_reserved_kw toward 0 and makes the reserved-vs-target
+        # ratio read "starved" even though nothing the cascade could shed
+        # is the cause. Once the battery has actually reached its own
+        # daily target (battery_full_missing_kwh <= 0), that squeeze is
+        # purely the last top-off toward 100%, which the inverter will
+        # export-clip shortly anyway; treating the wallbox as starved
+        # then just folds its whole target into base_load below and
+        # force-empties battery_eligible_ids for a shortfall that
+        # resolves itself the moment the battery tapers. The direct
+        # `available_surplus -= battery_smoothed_charge_kw` further down
+        # still accounts for the charge in full, `_battery_would_still_
+        # reach_full` is a no-op once the target is met so nothing on the
+        # battery-fill side is left unprotected, and wallbox_starved
+        # re-engages with no debounce the moment the battery stops
+        # charging. Condition 2 (real overdraw) is deliberately left
+        # outside this exception — a car actually pulling more than its
+        # reservation is a genuine signal whatever the battery is doing.
+        battery_absorbing_at_target = (
+            data.battery_full_projection_applies
+            and data.battery_full_missing_kwh <= 0.0
+            and data.battery_smoothed_charge_kw > BATTERY_FULL_PROJECTION_MIN_CHARGE_KW
+        )
         wallbox_starved = (
-            data.wallbox_target_kw > 0.0
+            not battery_absorbing_at_target
+            and data.wallbox_target_kw > 0.0
             and wallbox_reserved_kw < WALLBOX_STARVED_RESERVED_RATIO * data.wallbox_target_kw
         ) or (wallbox_power_kw > wallbox_reserved_kw + WALLBOX_OVERDRAW_MARGIN_KW)
         # Debounced: takes effect on the very first starved cycle (never
