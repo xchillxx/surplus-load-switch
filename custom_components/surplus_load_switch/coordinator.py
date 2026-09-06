@@ -22,6 +22,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BATTERY_ELIGIBLE_RELIEF_CYCLES,
     BATTERY_FULL_PROJECTION_MIN_CHARGE_KW,
     BATTERY_FULL_RELIEF_CYCLES,
     BATTERY_FULL_TARGET_TIME_BUFFER_H,
@@ -29,6 +30,7 @@ from .const import (
     BATT_OK_BUFFER_H,
     CALIBRATION_INTERVAL_HOURS,
     CLIMATE_STABILITY_MULTIPLIER,
+    COMPOSITION_RESET_MIN_DELTA_KW,
     CONF_BATT_SENSOR,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_DEVICES,
@@ -340,6 +342,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # horizon shrinking as time passes, with zero change in any real
         # sensor reading).
         self._last_battery_eligible_ids: frozenset[str] = frozenset()
+        # The battery_would_last set as it stood last cycle *after* the
+        # asymmetric drop-side debounce (BATTERY_ELIGIBLE_RELIEF_CYCLES) —
+        # the reference for deciding whether a device the optimal set just
+        # dropped was being held before, and per-device counters of how
+        # many consecutive cycles it has been dropped. See _evaluate_devices.
+        self._debounced_battery_eligible_ids: frozenset[str] = frozenset()
+        self._battery_eligible_off_counter: dict[str, int] = {}
         # Which managed devices were on as of the last cycle — used to
         # detect a composition change and reset the discharge smoothing
         # window when one happens (see _evaluate_devices).
@@ -2114,12 +2123,32 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         managed_on_now = frozenset(dev_id for dev_id, on in device_is_on.items() if on)
         now = dt_util.utcnow()
         if managed_on_now != self._last_managed_on:
-            self._discharge_samples.clear()
-            self._charge_samples.clear()
-            self._base_load_samples.clear()
-            self._last_appended_load_kw = None
-            self._last_appended_discharge_kw = None
-            self._last_appended_charge_kw = None
+            # Only a big enough swing is a real composition change for the
+            # smoothing windows. A pool pump or boiler (1-2 kW) toggling
+            # genuinely moves base_discharge_kw and the overnight
+            # projection must see it at once; a ~0.15 kW miner does not,
+            # and clearing a 20-sample median to react to it just destroys
+            # the smoothing that keeps that device from flapping in the
+            # first place (confirmed over 7 days: the miner cycled 6+
+            # times some nights, each toggle re-clearing these windows and
+            # feeding the next). The shed-confirmation gate below still
+            # re-arms on any toggle regardless of size — that one is
+            # "wait for the load sensor to catch up", not a magnitude
+            # judgement, and resolves on its own within a reading or two
+            # when the swing was small.
+            toggled = managed_on_now ^ self._last_managed_on
+            toggled_power_kw = sum(
+                self._predicted_power_kw(devices_by_id[d])[0]
+                for d in toggled
+                if d in devices_by_id
+            )
+            if toggled_power_kw >= COMPOSITION_RESET_MIN_DELTA_KW:
+                self._discharge_samples.clear()
+                self._charge_samples.clear()
+                self._base_load_samples.clear()
+                self._last_appended_load_kw = None
+                self._last_appended_discharge_kw = None
+                self._last_appended_charge_kw = None
             # A dedicated freeze for the "wait for confirmation between
             # sheds" gate below (see its use against off_counter further
             # down) — deliberately NOT the same _stale_managed_power_kw_load
@@ -2876,6 +2905,34 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             max_priority_number,
         )
 
+        # Asymmetric drop-side debounce: a device the optimal set granted
+        # last cycle keeps its slot through up to BATTERY_ELIGIBLE_RELIEF_
+        # CYCLES consecutive cycles of the set dropping it. base_discharge_kw
+        # noise is multiplied across the multi-hour overnight horizon, so a
+        # 1-2 cycle excursion can flip a knife-edge fit and switch a running
+        # device off then straight back on even though the real overnight
+        # rate never moved (confirmed over 7 days: the miner's own toggles
+        # were the dominant source of night switching). Re-inclusion is not
+        # debounced — a device the set newly grants is granted at once,
+        # still subject to the comfort buffer below. Only applied while the
+        # battery genuinely has margin (batt_ok): a real low-battery shed
+        # must stay immediate, and Sparmodus should not be softened.
+        if data.batt_ok:
+            held = set(battery_eligible_ids)
+            for cand_id, *_ in optional_candidates:
+                if cand_id in battery_eligible_ids:
+                    self._battery_eligible_off_counter.pop(cand_id, None)
+                elif cand_id in self._debounced_battery_eligible_ids:
+                    dropped_cycles = self._battery_eligible_off_counter.get(cand_id, 0) + 1
+                    if dropped_cycles < BATTERY_ELIGIBLE_RELIEF_CYCLES:
+                        self._battery_eligible_off_counter[cand_id] = dropped_cycles
+                        held.add(cand_id)
+                    else:
+                        self._battery_eligible_off_counter.pop(cand_id, None)
+            battery_eligible_ids = frozenset(held)
+        else:
+            self._battery_eligible_off_counter.clear()
+
         if wallbox_starved_effective or battery_behind_schedule_effective:
             # Every device below would run on battery, not on live
             # surplus, while either the wallbox is still short of what it
@@ -2926,6 +2983,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 battery_eligible_ids = battery_eligible_ids & previously_eligible
 
         self._last_battery_eligible_ids = battery_eligible_ids
+        # Reference for next cycle's drop-side debounce — the final set,
+        # after the wallbox_starved / battery_behind wipe and the comfort
+        # narrowing, so a device removed by either of those is not then
+        # held on by the debounce (its counter simply never starts).
+        self._debounced_battery_eligible_ids = battery_eligible_ids
 
         for priority_rank, dev in enumerate(candidate_devices):
             device_id = dev["_id"]

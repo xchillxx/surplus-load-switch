@@ -427,6 +427,32 @@ MARGIN_FOR_MAX_PATIENCE_H = 4.0
 # sustained change within roughly half the window's length.
 DISCHARGE_SMOOTHING_SAMPLES = _minutes_to_cycles(20)  # 20 min rolling median
 
+# A managed device toggling clears the discharge / charge / base-load
+# smoothing windows (see managed_on_now in _evaluate_devices) so the
+# overnight projection sees the freed margin at once instead of ~20 min
+# later. That is right for a pool pump or boiler (1-2 kW), but a ~0.15 kW
+# miner toggling does not move base_discharge_kw enough to matter — and
+# clearing a 20-sample median to react to it destroys the very smoothing
+# that would have kept that device from flapping. Confirmed over 7 days:
+# ~18 short night on/off cycles, the miner re-clearing the windows on
+# every toggle and feeding the next one. Only a toggle whose devices sum
+# to at least this much predicted power counts as a real composition
+# change for the smoothing windows.
+COMPOSITION_RESET_MIN_DELTA_KW = 0.4
+
+# Asymmetric debounce for per-device battery_would_last, same shape as
+# WALLBOX_RELIEF_CYCLES: once _select_battery_optimal_set has granted a
+# device an overnight-battery slot, it keeps that slot through up to this
+# many consecutive cycles of the set dropping it, so a brief
+# base_discharge_kw excursion — which is multiplied across the multi-hour
+# horizon and can flip a knife-edge fit even with the real overnight rate
+# unchanged — doesn't switch a running device off and back on.
+# Re-inclusion stays immediate. Slightly longer than STABLE_ON_CYCLES
+# because this noise (a rate integrated over hours) has more inertia than
+# a single sensor reading, and delaying a genuine shed of a sub-kW load
+# by a few extra minutes costs almost nothing.
+BATTERY_ELIGIBLE_RELIEF_CYCLES = _minutes_to_cycles(15)
+
 # How many consecutive cycles wallbox_starved must read False before a
 # device is actually allowed back into battery_eligible_ids — asymmetric
 # on purpose: starving takes effect immediately (protecting the wallbox
