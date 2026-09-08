@@ -210,6 +210,12 @@ class CoordinatorData:
     # for the house battery itself instead of a wallbox — see
     # battery_full_reservation_kw in _evaluate_devices.
     battery_full_reserved_kw: float = 0.0
+    # How much of the battery's current charge rate was actually held
+    # back from the cascade this cycle (see the battery_claim_kw block in
+    # _evaluate_devices): the full smoothed rate normally, but only the
+    # deadline pace while the battery is comfortably ahead of it, and 0
+    # once the daily target is already met.
+    battery_reserved_charge_kw: float = 0.0
     # The smoothed charge rate battery_full_projection actually used
     # this cycle (see _charge_samples) — kept here so
     # _battery_would_still_reach_full in _evaluate_devices can reuse it
@@ -2615,23 +2621,50 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             base_load = base_load_excl_wallbox
             available_surplus = available_surplus_excl_wallbox - wallbox_reserved_kw
 
-        # The house battery's own active charge rate takes real, physical
-        # priority over every managed device below — the inverter always
-        # feeds the battery before anything else gets access to surplus,
-        # regardless of whether the battery happens to be on track for
-        # today's target or not. Without this, a battery comfortably on
-        # track but still genuinely charging at several kW was completely
-        # invisible to the cascade below: confirmed live at SOC 74%,
-        # battery drawing 5.637 kW, "Akku wird rechtzeitig voll" already
-        # true, yet the boiler was still granted ~0.5 kW of "surplus"
-        # that was actually just the battery's own hardware-priority
-        # draw. Deliberately unconditional and separate from
-        # battery_full_reservation_kw below, which only engages once the
-        # battery has fallen behind schedule — this instead reflects the
-        # battery's real physical claim at every moment, on track or
-        # not. Mirrors the same adjustment already applied to the
-        # wallbox's own reservation above (smoothed_available_surplus_for_wallbox).
-        available_surplus -= data.battery_smoothed_charge_kw
+        # The inverter feeds the house battery from surplus ahead of every
+        # managed device — but on this installation it throttles the
+        # battery to serve a load rather than importing from grid
+        # (confirmed live: grid flow stays ~0 when a managed device
+        # switches on mid-charge, the charge rate simply drops). So the
+        # amount of the battery's current charge that is genuinely
+        # unavailable to the cascade is not the whole rate — it is only
+        # the *pace the battery still needs* to reach its own daily
+        # target (WEAK_DAY_BATTERY_FULL_SOC) by the deadline. While the
+        # battery is comfortably ahead of that pace, the difference is
+        # real surplus a managed device may use: the battery then fills a
+        # bit later, but still in time. This is the explicit design
+        # intent — a pool pump running on a sunny morning at the cost of
+        # a slower cellar-battery charge, never at the cost of the
+        # battery not getting full.
+        #
+        # "Comfortably" is the same BATTERY_ON_TRACK_COMFORT_FRACTION
+        # margin the wallbox exception uses (v2.28): only once
+        # hours_needed clears the deadline with a third of the window to
+        # spare. On a marginal day (hours_needed near the deadline) the
+        # full charge rate is reserved exactly as before, and
+        # battery_behind_schedule below still reactively claims back
+        # whatever surplus is left the moment the battery does fall
+        # behind. Once the target is already met (missing_kwh <= 0) the
+        # remaining charge is pure 100%-top-off and is handed over in
+        # full.
+        battery_claim_kw = data.battery_smoothed_charge_kw
+        if data.battery_full_projection_applies:
+            if data.battery_full_missing_kwh <= 0.0:
+                battery_claim_kw = 0.0
+            elif (
+                data.battery_full_hours_until_deadline
+                and data.battery_full_hours_needed is not None
+                and data.battery_full_hours_needed
+                <= BATTERY_ON_TRACK_COMFORT_FRACTION
+                * data.battery_full_hours_until_deadline
+            ):
+                needed_pace_kw = data.battery_full_missing_kwh / (
+                    BATTERY_ON_TRACK_COMFORT_FRACTION
+                    * data.battery_full_hours_until_deadline
+                )
+                battery_claim_kw = min(data.battery_smoothed_charge_kw, needed_pace_kw)
+        data.battery_reserved_charge_kw = battery_claim_kw
+        available_surplus -= battery_claim_kw
 
         # battery_full_on_track (see _battery_full_projection) is a
         # second, independent signal on top of wallbox_starved above —

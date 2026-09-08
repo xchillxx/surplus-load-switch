@@ -133,6 +133,7 @@ class PVSurplusSensor(_PVSensorBase):
             "house_load_kw": round(d.load_kw, 3),
             "batt_ok": d.batt_ok,
             "wallbox_reserviert_kw": round(d.wallbox_reserved_kw, 3),
+            "akku_ladung_reserviert_kw": round(d.battery_reserved_charge_kw, 3),
         }
 
 
