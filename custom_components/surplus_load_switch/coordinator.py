@@ -29,6 +29,7 @@ from .const import (
     BATTERY_ON_TRACK_COMFORT_FRACTION,
     BATT_OK_BUFFER_H,
     CALIBRATION_INTERVAL_HOURS,
+    CHARGE_RATE_RAMP_LOOKBACK,
     CLIMATE_STABILITY_MULTIPLIER,
     COMPOSITION_RESET_MIN_DELTA_KW,
     CONF_BATT_SENSOR,
@@ -1976,6 +1977,24 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             smoothed_charge = self._last_trusted_charge_kw
         else:
             smoothed_charge = charge
+
+        # A plain median structurally lags a monotonic morning ramp to the
+        # middle of it: confirmed live 2026-09-08, battery physically
+        # pulling 4.6 kW twelve minutes into the ramp while the median was
+        # still ~1.6 kW — which then made "Überschuss" read +2.9 kW when
+        # the real spare-after-battery was ~0, and made
+        # _battery_would_still_reach_full underflow (subtracting a device's
+        # own draw from that stale-low rate) and wrongly block the device.
+        # The charge rate on a ramp only rises until it plateaus, so the
+        # median of just the most recent few readings is a safe floor to
+        # raise the estimate to: max() never lowers it below the plain
+        # median (a taper, where recent < median, is left exactly as
+        # before), it only lets it catch up faster on the way up.
+        if len(self._charge_samples) >= 2:
+            recent_charge = statistics.median(
+                list(self._charge_samples)[-CHARGE_RATE_RAMP_LOOKBACK:]
+            )
+            smoothed_charge = max(smoothed_charge, recent_charge)
 
         (
             battery_full_missing_kwh,

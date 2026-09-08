@@ -427,6 +427,15 @@ MARGIN_FOR_MAX_PATIENCE_H = 4.0
 # sustained change within roughly half the window's length.
 DISCHARGE_SMOOTHING_SAMPLES = _minutes_to_cycles(20)  # 20 min rolling median
 
+# How many of the most recent charge readings to median for the
+# ramp-catch-up floor under smoothed_charge (see _async_update_data): the
+# plain 20-reading median lags a monotonic morning ramp badly, and the
+# charge rate on a ramp only rises until it plateaus, so a short recent
+# window is a safe lower bound to raise the estimate to. Small enough to
+# track the ramp within a few minutes, large enough to shrug off a single
+# glitchy reading.
+CHARGE_RATE_RAMP_LOOKBACK = 5
+
 # A managed device toggling clears the discharge / charge / base-load
 # smoothing windows (see managed_on_now in _evaluate_devices) so the
 # overnight projection sees the freed margin at once instead of ~20 min
