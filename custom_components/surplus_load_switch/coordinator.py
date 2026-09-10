@@ -51,6 +51,7 @@ from .const import (
     CONF_DEVICE_STOPS_OVERNIGHT,
     CONF_DEVICE_WINDOW_END,
     CONF_DEVICE_WINDOW_START,
+    CONF_EXPORT_POWER_SENSOR,
     CONF_HAUSMODUS_ENTITY,
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
@@ -71,6 +72,10 @@ from .const import (
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
     DOMAIN,
+    EXPORT_GATE_MEDIAN_WINDOW,
+    EXPORT_GATE_MIN_KW,
+    EXPORT_GATE_RELEASE_KW,
+    EXPORT_GATE_SOC_OVERRIDE,
     LOAD_SENSOR_STALENESS_GRACE,
     MARGIN_FOR_MAX_PATIENCE_H,
     MAX_BATTERY_OPTIMIZATION_DEVICES,
@@ -259,6 +264,14 @@ class CoordinatorData:
     # (battery_behind_schedule) and proactive (_battery_would_still_reach_full)
     # checks — see BATTERY_FULL_PROJECTION_MIN_CHARGE_KW.
     battery_full_projection_applies: bool = False
+    # Grid export (feed-in) power this cycle, its smoothed value, and
+    # whether the battery-path export gate is currently open — see
+    # CONF_EXPORT_POWER_SENSOR. export_gate_open stays True whenever no
+    # export sensor is configured, so installs without one are unchanged.
+    export_power_kw: float = 0.0
+    export_smoothed_kw: float = 0.0
+    export_gate_open: bool = True
+    export_sensor_configured: bool = False
 
 
 class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
@@ -354,6 +367,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # many consecutive cycles it has been dropped. See _evaluate_devices.
         self._debounced_battery_eligible_ids: frozenset[str] = frozenset()
         self._battery_eligible_off_counter: dict[str, int] = {}
+        # Rolling window + hysteresis latch for the battery-path export
+        # gate (see CONF_EXPORT_POWER_SENSOR / EXPORT_GATE_MIN_KW). Starts
+        # closed: with no reading yet there's no proof of export, and the
+        # battery path staying shut for the first cycle or two after a
+        # restart is harmless and on the safe side.
+        self._export_samples: deque[float] = deque(maxlen=EXPORT_GATE_MEDIAN_WINDOW)
+        self._export_gate_open: bool = False
         # Which managed devices were on as of the last cycle — used to
         # detect a composition change and reset the discharge smoothing
         # window when one happens (see _evaluate_devices).
@@ -2006,6 +2026,33 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         batt_ok = h_battery > (effective_h_to_solar + BATT_OK_BUFFER_H) and soc > min_soc
 
+        # Battery-path export gate: a device may only run *purely on
+        # battery affordability* (not on modelled live surplus) while the
+        # meter shows the house is actually feeding the grid — otherwise
+        # the power it draws isn't spare at all, it just charges the
+        # battery slower (paid back as an evening grid import) or comes
+        # straight off the battery / the grid. Hysteresis-latched on the
+        # median of the last few readings so a value sitting on the
+        # threshold doesn't toggle the whole low-priority cascade with it.
+        # The SOC override covers a full battery, where any further PV is
+        # exported or clipped regardless of the momentary meter reading.
+        # No sensor configured → gate always open, battery path unchanged.
+        export_entity = self._config.get(CONF_EXPORT_POWER_SENSOR)
+        export_configured = bool(export_entity)
+        export_kw = self._get_power_kw(export_entity) if export_configured else 0.0
+        if export_configured:
+            self._export_samples.append(export_kw)
+            export_smoothed = statistics.median(self._export_samples)
+            if self._export_gate_open:
+                if export_smoothed < EXPORT_GATE_RELEASE_KW:
+                    self._export_gate_open = False
+            elif export_smoothed >= EXPORT_GATE_MIN_KW:
+                self._export_gate_open = True
+            export_gate_open = self._export_gate_open or soc >= EXPORT_GATE_SOC_OVERRIDE
+        else:
+            export_smoothed = 0.0
+            export_gate_open = True
+
         data = CoordinatorData(
             solar_kw=solar,
             load_kw=load,
@@ -2035,6 +2082,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             battery_full_on_track=battery_full_on_track,
             battery_smoothed_charge_kw=smoothed_charge,
             battery_full_projection_applies=battery_full_projection_applies,
+            export_power_kw=export_kw,
+            export_smoothed_kw=export_smoothed,
+            export_gate_open=export_gate_open,
+            export_sensor_configured=export_configured,
         )
 
         await self._evaluate_devices(data)
@@ -2874,17 +2925,25 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         else:
             self._battery_eligible_off_counter.clear()
 
-        if wallbox_starved_effective or battery_behind_schedule_effective:
+        if (
+            wallbox_starved_effective
+            or battery_behind_schedule_effective
+            or not data.export_gate_open
+        ):
             # Every device below would run on battery, not on live
             # surplus, while either the wallbox is still short of what it
             # needs right now, or the house battery itself is behind
             # where it needs to be to reach WEAK_DAY_BATTERY_FULL_SOC in
             # time (or either was true within the last relief window —
             # see wallbox_starved_effective/battery_behind_schedule_
-            # effective above). force_runtime devices are unaffected:
-            # they never go through battery_eligible_ids, they're already
-            # in mandatory_segments and win via their own should_on
-            # branch further down.
+            # effective above), or — when an export sensor is configured —
+            # the meter isn't showing a real feed-in right now, so the
+            # power these devices would draw wouldn't otherwise leave the
+            # house at all (it would just charge the battery slower, or
+            # come off the battery / the grid). force_runtime devices are
+            # unaffected: they never go through battery_eligible_ids,
+            # they're already in mandatory_segments and win via their own
+            # should_on branch further down.
             battery_eligible_ids = frozenset()
 
         # A device *re-joining* the set (wasn't eligible last cycle) must
@@ -3323,6 +3382,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                         f"{predicted_power:.2f} kW benötigt) und Akku-Reserve unterschritten "
                         f"(SOC {data.soc:.0f}% < {device_min_soc:.0f}%) — Akku darf für dieses "
                         f"Gerät nicht einspringen"
+                    )
+                elif data.export_sensor_configured and not data.export_gate_open:
+                    decision_titel = "Ausschalten — keine Einspeisung"
+                    decision_reason = (
+                        f"Überschuss reicht nicht ({remaining_surplus:.2f} kW verfügbar, "
+                        f"{predicted_power:.2f} kW benötigt) und es wird gerade nicht ins Netz "
+                        f"eingespeist ({data.export_smoothed_kw:.2f} kW) — der Akku-Pfad bleibt "
+                        f"zu, weil der Strom sonst nicht übrig wäre"
                     )
                 elif would_delay_battery_full:
                     decision_titel = "Ausschalten — Akku würde nicht rechtzeitig voll"

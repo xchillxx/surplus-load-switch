@@ -29,6 +29,7 @@ from .const import (
     CONF_DEVICE_SWITCH,
     CONF_DEVICE_WINDOW_END,
     CONF_DEVICE_WINDOW_START,
+    CONF_EXPORT_POWER_SENSOR,
     CONF_HAUSMODUS_ENTITY,
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
@@ -83,6 +84,11 @@ def _global_settings_schema(defaults: dict | None = None) -> vol.Schema:
             CONF_SOLAR_FORECAST_REMAINING_ENTITY, **_default(d, CONF_SOLAR_FORECAST_REMAINING_ENTITY)
         ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(
+            CONF_EXPORT_POWER_SENSOR, **_default(d, CONF_EXPORT_POWER_SENSOR)
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="power")
         ),
     })
 

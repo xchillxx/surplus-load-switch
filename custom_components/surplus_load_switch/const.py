@@ -42,6 +42,21 @@ CONF_HAUSMODUS_ENTITY = "hausmodus_entity"
 # average; they shouldn't). Left unset, the wallbox reservation falls
 # back to the flat time-based formula.
 CONF_SOLAR_FORECAST_REMAINING_ENTITY = "solar_forecast_remaining_entity"
+# Optional: a sensor reading the household's grid *export* (feed-in)
+# power — positive while feeding the grid, ~0 while importing or
+# balanced. When set, the "battery path" (a device allowed to run purely
+# because the house battery could still afford it, not because the
+# modelled Überschuss covers it) is only kept open while the meter shows
+# the house is *actually* exporting at least EXPORT_GATE_MIN_KW: only
+# then would the power the device draws otherwise genuinely leave the
+# house. No export → the electrons come out of PV that would have
+# charged the battery, or out of the battery itself, or off the grid,
+# all of which cost the full import price later. Point this at a
+# fast-updating meter reading (e.g. a Tibber Pulse "Einspeiseleistung",
+# ~1 Hz) rather than a slow cloud-polled inverter CT. Left unset, the
+# battery path behaves exactly as before (gated only by the battery-full
+# projection).
+CONF_EXPORT_POWER_SENSOR = "export_power_sensor"
 
 # Config keys — per device
 CONF_DEVICES = "devices"
@@ -474,6 +489,20 @@ WALLBOX_RELIEF_CYCLES = STABLE_ON_CYCLES
 # genuinely behind where it needs to be to reach WEAK_DAY_BATTERY_FULL_SOC
 # in time.
 BATTERY_FULL_RELIEF_CYCLES = STABLE_ON_CYCLES
+
+# Battery-path export gate (see CONF_EXPORT_POWER_SENSOR). Hysteresis-
+# latched on the smoothed export reading so a value hovering around the
+# threshold doesn't toggle the whole low-priority cascade with it: the
+# gate opens once smoothed export reaches MIN_KW and stays open until it
+# falls below RELEASE_KW. The short median window keeps a single stray
+# reading or one-cycle dropout from moving it. SOC_OVERRIDE keeps the
+# gate open when the house battery is essentially full — any further PV
+# then has nowhere to go but the grid, including the brief moment the
+# inverter throttles production and the meter momentarily reads ~0.
+EXPORT_GATE_MIN_KW = 0.15
+EXPORT_GATE_RELEASE_KW = 0.05
+EXPORT_GATE_MEDIAN_WINDOW = 3
+EXPORT_GATE_SOC_OVERRIDE = 99.0
 
 # Default monthly solar offsets (hours after sunrise until PV is useful)
 DEFAULT_SOLAR_OFFSETS = [3.5, 3.0, 2.5, 2.0, 2.0, 2.2, 2.2, 2.0, 2.5, 3.0, 3.5, 4.0]

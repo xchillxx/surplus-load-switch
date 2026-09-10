@@ -12,7 +12,8 @@
           "battery_capacity_kwh": "Battery capacity (kWh)",
           "min_soc": "Minimum SOC (%)",
           "hausmodus_entity": "House-mode helper (optional, e.g. an input_select) — enables the weekday/hour/mode load-profile learner (diagnostic only, doesn't affect any switching decision yet)",
-          "solar_forecast_remaining_entity": "PV forecast — remaining today (optional, kWh, e.g. Forecast.Solar) — lets the wallbox reservation follow the sun's actual daily curve instead of a flat time average"
+          "solar_forecast_remaining_entity": "PV forecast — remaining today (optional, kWh, e.g. Forecast.Solar) — lets the wallbox reservation follow the sun's actual daily curve instead of a flat time average",
+          "export_power_sensor": "Grid export power sensor (optional, W/kW, e.g. a Tibber Pulse feed-in reading) — the battery path (a device running only because the house battery could afford it) then stays open only while the meter shows a real feed-in"
         }
       },
       "device_intro": {
@@ -153,7 +154,8 @@
           "battery_capacity_kwh": "Battery capacity (kWh)",
           "min_soc": "Minimum SOC (%)",
           "hausmodus_entity": "House-mode helper (optional, e.g. an input_select) — enables the weekday/hour/mode load-profile learner (diagnostic only, doesn't affect any switching decision yet)",
-          "solar_forecast_remaining_entity": "PV forecast — remaining today (optional, kWh, e.g. Forecast.Solar) — lets the wallbox reservation follow the sun's actual daily curve instead of a flat time average"
+          "solar_forecast_remaining_entity": "PV forecast — remaining today (optional, kWh, e.g. Forecast.Solar) — lets the wallbox reservation follow the sun's actual daily curve instead of a flat time average",
+          "export_power_sensor": "Grid export power sensor (optional, W/kW, e.g. a Tibber Pulse feed-in reading) — the battery path (a device running only because the house battery could afford it) then stays open only while the meter shows a real feed-in"
         }
       },
       "add_climate_device": {

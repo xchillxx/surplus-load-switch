@@ -12,6 +12,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_DEVICES,
     CONF_DEVICE_IS_WALLBOX,
+    CONF_EXPORT_POWER_SENSOR,
     DOMAIN,
     UPDATE_INTERVAL_SECONDS,
 )
@@ -30,6 +31,11 @@ async def async_setup_entry(
         PVWallboxTargetSensor(coordinator, entry),
         PVBatteryFullReservedSensor(coordinator, entry),
         PVHBatterySensor(coordinator, entry),
+        *(
+            [PVExportSensor(coordinator, entry)]
+            if entry.data.get(CONF_EXPORT_POWER_SENSOR)
+            else []
+        ),
         PVHToSolarSensor(coordinator, entry),
         PVModeSensor(coordinator, entry),
         PVSocSensor(coordinator, entry),
@@ -134,6 +140,14 @@ class PVSurplusSensor(_PVSensorBase):
             "batt_ok": d.batt_ok,
             "wallbox_reserviert_kw": round(d.wallbox_reserved_kw, 3),
             "akku_ladung_reserviert_kw": round(d.battery_reserved_charge_kw, 3),
+            **(
+                {
+                    "einspeisung_kw": round(d.export_smoothed_kw, 3),
+                    "einspeise_gate_offen": d.export_gate_open,
+                }
+                if d.export_sensor_configured
+                else {}
+            ),
         }
 
 
@@ -244,6 +258,39 @@ class PVBatteryFullReservedSensor(_PVSensorBase):
         if self.coordinator.data:
             return round(self.coordinator.data.battery_full_reserved_kw, 3)
         return None
+
+
+class PVExportSensor(_PVSensorBase):
+    """Smoothed grid export (feed-in) power the battery-path gate runs on,
+    plus whether the gate is currently open, as its own history-graphable
+    entity. Only added when an export sensor is configured (see
+    CONF_EXPORT_POWER_SENSOR); before that the battery path is unchanged
+    and there is nothing to show."""
+
+    _attr_name = "Einspeisung"
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:transmission-tower-export"
+
+    @property
+    def unique_id(self):
+        return f"{self._entry.entry_id}_export_power"
+
+    @property
+    def native_value(self):
+        if self.coordinator.data:
+            return round(self.coordinator.data.export_smoothed_kw, 3)
+        return None
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        d = self.coordinator.data
+        return {
+            "roh_kw": round(d.export_power_kw, 3),
+            "gate_offen": d.export_gate_open,
+        }
 
 
 class PVHBatterySensor(_PVSensorBase):

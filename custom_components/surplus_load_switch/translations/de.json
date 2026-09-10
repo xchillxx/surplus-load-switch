@@ -12,7 +12,8 @@
           "battery_capacity_kwh": "Akku-Kapazität (kWh)",
           "min_soc": "Mindest-SOC (%)",
           "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)",
-          "solar_forecast_remaining_entity": "PV-Prognose Resttag heute (optional, kWh, z.B. Forecast.Solar) — lässt die Wallbox-Reservierung dem tatsächlichen Tagesverlauf der Sonne folgen statt einem flachen Zeitdurchschnitt"
+          "solar_forecast_remaining_entity": "PV-Prognose Resttag heute (optional, kWh, z.B. Forecast.Solar) — lässt die Wallbox-Reservierung dem tatsächlichen Tagesverlauf der Sonne folgen statt einem flachen Zeitdurchschnitt",
+          "export_power_sensor": "Einspeise-Leistungssensor (optional, W/kW, z.B. Tibber Pulse) — der Akku-Pfad (Gerät läuft nur weil der Hausakku es sich leisten könnte) bleibt dann nur offen, solange wirklich ins Netz eingespeist wird"
         }
       },
       "device_intro": {
@@ -153,7 +154,8 @@
           "battery_capacity_kwh": "Akku-Kapazität (kWh)",
           "min_soc": "Mindest-SOC (%)",
           "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)",
-          "solar_forecast_remaining_entity": "PV-Prognose Resttag heute (optional, kWh, z.B. Forecast.Solar) — lässt die Wallbox-Reservierung dem tatsächlichen Tagesverlauf der Sonne folgen statt einem flachen Zeitdurchschnitt"
+          "solar_forecast_remaining_entity": "PV-Prognose Resttag heute (optional, kWh, z.B. Forecast.Solar) — lässt die Wallbox-Reservierung dem tatsächlichen Tagesverlauf der Sonne folgen statt einem flachen Zeitdurchschnitt",
+          "export_power_sensor": "Einspeise-Leistungssensor (optional, W/kW, z.B. Tibber Pulse) — der Akku-Pfad (Gerät läuft nur weil der Hausakku es sich leisten könnte) bleibt dann nur offen, solange wirklich ins Netz eingespeist wird"
         }
       },
       "add_climate_device": {

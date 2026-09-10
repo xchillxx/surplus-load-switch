@@ -30,6 +30,7 @@ from .const import (
     CONF_DEVICE_PRIORITY,
     CONF_DEVICE_SCHEDULE_ENTITY,
     CONF_DEVICE_SWITCH,
+    CONF_EXPORT_POWER_SENSOR,
     CONF_LOAD_SENSOR,
     CONF_SOC_SENSOR,
     CONF_SOLAR_SENSOR,
@@ -54,6 +55,9 @@ async def async_setup_entry(
         PVGlobalSensorSelect(coordinator, entry, CONF_LOAD_SENSOR, "Last-Sensor"),
         PVGlobalSensorSelect(coordinator, entry, CONF_SOC_SENSOR, "SOC-Sensor"),
         PVGlobalSensorSelect(coordinator, entry, CONF_BATT_SENSOR, "Akku-Leistungssensor"),
+        PVGlobalOptionalSensorSelect(
+            coordinator, entry, CONF_EXPORT_POWER_SENSOR, "Einspeise-Leistungssensor"
+        ),
     ]
     devices = entry.data.get(CONF_DEVICES, [])
     non_wallbox = [d for d in devices if not d.get(CONF_DEVICE_IS_WALLBOX, False)]
@@ -125,6 +129,43 @@ class PVGlobalSensorSelect(_PVSelectBase):
     async def async_select_option(self, option: str) -> None:
         async with self.coordinator.config_write_lock:
             new_data = {**self._entry.data, self._field: option}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+
+
+class PVGlobalOptionalSensorSelect(_PVSelectBase):
+    """An optional global sensor reference (any `sensor`, or SELECT_NONE to
+    clear it) — same live-edit convenience as PVGlobalSensorSelect, but
+    the field is allowed to be empty. Used for the export/feed-in sensor
+    that gates the battery path (see CONF_EXPORT_POWER_SENSOR)."""
+
+    _attr_icon = "mdi:transmission-tower-export"
+
+    def __init__(
+        self, coordinator: PVSurplusCoordinator, entry: ConfigEntry, field: str, name: str
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._field = field
+        self._attr_name = name
+        self._attr_unique_id = f"{entry.entry_id}_{field}_select"
+
+    @property
+    def options(self) -> list[str]:
+        live = sorted(self.hass.states.async_entity_ids("sensor"))
+        current = self._entry.data.get(self._field)
+        if current and current not in live:
+            live = sorted([*live, current])
+        return [SELECT_NONE, *live]
+
+    @property
+    def current_option(self) -> str:
+        return self._entry.data.get(self._field) or SELECT_NONE
+
+    async def async_select_option(self, option: str) -> None:
+        async with self.coordinator.config_write_lock:
+            value = None if option == SELECT_NONE else option
+            new_data = {**self._entry.data, self._field: value}
+            if value is None:
+                new_data.pop(self._field, None)
             self.hass.config_entries.async_update_entry(self._entry, data=new_data)
 
 
