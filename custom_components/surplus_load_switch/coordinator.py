@@ -72,6 +72,7 @@ from .const import (
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
     DOMAIN,
+    EXPORT_CORROBORATION_MARGIN_KW,
     EXPORT_GATE_MEDIAN_WINDOW,
     EXPORT_GATE_MIN_KW,
     EXPORT_GATE_RELEASE_KW,
@@ -99,6 +100,7 @@ from .const import (
     WALLBOX_MIN_PV_FOR_RESERVATION_KW,
     WALLBOX_MIN_PV_HYSTERESIS_KW,
     WALLBOX_OVERDRAW_MARGIN_KW,
+    WALLBOX_PV_GATE_RELEASE_CYCLES,
     WALLBOX_RELIEF_CYCLES,
     WALLBOX_STARVED_RESERVED_RATIO,
     WALLBOX_TARGET_MIN_HOURS,
@@ -491,6 +493,12 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # every cycle. Starts closed (below floor) — a genuine morning
         # ramp opens it within a cycle or two.
         self._wallbox_pv_gate_open: dict[str, bool] = {}
+        # Per-wallbox count of consecutive cycles gross PV has been below
+        # the release floor while the gate is armed — the gate only
+        # actually releases once this reaches WALLBOX_PV_GATE_RELEASE_CYCLES,
+        # so a brief cloud gap doesn't drop the whole reservation. Reset to
+        # 0 on any cycle PV is back above the floor. See _wallbox_reserved_kw.
+        self._wallbox_pv_gate_below_cycles: dict[str, int] = {}
         # Cached price-optimized-forcing slot selection per device (see
         # _price_optimized_force_active/price_source.py) — avoids
         # calling tibber.get_prices every 60-second cycle. Keyed by
@@ -1275,15 +1283,31 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # Below WALLBOX_MIN_PV_FOR_RESERVATION_KW of gross production the
         # car's charger can't sustain a charge no matter how the house-load
         # math works out, so reserving surplus for it only keeps managed
-        # devices off for a car that isn't charging. Hysteresis via a latch
-        # (needs +WALLBOX_MIN_PV_HYSTERESIS_KW to re-arm) so a PV reading
-        # sitting on the threshold doesn't flip the reservation, and every
-        # lower-priority device's on/off state with it, every cycle.
+        # devices off for a car that isn't charging. Magnitude hysteresis
+        # via a latch (needs +WALLBOX_MIN_PV_HYSTERESIS_KW to arm) so a PV
+        # reading sitting on the threshold doesn't flip the reservation.
+        # On top of that, once armed the gate only *releases* after gross
+        # PV has stayed below the floor for WALLBOX_PV_GATE_RELEASE_CYCLES
+        # in a row: a car that's home and below target still needs its
+        # whole day's charge, and letting a passing cloud drop the entire
+        # ~deadline-pace reservation to 0 — then snap it back when the sun
+        # returns — flaps every lower-priority device on and off with it
+        # (confirmed live 2026-09-10, broken-cloud day). Arming stays
+        # instant.
         gate_open = self._wallbox_pv_gate_open.get(wallbox_id, False)
-        threshold = WALLBOX_MIN_PV_FOR_RESERVATION_KW + (
-            0.0 if gate_open else WALLBOX_MIN_PV_HYSTERESIS_KW
-        )
-        gate_open = solar_kw >= threshold
+        if not gate_open:
+            gate_open = solar_kw >= (
+                WALLBOX_MIN_PV_FOR_RESERVATION_KW + WALLBOX_MIN_PV_HYSTERESIS_KW
+            )
+            if gate_open:
+                self._wallbox_pv_gate_below_cycles[wallbox_id] = 0
+        elif solar_kw < WALLBOX_MIN_PV_FOR_RESERVATION_KW:
+            below = self._wallbox_pv_gate_below_cycles.get(wallbox_id, 0) + 1
+            self._wallbox_pv_gate_below_cycles[wallbox_id] = below
+            if below >= WALLBOX_PV_GATE_RELEASE_CYCLES:
+                gate_open = False
+        else:
+            self._wallbox_pv_gate_below_cycles[wallbox_id] = 0
         self._wallbox_pv_gate_open[wallbox_id] = gate_open
         if not gate_open:
             self._wallbox_target_rate_kw[wallbox_id] = 0.0
@@ -2813,6 +2837,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # already covered by the reactive battery_eligible_ids gate, and
         # force_runtime is exempt everywhere).
         cumulative_battery_competing_draw = 0.0
+        # v2.37: predicted draw of every device turned on via the modelled-
+        # surplus path *this cycle that wasn't already on* — subtracted
+        # from the export-meter reading before the next device's turn-on
+        # is corroborated against it, so a single positive meter reading
+        # isn't spent by several devices at once. Already-on devices are
+        # left out: their draw is already reflected in the meter.
+        cumulative_export_committed = 0.0
         now_dt = dt_util.utcnow()
         horizon_end = now_dt + timedelta(hours=data.effective_h_to_solar + BATT_OK_BUFFER_H)
 
@@ -3335,11 +3366,33 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             would_delay_battery_full = not self._battery_would_still_reach_full(
                 data, cumulative_battery_competing_draw + predicted_power
             )
+            # v2.37: while an export sensor is configured and the sun is up,
+            # a device may only be *switched on* via the modelled-surplus
+            # path if the meter also shows a real feed-in that covers its
+            # own draw (minus what devices turned on earlier this cycle
+            # have already claimed from the same reading). The modelled
+            # `remaining_surplus` can read strongly positive for a few
+            # cycles when the wallbox reservation lags a gross-PV upswing,
+            # while almost nothing is actually leaving the house — see
+            # EXPORT_CORROBORATION_MARGIN_KW. Never sheds an already-on
+            # device (its draw is already in the meter reading); only
+            # blocks a fresh turn-on. At night / no export sensor this is
+            # always False.
+            export_uncorroborated = (
+                data.export_sensor_configured
+                and data.battery_full_projection_applies
+                and not is_on
+                and (
+                    data.export_smoothed_kw - cumulative_export_committed
+                    < predicted_power + EXPORT_CORROBORATION_MARGIN_KW
+                )
+            )
             should_on = (
                 force_runtime
                 or (
                     remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD
                     and not would_delay_battery_full
+                    and not export_uncorroborated
                 )
                 or battery_would_last
             )
@@ -3424,6 +3477,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                         f"{predicted_power:.2f} kW benötigt, Akku würde nicht bis Solar-Start reichen)"
                     )
                 await self._log_decision(dev, False, decision_titel, decision_reason)
+            elif export_uncorroborated and remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD:
+                # Modelled surplus would switch this on, but the meter
+                # doesn't back it up yet — held, not switched, so the log
+                # doesn't read as a plain hysteresis hold.
+                await self._log_decision(
+                    dev, False, "Wartet — keine echte Einspeisung",
+                    f"rechnerischer Überschuss reichte ({remaining_surplus:.2f} kW), aber es "
+                    f"wird nur {max(data.export_smoothed_kw - cumulative_export_committed, 0.0):.2f} "
+                    f"kW wirklich eingespeist ({predicted_power:.2f} kW nötig) — noch nicht "
+                    f"eingeschaltet",
+                )
             else:
                 stable_titel = "Bleibt an — Hysterese" if is_on else "Bleibt aus — Hysterese"
                 decision_reason = (
@@ -3449,6 +3513,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 # what's already been committed ahead of it, not just its
                 # own isolated draw in a vacuum.
                 cumulative_battery_competing_draw += predicted_power
+                # A device turned on this cycle that wasn't already on will
+                # start drawing from real export the moment it switches —
+                # so the next device's export-corroboration check must see
+                # that reduced headroom, not the raw meter reading (which
+                # still reflects a moment before this one came on).
+                if not is_on:
+                    cumulative_export_committed += predicted_power
 
             if should_on and not is_on:
                 # Capped rather than incremented without bound: once

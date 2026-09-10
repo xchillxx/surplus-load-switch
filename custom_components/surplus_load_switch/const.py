@@ -203,6 +203,18 @@ WALLBOX_MIN_PV_FOR_RESERVATION_KW = 1.7
 # the full reservation arms at 2.0 kW gross PV and drops again below
 # 1.7 kW.
 WALLBOX_MIN_PV_HYSTERESIS_KW = 0.3
+# v2.37: once the reservation's gross-PV gate has armed, keep it armed
+# until gross PV has stayed below the floor for this many *consecutive*
+# cycles — not the instant it dips once. A car that's home and below
+# target still needs its full day's charge; a passing cloud that drops
+# gross PV under 1.7 kW for a few minutes shouldn't release the entire
+# ~deadline-pace reservation to the device cascade and then yank it back
+# when the sun returns. Confirmed live 2026-09-10 (broken-cloud day):
+# "Grundlast" toggling 0.3 <-> 10 kW every ~10-15 min, miner + pool pump
+# + boiler switching fully on and off with each swing. Arming stays
+# instant (PV genuinely there -> reserve at once); only the release is
+# held.
+WALLBOX_PV_GATE_RELEASE_CYCLES = _minutes_to_cycles(15)
 # How far a wallbox's real measured draw may exceed what was actually
 # reserved for it before that alone counts as "starved" (see
 # wallbox_starved in coordinator.py), independent of whether the
@@ -503,6 +515,21 @@ EXPORT_GATE_MIN_KW = 0.15
 EXPORT_GATE_RELEASE_KW = 0.05
 EXPORT_GATE_MEDIAN_WINDOW = 3
 EXPORT_GATE_SOC_OVERRIDE = 99.0
+
+# v2.37: a device may only be *switched on* via the modelled-surplus path
+# (`remaining_surplus > need`) while the meter also shows the household is
+# really exporting at least that device's own draw (minus what devices
+# already granted this cycle have claimed from the same reading). The
+# modelled surplus can briefly read strongly positive when the wallbox
+# reservation lags a gross-PV upswing — confirmed live 2026-09-10, a
+# broken-cloud day: "Überschuss" spiking to +7 kW while the Tibber meter
+# showed ~0.5 kW real feed-in (the car was ramping up and taking the
+# rest), the whole low-priority cascade switching fully on, then off
+# again a few minutes later. Only enforced while battery_full_projection_
+# applies (daytime) and an export sensor is configured; an already-on
+# device is never shed by this (its own draw is already in the meter
+# reading) — it only blocks a fresh turn-on.
+EXPORT_CORROBORATION_MARGIN_KW = 0.0
 
 # Default monthly solar offsets (hours after sunrise until PV is useful)
 DEFAULT_SOLAR_OFFSETS = [3.5, 3.0, 2.5, 2.0, 2.0, 2.2, 2.2, 2.0, 2.5, 3.0, 3.5, 4.0]
