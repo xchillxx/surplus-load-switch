@@ -91,7 +91,6 @@ from .const import (
     SURPLUS_ON_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
     WALLBOX_IDLE_THRESHOLD_KW,
-    WALLBOX_FORECAST_MIN_KWH,
     WALLBOX_MIN_PV_FOR_RESERVATION_KW,
     WALLBOX_MIN_PV_HYSTERESIS_KW,
     WALLBOX_OVERDRAW_MARGIN_KW,
@@ -184,27 +183,19 @@ class CoordinatorData:
     # cascade competes over, kept here purely for visibility into why
     # devices see less than the raw surplus_kw above.
     wallbox_reserved_kw: float = 0.0
-    # The raw, pre-cap target rate (from _wallbox_deadline_rate, set in
-    # _wallbox_reserved_kw) — what the wallbox would need at a steady pace
-    # to reach its target by the deadline, regardless of whether that much
-    # surplus genuinely exists right now, and regardless of which path
-    # _wallbox_reservation_rate took for the actual reservation amount. wallbox_reserved_kw above is this same number
-    # after the surplus/max-charge caps are applied — what a self-limiting
-    # (not starved) wallbox gets protected for; a low wallbox_reserved_kw
-    # next to a much higher wallbox_target_kw means the deficit math is
-    # fine, there's simply not enough surplus to act on it yet (e.g. the
-    # house battery is still ahead of it in the queue), not a calculation
-    # bug. A real switching input in two places, not just diagnostic: (1)
-    # wallbox_starved compares against this uncapped rate directly as a
-    # ratio against wallbox_reserved_kw (see WALLBOX_STARVED_RESERVED_RATIO)
-    # rather than against available surplus, since the capped reservation
-    # collapses toward 0 right along with available surplus on a scarce
-    # cycle, which would otherwise hide the wallbox's real appetite
-    # exactly when it's largest; (2) once starved, this uncapped rate —
-    # not the capped reservation — is what's actually protected in
-    # base_load (see wallbox_starved_effective below), since protecting
-    # only the already-capped reservation was a no-op exactly when
-    # starved matters most.
+    # The deadline-paced target rate (from _wallbox_deadline_rate, set in
+    # _wallbox_reserved_kw) — what the wallbox needs at a steady pace to
+    # reach its target by the deadline, capped only at the charger's own
+    # ceiling, regardless of whether that much surplus genuinely exists
+    # right now. Since 2026-09-10 wallbox_reserved_kw above is this same
+    # number (the reservation is no longer trimmed to a forecast share or
+    # to available surplus — the car has absolute priority over the
+    # cascade while it has a real deficit). A large wallbox_target_kw next
+    # to a small available_surplus just means the house battery is still
+    # ahead of the car in the inverter's queue, not a calculation bug.
+    # Still a real switching input, not only diagnostic: once starved (the
+    # OVERDRAW branch — real draw far above the reservation), this rate is
+    # what's protected in base_load (see wallbox_starved_effective below).
     wallbox_target_kw: float = 0.0
     # Same reasoning as wallbox_reserved_kw above, but reserving surplus
     # for the house battery itself instead of a wallbox — see
@@ -1063,65 +1054,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         return slot_covers(cached["chosen"], now)
 
-    def _wallbox_reservation_rate(
-        self, missing_kwh: float, now: datetime, available_surplus: float
-    ) -> float | None:
-        """The raw (pre-cap) reservation rate in kW, before
-        _wallbox_reserved_kw applies the surplus/max-charge caps. None
-        means "can't compute right now" (missing sun.sun data), not "no
-        reservation" — the caller distinguishes.
-
-        Prefers a forecast-based proportional rate when
-        CONF_SOLAR_FORECAST_REMAINING_ENTITY is configured, but only
-        while that share stays under 1 — claim the same *share* of
-        whatever solar is happening right now as the share of today's
-        still-forecast solar the deficit represents (missing_kwh /
-        forecast_kwh_still_to_come). A flat clock-time average treats a
-        weak 9am and a strong 2pm identically, which is exactly
-        backwards — confirmed live: reserving a flat rate from the
-        morning onward claimed real surplus during hours when actual
-        production was still ramping up. The forecast-based rate instead
-        scales naturally with the sun itself: low at 9am when little is
-        forecast to still arrive relative to the whole day, higher once
-        the afternoon peak is actually forecast to deliver it.
-
-        Once the deficit alone exceeds the entire day's remaining
-        forecast (share >= 1), that proportional formula degenerates
-        into "claim 100% of whatever's flowing this instant" — not the
-        same thing as "claim what's actually needed for a steady pace
-        toward the deadline". Confirmed live: with the deficit already
-        past today's forecast, the reservation tracked raw instantaneous
-        solar 1:1 (starving every managed device even at 1.1 kW, since
-        that was all that existed that moment) instead of settling on
-        the flat rate the car would actually need sustained from now to
-        the deadline — which stays properly capped by whatever surplus
-        genuinely exists downstream either way, but is a meaningfully
-        smaller, steadier number once solar itself picks back up, no
-        longer starving devices for headroom the car couldn't have used
-        at that instant regardless. Falls through to the same
-        deadline-based rate used when no forecast is configured at all.
-        """
-        forecast_entity = self._config.get(CONF_SOLAR_FORECAST_REMAINING_ENTITY)
-        forecast_remaining_kwh = (
-            _safe_float(self.hass.states.get(forecast_entity)) if forecast_entity else None
-        )
-        if forecast_remaining_kwh is not None:
-            share_needed = missing_kwh / max(forecast_remaining_kwh, WALLBOX_FORECAST_MIN_KWH)
-            if share_needed < 1.0:
-                return share_needed * max(available_surplus, 0.0)
-
-        return self._wallbox_deadline_rate(missing_kwh, now)
-
     def _wallbox_deadline_rate(self, missing_kwh: float, now: datetime) -> float | None:
-        """Flat sunset-minus-buffer/hours-remaining rate — worse-shaped
-        across the day than the forecast-based share above, but still
-        deadline-aware and still fully capped downstream (surplus and
-        max-charge-rate both), so the feature keeps working without
-        Forecast.Solar or an equivalent integration installed, and
-        serves as the fallback once the forecast share alone would
-        otherwise demand everything regardless of the actual pace
-        needed. None means "can't compute right now" (missing sun.sun
-        data), not "no reservation" — the caller distinguishes.
+        """Flat (sunset − WALLBOX_TARGET_TIME_BUFFER_H) / hours-remaining
+        rate: the steady pace, in kW, that clears the remaining deficit by
+        the deadline. This is both the wallbox target rate and — since
+        2026-09-10 — the reservation amount itself (see _wallbox_reserved_kw:
+        capped only at the charger's ceiling, never at current surplus).
+        None means "can't compute right now" (missing sun.sun data), not
+        "no reservation" — the caller distinguishes.
         """
         sun = self.hass.states.get("sun.sun")
         next_setting_raw = sun.attributes.get("next_setting") if sun is not None else None
@@ -1343,12 +1283,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 self._wallbox_target_rate_kw[wallbox_id] = 0.0
                 return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
-        reserved_kw = self._wallbox_reservation_rate(missing_kwh, now, available_surplus)
-        if reserved_kw is None:
-            # Also a genuine data gap (missing sun.sun with no forecast
-            # configured), not "no reservation" — same bridge as above.
-            return self._wallbox_bridge_last_good(wallbox_id, now)
-
         # Priority: a manually-entered fixed number always wins if set;
         # otherwise an external entity (e.g. a companion charge-scheduler
         # integration that already calibrates this from real charging
@@ -1371,37 +1305,41 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             calibrator = self._wallbox_charge_calibrators.get(wallbox_dev.get("_id"))
             max_charge_kw = calibrator.max_charge_kw if calibrator else None
 
-        # wallbox_target_kw is the surplus-INDEPENDENT steady rate the car
-        # needs to reach its target by the deadline (missing kWh / hours
-        # left), capped only at the charger's own ceiling — never the
-        # reservation itself. wallbox_starved (and the base_load fold it
-        # drives) compares the actual reservation against this to decide
-        # whether the cascade may run at all, so a target that collapses
-        # together with available surplus makes that check a no-op exactly
-        # when surplus is scarce and the car most needs protecting.
+        # The reservation amount IS the deadline-paced target rate itself:
+        # the full Soll-Ladeleistung the car needs to reach its target by
+        # (sunset − buffer), capped only at the charger's own ceiling. It
+        # is deliberately NOT trimmed to a forecast share and NOT capped to
+        # the surplus that physically exists this instant.
         #
-        # _wallbox_reservation_rate's forecast-share branch deliberately
-        # returns only a fraction of *this instant's* surplus — right as a
-        # reservation (don't hold back more than the day's pace needs),
-        # wrong as a target. Confirmed live 2026-08-31: car 26 % vs 80 %,
-        # ~40 kWh missing with a full day of forecast still ahead, yet
-        # share_needed 0.8 x a momentarily cloud-suppressed ~0.2 kW
-        # surplus pinned wallbox_target_kw at 0.17 kW, wallbox_starved
-        # never fired, and every managed device ran off the battery. So
-        # the target is always the deadline rate, whatever path the
-        # reservation amount itself took. None (missing sun.sun) falls
-        # back to the reservation, same as before.
+        # Explicit user design decision (2026-09-10): while the car is
+        # home, below target and solar could still arrive today, it has
+        # absolute priority over every managed device — the cascade gets
+        # only what is genuinely left after the car's full pace, which on a
+        # battery-first morning (inverter charging the house battery with
+        # the whole PV delta) is nothing. The earlier forecast-share
+        # throttle and the min(…, available_surplus) cap both handed the
+        # cascade whatever the car couldn't draw *at that instant*, i.e.
+        # almost everything in exactly that situation — the behaviour the
+        # user wants gone. wallbox_reserved_kw now equals wallbox_target_kw
+        # by construction, so wallbox_starved's reserved-vs-target ratio
+        # branch simply never trips (reserved == target is the healthy
+        # state it was trying to approximate); its OVERDRAW branch, keyed
+        # on the wallbox's real measured draw, stays live.
+        #
+        # All the zero-gates above are unchanged: target reached, outside
+        # the solar-generation window, gross PV below the hysteresis latch,
+        # car not present, or a genuine SOC/capacity data gap each still
+        # short-circuit to 0 / a bridged last-good value before here.
         target_rate_kw = self._wallbox_deadline_rate(missing_kwh, now)
         if target_rate_kw is None:
-            target_rate_kw = reserved_kw
-        self._wallbox_target_rate_kw[wallbox_id] = (
-            min(target_rate_kw, max_charge_kw) if max_charge_kw else target_rate_kw
-        )
+            # Genuine data gap (missing sun.sun), not "no reservation" —
+            # bridge to the last known-good value like the checks above.
+            return self._wallbox_bridge_last_good(wallbox_id, now)
 
         if max_charge_kw:
-            reserved_kw = min(reserved_kw, max_charge_kw)
-        result = min(reserved_kw, max(available_surplus, 0.0))
-        return self._wallbox_remember_reserved(wallbox_id, now, result)
+            target_rate_kw = min(target_rate_kw, max_charge_kw)
+        self._wallbox_target_rate_kw[wallbox_id] = target_rate_kw
+        return self._wallbox_remember_reserved(wallbox_id, now, target_rate_kw)
 
     def _wallbox_remember_reserved(self, wallbox_id: str, now: datetime, value: float) -> float:
         """Stash a genuinely-computed _wallbox_reserved_kw result (real

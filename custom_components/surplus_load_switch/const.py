@@ -173,12 +173,6 @@ WALLBOX_TARGET_TIME_BUFFER_H = 2.0
 # number. Reserving hard for the last stretch is correct; reserving an
 # absurd number isn't.
 WALLBOX_TARGET_MIN_HOURS = 0.25
-# Same floor, but for the forecast-based reservation path (see
-# CONF_SOLAR_FORECAST_REMAINING_ENTITY): a forecast "kWh still to come
-# today" reading near/at 0 (end of day) would otherwise blow the
-# missing/forecast fraction up to an absurd multiple instead of just
-# correctly claiming ~100% of whatever's left.
-WALLBOX_FORECAST_MIN_KWH = 0.5
 # The dynamic wallbox reservation stays at 0 while *gross* PV production
 # is below this. At that little generation the car's charger can't hold a
 # charge at all (a single-phase EVSE needs ~1.4 kW, three-phase far
@@ -186,11 +180,13 @@ WALLBOX_FORECAST_MIN_KWH = 0.5
 # off for a car that isn't charging anyway. Checked against gross solar,
 # not surplus — it's a question of whether the array is producing enough
 # to matter, upstream of house load.
-WALLBOX_MIN_PV_FOR_RESERVATION_KW = 2.0
+WALLBOX_MIN_PV_FOR_RESERVATION_KW = 1.7
 # Re-arm only once PV has climbed this far back above the floor, so a
 # reading hovering right at WALLBOX_MIN_PV_FOR_RESERVATION_KW doesn't
 # toggle the reservation — and every lower-priority device's on/off
-# state with it — cycle to cycle.
+# state with it — cycle to cycle. With the 1.7 kW floor above this means
+# the full reservation arms at 2.0 kW gross PV and drops again below
+# 1.7 kW.
 WALLBOX_MIN_PV_HYSTERESIS_KW = 0.3
 # How far a wallbox's real measured draw may exceed what was actually
 # reserved for it before that alone counts as "starved" (see

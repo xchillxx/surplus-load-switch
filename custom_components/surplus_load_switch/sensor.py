@@ -190,18 +190,15 @@ class PVWallboxReservedSensor(_PVSensorBase):
 
 
 class PVWallboxTargetSensor(_PVSensorBase):
-    """The raw, pre-cap wallbox reservation rate (see
-    wallbox_target_kw/_wallbox_reservation_rate) — what the wallbox would
-    need at a steady pace to reach its target by the deadline, regardless
-    of whether that much surplus genuinely exists right now. Verifies the
-    underlying kWh/deadline math independent of current conditions, so a
-    low PVWallboxReservedSensor reading next to a much higher reading
-    here means the deficit math is fine — there's simply not enough
-    surplus to act on it yet, not a calculation bug. Also feeds a real
-    switching decision (wallbox_starved, see coordinator.py), not just
-    this diagnostic — the uncapped rate is what correctly flags the
-    wallbox as needing everything even on a cycle scarce enough to cap
-    its own reservation down to ~0."""
+    """The deadline-paced wallbox target rate (see wallbox_target_kw in
+    coordinator.py) — what the wallbox needs at a steady pace to reach its
+    target by the deadline, capped only at the charger's ceiling,
+    regardless of whether that much surplus genuinely exists right now.
+    Since 2026-09-10 the actual reservation (PVWallboxReservedSensor)
+    equals this — the car takes its full pace ahead of the cascade while
+    it has a real deficit; a large value here next to a small SLS
+    Überschuss just means the house battery is still ahead of the car in
+    the inverter's queue, not a calculation bug."""
 
     _attr_name = "Wallbox Soll-Ladeleistung"
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
