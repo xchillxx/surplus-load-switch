@@ -140,9 +140,14 @@ class PVSurplusSensor(_PVSensorBase):
 class PVBaseLoadSensor(_PVSensorBase):
     """Load the managed devices don't account for — house consumption minus
     the wallbox and whatever's currently drawn by devices this integration
-    itself controls. Its own entity (not just an attribute on Überschuss)
-    so it gets its own recorder history instead of always opening
-    Überschuss's graph when tapped."""
+    itself controls. Always the honest, wallbox-excluded figure
+    (base_load_excl_wallbox_kw), so a car that is starved for surplus
+    can't inflate it — the amount the cascade actually budgets against
+    while starved (real base + the wallbox's unmet target) is exposed as
+    the `fuer_kaskade_angesetzt_kw` attribute instead, which is what makes
+    the "Überschuss" reading go negative. Its own entity (not just an
+    attribute on Überschuss) so it gets its own recorder history instead
+    of always opening Überschuss's graph when tapped."""
 
     _attr_name = "Grundlast"
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
@@ -156,14 +161,17 @@ class PVBaseLoadSensor(_PVSensorBase):
     @property
     def native_value(self):
         if self.coordinator.data:
-            return round(self.coordinator.data.base_load_kw, 3)
+            return round(self.coordinator.data.base_load_excl_wallbox_kw, 3)
         return None
 
     @property
     def extra_state_attributes(self):
         if not self.coordinator.data:
             return {}
-        return self.coordinator.data.base_load_floor
+        d = self.coordinator.data
+        attrs = dict(d.base_load_floor or {})
+        attrs["fuer_kaskade_angesetzt_kw"] = round(d.base_load_kw, 3)
+        return attrs
 
 
 class PVWallboxReservedSensor(_PVSensorBase):

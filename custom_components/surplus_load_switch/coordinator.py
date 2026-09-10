@@ -214,7 +214,14 @@ class CoordinatorData:
     # this delay the battery" check works off the same rate the
     # reactive battery_full_on_track verdict itself was based on.
     battery_smoothed_charge_kw: float = 0.0
+    # The value the priority cascade actually budgets against: normally the
+    # honest wallbox-excluded base load, but with the wallbox's unmet
+    # target folded in while wallbox_starved (see the fold in
+    # _async_update_data). base_load_excl_wallbox_kw below is always the
+    # honest figure — that is the one the "Grundlast" sensor shows, so a
+    # starved car can't make it read like the house is drawing 7 kW.
     base_load_kw: float = 0.0
+    base_load_excl_wallbox_kw: float = 0.0
     avail_kwh: float = 0.0
     # Set twice: a naive avail_kwh/discharge_rate placeholder in
     # _async_update_data, then overwritten at the end of _evaluate_devices
@@ -2625,6 +2632,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         data.battery_full_reserved_kw = battery_full_reservation_kw
 
         data.base_load_kw = base_load
+        data.base_load_excl_wallbox_kw = base_load_excl_wallbox
         # The true, physical surplus actually left over for everyone
         # else this cycle, wallbox and battery-reservation included — so
         # the diagnostic sensor reflects reality instead of a number that
