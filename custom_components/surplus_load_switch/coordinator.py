@@ -2028,15 +2028,26 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         # Battery-path export gate: a device may only run *purely on
         # battery affordability* (not on modelled live surplus) while the
-        # meter shows the house is actually feeding the grid — otherwise
-        # the power it draws isn't spare at all, it just charges the
-        # battery slower (paid back as an evening grid import) or comes
-        # straight off the battery / the grid. Hysteresis-latched on the
-        # median of the last few readings so a value sitting on the
-        # threshold doesn't toggle the whole low-priority cascade with it.
-        # The SOC override covers a full battery, where any further PV is
-        # exported or clipped regardless of the momentary meter reading.
-        # No sensor configured → gate always open, battery path unchanged.
+        # meter shows the house is actually feeding the grid — otherwise,
+        # during the day, the power it draws isn't spare at all: it just
+        # charges the battery slower (paid back as an evening grid import),
+        # or the modelled surplus is being kept for a wallbox that needs
+        # more than is there. Hysteresis-latched on the median of the last
+        # few readings so a value sitting on the threshold doesn't toggle
+        # the whole low-priority cascade with it. The SOC override covers a
+        # full battery, where any further PV is exported or clipped
+        # regardless of the momentary meter reading.
+        #
+        # The gate is a *daytime* rule only. It is applied while the
+        # battery-full projection applies (sun up and PV producing or
+        # expected) — that is the window where "is this spare?" genuinely
+        # means "are we exporting?". At night and in the pre-dawn gap
+        # there's no PV to export or to reserve for the car, and the only
+        # question is whether the house battery still comfortably reaches
+        # tomorrow's solar start — which battery_would_last already answers
+        # without this gate's daytime blind spots. So outside that window
+        # export_gate_open reports True and the overnight "Akku reicht"
+        # path runs exactly as before. No sensor configured → always open.
         export_entity = self._config.get(CONF_EXPORT_POWER_SENSOR)
         export_configured = bool(export_entity)
         export_kw = self._get_power_kw(export_entity) if export_configured else 0.0
@@ -2048,7 +2059,11 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     self._export_gate_open = False
             elif export_smoothed >= EXPORT_GATE_MIN_KW:
                 self._export_gate_open = True
-            export_gate_open = self._export_gate_open or soc >= EXPORT_GATE_SOC_OVERRIDE
+            export_gate_open = (
+                not battery_full_projection_applies
+                or self._export_gate_open
+                or soc >= EXPORT_GATE_SOC_OVERRIDE
+            )
         else:
             export_smoothed = 0.0
             export_gate_open = True
@@ -2936,11 +2951,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # where it needs to be to reach WEAK_DAY_BATTERY_FULL_SOC in
             # time (or either was true within the last relief window —
             # see wallbox_starved_effective/battery_behind_schedule_
-            # effective above), or — when an export sensor is configured —
-            # the meter isn't showing a real feed-in right now, so the
-            # power these devices would draw wouldn't otherwise leave the
-            # house at all (it would just charge the battery slower, or
-            # come off the battery / the grid). force_runtime devices are
+            # effective above), or — when an export sensor is configured
+            # and the sun is up — the meter isn't showing a real feed-in
+            # right now, so the power these devices would draw wouldn't
+            # otherwise leave the house at all (it would just charge the
+            # battery slower, or be surplus kept back for a wallbox that
+            # needs more than is there). That last clause is a daytime rule
+            # only — see export_gate_open in _async_update_data; at night
+            # it reports True and the overnight "Akku reicht" path is
+            # unchanged. force_runtime devices are
             # unaffected: they never go through battery_eligible_ids,
             # they're already in mandatory_segments and win via their own
             # should_on branch further down.
