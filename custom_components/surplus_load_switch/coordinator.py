@@ -2367,110 +2367,53 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             if wb.get(CONF_WALLBOX_CAPACITY_ENTITY)
         )
         # True when either of two independent conditions holds — either
-        # one alone means every watt is genuinely spoken for, whether or
-        # not the other agrees:
+        # one alone means every watt is genuinely spoken for:
         #
-        # 1. The actual, protected reservation (wallbox_reserved_kw) falls
-        #    short of the wallbox's true, uncapped target rate
-        #    (wallbox_target_kw) by more than WALLBOX_STARVED_RESERVED_RATIO
-        #    allows. Deliberately a direct reserved-vs-target ratio, not a
-        #    target-vs-available-surplus comparison — an earlier version
-        #    compared the target rate against available surplus instead,
-        #    which mostly worked but could still read "not starved" for a
-        #    stretch even with a large real shortfall, since that
-        #    comparison runs against a *smoothed* surplus figure that can
-        #    lag behind a declining trend. Comparing the reservation
-        #    directly to its own target sidesteps needing to correctly
-        #    model *why* the gap exists (available surplus, the smoothing
-        #    lag itself, or the wallbox's own max-charge cap all land on
-        #    the same outcome) — it only needs to measure the gap itself.
-        #    Confirmed live: target 7.1 kW, reservation capped at 2.8 kW
-        #    (39% of target), yet the previous comparison still read "not
-        #    starved," and Miner kept qualifying for genuine surplus that
-        #    was, in reality, already needed by the car.
+        # 1. The car has a real deadline deficit AND the surplus that
+        #    genuinely exists *before* the wallbox reservation
+        #    (available_surplus_excl_wallbox) can't cover the car's
+        #    deadline pace (wallbox_target_kw), short by more than
+        #    WALLBOX_STARVED_RESERVED_RATIO allows. wallbox_target_kw > 0
+        #    already encodes "car home, plugged in, below target, inside
+        #    the solar window, gross PV above the latch" — see
+        #    _wallbox_reserved_kw's gates.
+        #
+        #    Until v2.32.0 this compared the *reservation* against the
+        #    target (wallbox_reserved_kw < RATIO * wallbox_target_kw): the
+        #    reservation was itself capped to available surplus back then,
+        #    so it stood in for real surplus while sidestepping the
+        #    question of *why* the gap existed. Since v2.32.0 the
+        #    reservation equals wallbox_target_kw by construction (the
+        #    car's full pace is held unconditionally), so that form can
+        #    never be true — the comparison is now made directly against
+        #    real available surplus, which is exactly what the capped
+        #    reservation was a proxy for. The WALLBOX_RELIEF_CYCLES
+        #    debounce below absorbs the smoothing lag the old proxy form
+        #    was partly there to dodge.
+        #
+        #    No battery-charging carve-out here. From v2.28 to v2.32 this
+        #    branch was gated on "not battery_absorbing_on_track" — let the
+        #    cascade run off the headroom while the cellar battery is
+        #    comfortably on track to fill anyway. Explicit user decision
+        #    2026-09-10: a car at home and below target outranks that
+        #    headroom too. The cascade still gets the "battery on track
+        #    anyway" slack whenever the car doesn't need it — and then
+        #    wallbox_target_kw is already 0 (car away or at target) so this
+        #    branch is dead regardless. The house battery keeps its own
+        #    on-track relaxation separately (the battery_claim_kw block /
+        #    akku_ladung_reserviert_kw).
+        #
         # 2. The wallbox's real measured draw already exceeds what was
-        #    actually reserved for it, by more than could plausibly be
-        #    ordinary disagreement between two independent algorithms
-        #    (see WALLBOX_OVERDRAW_MARGIN_KW). The reservation only ever
-        #    protects up to its own calculated fair share — it has
-        #    nothing to say about a wallbox that isn't limiting itself to
-        #    that share at all (a manual override, for instance), which
-        #    condition 1 alone would miss entirely on a day the forecast
-        #    still comfortably covers the deficit on paper. Confirmed
-        #    live: exactly this case, a wallbox drawing 7.7 kW against a
-        #    4.0 kW reservation while share_needed was still comfortably
-        #    under 1 — condition 1 read false the whole time, and every
-        #    managed device kept running on the difference, drawn
-        #    straight from the battery.
-        #
-        # Either way: a device granted "on" below purely because the
-        # battery could afford it would draw power the inverter's own
-        # surplus-based wallbox charging would otherwise route to the
-        # car. "The battery can afford it" and "the wallbox doesn't need
-        # it more" are different questions; this flag answers the
-        # second one. See its use against battery_eligible_ids below.
-        #
-        # Exception to condition 1 only: while the house battery is still
-        # actively charging it has hardware priority ahead of both the
-        # wallbox and every managed device, so whatever it draws was
-        # never available to the wallbox regardless of the
-        # solar-minus-house math — smoothed_available_surplus_for_wallbox
-        # already subtracts battery_smoothed_charge_kw, which squeezes
-        # wallbox_reserved_kw toward 0 and makes the reserved-vs-target
-        # ratio read "starved" even though nothing the cascade could shed
-        # is the cause. As long as the battery is still going to comfortably
-        # reach its own daily target on its current charge rate, that
-        # squeeze resolves itself the moment the battery tapers, and
-        # treating the wallbox as starved meanwhile just folds its whole
-        # target into base_load below and force-empties battery_eligible_ids
-        # for a shortfall that isn't real. Confirmed live 2026-09-06: a
-        # 0.15 kW miner shed 07:26-09:06 through the entire morning PV ramp
-        # (solar 3.7 -> 8.6 kW, SOC 44% -> 100%, akku reservation 0
-        # throughout) purely because the battery's own charge kept
-        # wallbox_reserved_kw pinned near 0 and base_load pinned at
-        # wallbox_target + real base.
-        #
-        # Two ways in:
-        #  - battery_full_missing_kwh <= 0: already at the daily target, the
-        #    charge is just the last top-off toward 100% (export-clipped
-        #    shortly anyway).
-        #  - projected to finish with comfortable room to spare
-        #    (hours_needed <= BATTERY_ON_TRACK_COMFORT_FRACTION * hours
-        #    until the deadline). The fraction, not a bare "on track <=",
-        #    keeps a marginal day — where the raw on_track verdict itself
-        #    flips cycle to cycle around the boundary — on the strict
-        #    already-at-target path only, so the base_load branch and
-        #    battery_eligible_ids don't flap with it.
-        #
-        # Everything else stays intact: the direct
-        # `available_surplus -= battery_smoothed_charge_kw` further down
-        # still accounts for the charge in full; `_battery_would_still_
-        # reach_full` (surplus path) and _select_battery_optimal_set's own
-        # feasibility projection (battery path) still independently shed
-        # anything whose draw would actually tip the battery off track;
-        # battery_behind_schedule still fires — and re-empties
-        # battery_eligible_ids — the moment the battery does fall behind;
-        # and wallbox_starved re-engages with no debounce the moment the
-        # battery stops charging. Condition 2 (real overdraw) is
-        # deliberately left outside this exception — a car actually pulling
-        # more than its reservation is a genuine signal whatever the
-        # battery is doing.
-        battery_absorbing_on_track = data.battery_full_projection_applies and (
-            data.battery_smoothed_charge_kw > BATTERY_FULL_PROJECTION_MIN_CHARGE_KW
-        ) and (
-            data.battery_full_missing_kwh <= 0.0
-            or (
-                data.battery_full_hours_needed is not None
-                and data.battery_full_hours_until_deadline is not None
-                and data.battery_full_hours_needed
-                <= BATTERY_ON_TRACK_COMFORT_FRACTION
-                * data.battery_full_hours_until_deadline
-            )
-        )
+        #    actually reserved for it, by more than plausible disagreement
+        #    between two independent algorithms (WALLBOX_OVERDRAW_MARGIN_KW)
+        #    — a manual override, or the companion charge scheduler pulling
+        #    grid power on a cheap slot. Stays live at any hour, window or
+        #    not: a car actually pulling more than its reservation is a
+        #    genuine signal whatever the house battery is doing.
         wallbox_starved = (
-            not battery_absorbing_on_track
-            and data.wallbox_target_kw > 0.0
-            and wallbox_reserved_kw < WALLBOX_STARVED_RESERVED_RATIO * data.wallbox_target_kw
+            data.wallbox_target_kw > 0.0
+            and available_surplus_excl_wallbox
+            < WALLBOX_STARVED_RESERVED_RATIO * data.wallbox_target_kw
         ) or (wallbox_power_kw > wallbox_reserved_kw + WALLBOX_OVERDRAW_MARGIN_KW)
         # Debounced: takes effect on the very first starved cycle (never
         # delay protecting the wallbox), but only releases once
