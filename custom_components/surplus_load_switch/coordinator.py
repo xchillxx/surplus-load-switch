@@ -82,6 +82,7 @@ from .const import (
     MAX_BATTERY_OPTIMIZATION_DEVICES,
     MIN_RUNTIME_FORCE_AFTER_HOUR,
     FORCE_RUNTIME_FORECAST_SHARE_MAX,
+    FORCE_RUNTIME_STABLE_ON_CYCLES,
     MIN_RUNTIME_FORCE_BUFFER_H,
     MIN_SAMPLES_FOR_MEASURED_AVG,
     OFF_CYCLES_FLOOR,
@@ -3343,7 +3344,14 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 battery_would_last = device_id in battery_eligible_ids
             is_climate_dev = dev.get(CONF_DEVICE_IS_CLIMATE, False)
             required_off_cycles = self._required_off_cycles(data, priority_rank, is_climate_dev)
-            stable_on_cycles = self._stable_on_cycles_for(dev)
+            # A forced minimum-runtime engagement is a deterministic
+            # schedule decision, not a noisy surplus reading — it doesn't
+            # need the full anti-flicker confirmation window. See
+            # FORCE_RUNTIME_STABLE_ON_CYCLES.
+            stable_on_cycles = (
+                FORCE_RUNTIME_STABLE_ON_CYCLES if force_runtime
+                else self._stable_on_cycles_for(dev)
+            )
             diag.required_off_cycles = required_off_cycles
             diag.required_on_cycles = stable_on_cycles
 
@@ -3377,10 +3385,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # EXPORT_CORROBORATION_MARGIN_KW. Never sheds an already-on
             # device (its draw is already in the meter reading); only
             # blocks a fresh turn-on. At night / no export sensor this is
-            # always False.
+            # always False. Same SOC override as the battery-path export
+            # gate above (EXPORT_GATE_SOC_OVERRIDE): once the house battery
+            # is effectively full it can't be the thing silently absorbing
+            # the modelled surplus, so the meter reading and the model can
+            # no longer disagree for that reason — the corroboration
+            # requirement has nothing left to protect against.
             export_uncorroborated = (
                 data.export_sensor_configured
                 and data.battery_full_projection_applies
+                and data.soc < EXPORT_GATE_SOC_OVERRIDE
                 and not is_on
                 and (
                     data.export_smoothed_kw - cumulative_export_committed

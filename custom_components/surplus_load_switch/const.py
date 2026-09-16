@@ -333,6 +333,15 @@ STABLE_ON_CYCLES = _minutes_to_cycles(10)   # 10 min before turning ON
 STABLE_OFF_CYCLES = _minutes_to_cycles(10)  # 10 min minimum — used when there's no battery margin to spare
 STABLE_OFF_CYCLES_MAX = _minutes_to_cycles(20)  # 20 min — used when margin is comfortable
 
+# A forced minimum-runtime engagement (force_runtime True) isn't a marginal,
+# noisy surplus reading that needs 10 minutes of confirmation before it can
+# be trusted — it's a deterministic schedule decision (this price slot was
+# already chosen as one of the day's cheapest). Stretching a chosen cheap
+# slot's actual start by up to STABLE_ON_CYCLES eats into the very runtime
+# the price optimization was trying to capture. Kept above 0 anyway, purely
+# to absorb a single stray cycle rather than reacting to every reading.
+FORCE_RUNTIME_STABLE_ON_CYCLES = _minutes_to_cycles(2)  # 2 min before turning ON when forced
+
 # A compressor (heat pump, AC) wears measurably faster from short-cycling
 # than from running the same total hours in fewer, longer cycles — the
 # same surplus-chasing responsiveness that's fine for a resistive load
