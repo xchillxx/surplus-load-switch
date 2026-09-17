@@ -525,21 +525,6 @@ EXPORT_GATE_RELEASE_KW = 0.05
 EXPORT_GATE_MEDIAN_WINDOW = 3
 EXPORT_GATE_SOC_OVERRIDE = 99.0
 
-# v2.37: a device may only be *switched on* via the modelled-surplus path
-# (`remaining_surplus > need`) while the meter also shows the household is
-# really exporting at least that device's own draw (minus what devices
-# already granted this cycle have claimed from the same reading). The
-# modelled surplus can briefly read strongly positive when the wallbox
-# reservation lags a gross-PV upswing — confirmed live 2026-09-10, a
-# broken-cloud day: "Überschuss" spiking to +7 kW while the Tibber meter
-# showed ~0.5 kW real feed-in (the car was ramping up and taking the
-# rest), the whole low-priority cascade switching fully on, then off
-# again a few minutes later. Only enforced while battery_full_projection_
-# applies (daytime) and an export sensor is configured; an already-on
-# device is never shed by this (its own draw is already in the meter
-# reading) — it only blocks a fresh turn-on.
-EXPORT_CORROBORATION_MARGIN_KW = 0.0
-
 # Default monthly solar offsets (hours after sunrise until PV is useful)
 DEFAULT_SOLAR_OFFSETS = [3.5, 3.0, 2.5, 2.0, 2.0, 2.2, 2.2, 2.0, 2.5, 3.0, 3.5, 4.0]
 

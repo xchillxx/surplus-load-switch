@@ -72,7 +72,6 @@ from .const import (
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
     DOMAIN,
-    EXPORT_CORROBORATION_MARGIN_KW,
     EXPORT_GATE_MEDIAN_WINDOW,
     EXPORT_GATE_MIN_KW,
     EXPORT_GATE_RELEASE_KW,
@@ -2836,15 +2835,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # cumulative_committed above; kept separate since this one only
         # ever grows from surplus-path grants (battery_would_last is
         # already covered by the reactive battery_eligible_ids gate, and
-        # force_runtime is exempt everywhere).
-        cumulative_battery_competing_draw = 0.0
-        # v2.37: predicted draw of every device turned on via the modelled-
-        # surplus path *this cycle that wasn't already on* — subtracted
-        # from the export-meter reading before the next device's turn-on
-        # is corroborated against it, so a single positive meter reading
-        # isn't spent by several devices at once. Already-on devices are
-        # left out: their draw is already reflected in the meter.
-        cumulative_export_committed = 0.0
+        # force_runtime is exempt everywhere). Seeded with the wallbox's
+        # own reservation (v2.39), not 0 — a car that still wants power is
+        # a prior claim on the battery's charge rate too, worst-case, the
+        # same way _battery_would_still_reach_full already treats every
+        # device's draw: whether or not the wallbox is drawing that
+        # reservation *yet*, the projection assumes it will.
+        cumulative_battery_competing_draw = data.wallbox_reserved_kw
         now_dt = dt_util.utcnow()
         horizon_end = now_dt + timedelta(hours=data.effective_h_to_solar + BATT_OK_BUFFER_H)
 
@@ -3371,42 +3368,32 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # surplus path only (see should_on/should_off below) —
             # battery_would_last is already fully covered by the
             # reactive gate.
+            # Worst-case, not an exact simulation (see
+            # _battery_would_still_reach_full): assumes this device's whole
+            # draw, on top of the wallbox's reservation and whatever
+            # higher-priority devices already claimed this cycle
+            # (cumulative_battery_competing_draw, seeded with
+            # wallbox_reserved_kw above), comes straight out of the
+            # battery's own charge rate — never out of some separate pool
+            # of "free" surplus that doesn't affect the battery either way.
+            # That makes this the sole gate the surplus path needs. v2.37
+            # had additionally required the grid meter to show a real
+            # feed-in before a fresh turn-on, to catch cases where
+            # `remaining_surplus` read positive only because the wallbox's
+            # reservation was modelled too low, not because power was
+            # genuinely spare — v2.39 removes that on top of this check:
+            # with the wallbox's reservation now counted here directly, a
+            # device that passes this check isn't taking anything the
+            # wallbox needed or the battery couldn't spare, independent of
+            # what the grid meter shows at this exact moment.
             would_delay_battery_full = not self._battery_would_still_reach_full(
                 data, cumulative_battery_competing_draw + predicted_power
-            )
-            # v2.37: while an export sensor is configured and the sun is up,
-            # a device may only be *switched on* via the modelled-surplus
-            # path if the meter also shows a real feed-in that covers its
-            # own draw (minus what devices turned on earlier this cycle
-            # have already claimed from the same reading). The modelled
-            # `remaining_surplus` can read strongly positive for a few
-            # cycles when the wallbox reservation lags a gross-PV upswing,
-            # while almost nothing is actually leaving the house — see
-            # EXPORT_CORROBORATION_MARGIN_KW. Never sheds an already-on
-            # device (its draw is already in the meter reading); only
-            # blocks a fresh turn-on. At night / no export sensor this is
-            # always False. Same SOC override as the battery-path export
-            # gate above (EXPORT_GATE_SOC_OVERRIDE): once the house battery
-            # is effectively full it can't be the thing silently absorbing
-            # the modelled surplus, so the meter reading and the model can
-            # no longer disagree for that reason — the corroboration
-            # requirement has nothing left to protect against.
-            export_uncorroborated = (
-                data.export_sensor_configured
-                and data.battery_full_projection_applies
-                and data.soc < EXPORT_GATE_SOC_OVERRIDE
-                and not is_on
-                and (
-                    data.export_smoothed_kw - cumulative_export_committed
-                    < predicted_power + EXPORT_CORROBORATION_MARGIN_KW
-                )
             )
             should_on = (
                 force_runtime
                 or (
                     remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD
                     and not would_delay_battery_full
-                    and not export_uncorroborated
                 )
                 or battery_would_last
             )
@@ -3491,17 +3478,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                         f"{predicted_power:.2f} kW benötigt, Akku würde nicht bis Solar-Start reichen)"
                     )
                 await self._log_decision(dev, False, decision_titel, decision_reason)
-            elif export_uncorroborated and remaining_surplus > predicted_power + SURPLUS_ON_THRESHOLD:
-                # Modelled surplus would switch this on, but the meter
-                # doesn't back it up yet — held, not switched, so the log
-                # doesn't read as a plain hysteresis hold.
-                await self._log_decision(
-                    dev, False, "Wartet — keine echte Einspeisung",
-                    f"rechnerischer Überschuss reichte ({remaining_surplus:.2f} kW), aber es "
-                    f"wird nur {max(data.export_smoothed_kw - cumulative_export_committed, 0.0):.2f} "
-                    f"kW wirklich eingespeist ({predicted_power:.2f} kW nötig) — noch nicht "
-                    f"eingeschaltet",
-                )
             else:
                 stable_titel = "Bleibt an — Hysterese" if is_on else "Bleibt aus — Hysterese"
                 decision_reason = (
@@ -3527,13 +3503,6 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 # what's already been committed ahead of it, not just its
                 # own isolated draw in a vacuum.
                 cumulative_battery_competing_draw += predicted_power
-                # A device turned on this cycle that wasn't already on will
-                # start drawing from real export the moment it switches —
-                # so the next device's export-corroboration check must see
-                # that reduced headroom, not the raw meter reading (which
-                # still reflects a moment before this one came on).
-                if not is_on:
-                    cumulative_export_committed += predicted_power
 
             if should_on and not is_on:
                 # Capped rather than incremented without bound: once
