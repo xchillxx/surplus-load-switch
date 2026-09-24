@@ -76,6 +76,12 @@ cloud passes over or another appliance briefly kicks in.
   until a given combination has enough daily samples of its own.
   Diagnostic only for now — visible on the "Lastprofil Wochentag/Modus"
   sensor's attributes — doesn't yet feed into any switching decision.
+  Since v2.40.0: the daytime "Zuhause" mode is no longer learned (spike-
+  dominated, no pattern); samples are skipped while the wallbox charges
+  and for 10 minutes afterwards; per-hour and cross-day values use the
+  median. Optionally add a heat-pump power sensor and an outdoor
+  temperature sensor: the heat pump is then subtracted from the profile
+  and learned separately per temperature band (mean, since it cycles).
 - **Spike-resistant** — the battery-margin projection uses a 20-minute
   rolling median of the discharge rate, so a stove or kettle running for a
   few minutes doesn't get projected forward as if it continued all night.

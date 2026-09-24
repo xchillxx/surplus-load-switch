@@ -33,6 +33,11 @@ CONF_SOLAR_OFFSETS = "solar_offsets"
 # weekday/hour/mode load-profile learner (see load_profile.py). Left
 # unset, the learner and its diagnostic sensor simply don't run.
 CONF_HAUSMODUS_ENTITY = "hausmodus_entity"
+# Optional, load-profile learner only: the heat pump's electrical power
+# (subtracted from the learned house base and recorded separately per
+# outdoor-temperature band) and an outdoor temperature sensor.
+CONF_HEATPUMP_POWER_SENSOR = "heatpump_power_sensor"
+CONF_OUTDOOR_TEMP_SENSOR = "outdoor_temp_sensor"
 # Optional: a sensor reporting the forecast kWh still expected to arrive
 # today (e.g. Forecast.Solar's "Geschätzte Energieerzeugung – Resttag
 # heute" / sensor.energy_production_today_remaining) — lets
@@ -401,6 +406,15 @@ LOAD_PROFILE_TRAILING_SAMPLES = 4
 # load_profile.py's fallback hierarchy) — an average built from a single
 # day is just that one day, not a real pattern yet.
 LOAD_PROFILE_MIN_SAMPLES = 2
+# Modes whose load is not learned at all (and whose already-stored data is
+# dropped on load): daytime "Zuhause" is dominated by unpredictable spikes.
+LOAD_PROFILE_EXCLUDED_MODES = ("Zuhause",)
+# Wallbox draw above this (kW) keeps the sample out of the profile, and for
+# this many minutes afterwards (cross-source cloud polling lag).
+LOAD_PROFILE_WALLBOX_MIN_KW = 0.05
+LOAD_PROFILE_WALLBOX_COOLDOWN_MIN = 10
+# Outdoor-temperature band edges (°C) for the heat-pump profile.
+LOAD_PROFILE_TEMP_BANDS = (0.0, 5.0, 10.0, 15.0)
 
 # How long to keep using the pre-transition managed-power figure for
 # base_load AND battery-discharge attribution after a managed device's

@@ -31,6 +31,8 @@ from .const import (
     CONF_DEVICE_WINDOW_START,
     CONF_EXPORT_POWER_SENSOR,
     CONF_HAUSMODUS_ENTITY,
+    CONF_HEATPUMP_POWER_SENSOR,
+    CONF_OUTDOOR_TEMP_SENSOR,
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
     CONF_SOC_SENSOR,
@@ -79,6 +81,16 @@ def _global_settings_schema(defaults: dict | None = None) -> vol.Schema:
             CONF_HAUSMODUS_ENTITY, **_default(d, CONF_HAUSMODUS_ENTITY)
         ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain=["input_select", "select"])
+        ),
+        vol.Optional(
+            CONF_HEATPUMP_POWER_SENSOR, **_default(d, CONF_HEATPUMP_POWER_SENSOR)
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="power")
+        ),
+        vol.Optional(
+            CONF_OUTDOOR_TEMP_SENSOR, **_default(d, CONF_OUTDOOR_TEMP_SENSOR)
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
         ),
         vol.Optional(
             CONF_SOLAR_FORECAST_REMAINING_ENTITY, **_default(d, CONF_SOLAR_FORECAST_REMAINING_ENTITY)

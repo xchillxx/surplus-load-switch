@@ -12,6 +12,8 @@
           "battery_capacity_kwh": "Akku-Kapazität (kWh)",
           "min_soc": "Mindest-SOC (%)",
           "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)",
+          "heatpump_power_sensor": "Wärmepumpen-Leistungssensor (optional, W/kW) — nur Lastprofil-Lerner (Diagnose): die WP-Last wird aus der gelernten Haus-Grundlast herausgerechnet und separat je Außentemperatur erfasst",
+          "outdoor_temp_sensor": "Außentemperatur-Sensor (optional, °C) — nur Lastprofil-Lerner: Temperaturbänder für das Wärmepumpen-Profil",
           "solar_forecast_remaining_entity": "PV-Prognose Resttag heute (optional, kWh, z.B. Forecast.Solar) — lässt die Wallbox-Reservierung dem tatsächlichen Tagesverlauf der Sonne folgen statt einem flachen Zeitdurchschnitt",
           "export_power_sensor": "Einspeise-Leistungssensor (optional, W/kW, z.B. Tibber Pulse) — der Akku-Pfad (Gerät läuft nur weil der Hausakku es sich leisten könnte) bleibt dann nur offen, solange wirklich ins Netz eingespeist wird"
         }
@@ -154,6 +156,8 @@
           "battery_capacity_kwh": "Akku-Kapazität (kWh)",
           "min_soc": "Mindest-SOC (%)",
           "hausmodus_entity": "Hausmodus-Helfer (optional, z.B. ein input_select) — aktiviert den Wochentag/Stunde/Modus-Lastprofil-Lerner (nur Diagnose, beeinflusst noch keine Schaltentscheidung)",
+          "heatpump_power_sensor": "Wärmepumpen-Leistungssensor (optional, W/kW) — nur Lastprofil-Lerner (Diagnose): die WP-Last wird aus der gelernten Haus-Grundlast herausgerechnet und separat je Außentemperatur erfasst",
+          "outdoor_temp_sensor": "Außentemperatur-Sensor (optional, °C) — nur Lastprofil-Lerner: Temperaturbänder für das Wärmepumpen-Profil",
           "solar_forecast_remaining_entity": "PV-Prognose Resttag heute (optional, kWh, z.B. Forecast.Solar) — lässt die Wallbox-Reservierung dem tatsächlichen Tagesverlauf der Sonne folgen statt einem flachen Zeitdurchschnitt",
           "export_power_sensor": "Einspeise-Leistungssensor (optional, W/kW, z.B. Tibber Pulse) — der Akku-Pfad (Gerät läuft nur weil der Hausakku es sich leisten könnte) bleibt dann nur offen, solange wirklich ins Netz eingespeist wird"
         }

@@ -53,6 +53,8 @@ from .const import (
     CONF_DEVICE_WINDOW_START,
     CONF_EXPORT_POWER_SENSOR,
     CONF_HAUSMODUS_ENTITY,
+    CONF_HEATPUMP_POWER_SENSOR,
+    CONF_OUTDOOR_TEMP_SENSOR,
     CONF_LOAD_SENSOR,
     CONF_MIN_SOC,
     CONF_SOC_SENSOR,
@@ -2740,7 +2742,26 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             if hausmodus_state is not None and hausmodus_state.state not in ("unavailable", "unknown")
             else None
         )
-        self._load_profile_learner.record(base_load, hausmodus)
+        # base_load_excl_wallbox, not base_load: the latter adds the
+        # wallbox's draw back in while it is "starved", which would put
+        # charging sessions into the profile.
+        heatpump_entity = self._config.get(CONF_HEATPUMP_POWER_SENSOR)
+        heatpump_state = self.hass.states.get(heatpump_entity) if heatpump_entity else None
+        heatpump_kw = (
+            self._get_power_kw(heatpump_entity)
+            if heatpump_state is not None
+            and heatpump_state.state not in ("unavailable", "unknown", "")
+            else None
+        )
+        temp_entity = self._config.get(CONF_OUTDOOR_TEMP_SENSOR)
+        temp_state = self.hass.states.get(temp_entity) if temp_entity else None
+        try:
+            outdoor_temp_c = float(temp_state.state) if temp_state is not None else None
+        except ValueError:
+            outdoor_temp_c = None
+        self._load_profile_learner.record(
+            base_load_excl_wallbox, hausmodus, wallbox_power_kw, heatpump_kw, outdoor_temp_c
+        )
         data.load_profile = self._load_profile_learner.diagnostics
 
         # Computed once per cycle, not per dependent device — several
