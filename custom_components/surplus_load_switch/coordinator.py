@@ -102,6 +102,7 @@ from .const import (
     WALLBOX_MIN_PV_FOR_RESERVATION_KW,
     WALLBOX_MIN_PV_HYSTERESIS_KW,
     WALLBOX_OVERDRAW_MARGIN_KW,
+    WALLBOX_RESERVATION_POST_SUNSET_H,
     WALLBOX_PV_GATE_RELEASE_CYCLES,
     WALLBOX_RELIEF_CYCLES,
     WALLBOX_STARVED_RESERVED_RATIO,
@@ -1279,6 +1280,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # keep reserving right up to sunset; the 2h margin lives in the
         # rate, not this gate.
         if not self._solar_generation_window_active(now, buffer_h=0.0):
+            held = self._wallbox_post_sunset_hold(wallbox_id, wallbox_dev, now)
+            if held is not None:
+                return held
             self._wallbox_target_rate_kw[wallbox_id] = 0.0
             return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
@@ -1321,20 +1325,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # tell "genuinely needs to charge" apart from "not here to charge
         # at all" — confirmed live: SOC below target while away held back
         # real surplus for hours with nothing to actually use it.
-        present_entity = wallbox_dev.get(CONF_WALLBOX_PRESENT_ENTITY)
-        if present_entity:
-            present_state = self.hass.states.get(present_entity)
-            # "Present" is an allowlist ("on" for a binary_sensor, "home"
-            # for a device_tracker/person), not a denylist of specific
-            # away-values — a device_tracker's state is the name of
-            # whichever zone it's currently in, and a *named* zone other
-            # than home (e.g. "Arbeit") is just as much "not here" as the
-            # generic "not_home" state is, but wasn't being recognized as
-            # such. Confirmed live: the reservation kept claiming surplus
-            # for hours after the car left for a zone called "Arbeit".
-            if present_state is None or present_state.state not in ("on", "home"):
-                self._wallbox_target_rate_kw[wallbox_id] = 0.0
-                return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
+        if not self._wallbox_car_present(wallbox_dev):
+            self._wallbox_target_rate_kw[wallbox_id] = 0.0
+            return self._wallbox_remember_reserved(wallbox_id, now, 0.0)
 
         # Priority: a manually-entered fixed number always wins if set;
         # otherwise an external entity (e.g. a companion charge-scheduler
@@ -1393,6 +1386,49 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             target_rate_kw = min(target_rate_kw, max_charge_kw)
         self._wallbox_target_rate_kw[wallbox_id] = target_rate_kw
         return self._wallbox_remember_reserved(wallbox_id, now, target_rate_kw)
+
+    def _wallbox_car_present(self, wallbox_dev: dict) -> bool:
+        """Whether the car counts as home. No presence entity configured
+        means "assume present"."""
+        present_entity = wallbox_dev.get(CONF_WALLBOX_PRESENT_ENTITY)
+        if not present_entity:
+            return True
+        present_state = self.hass.states.get(present_entity)
+        # "Present" is an allowlist ("on" for a binary_sensor, "home"
+        # for a device_tracker/person), not a denylist of specific
+        # away-values — a device_tracker's state is the name of
+        # whichever zone it's currently in, and a *named* zone other
+        # than home (e.g. "Arbeit") is just as much "not here" as the
+        # generic "not_home" state is, but wasn't being recognized as
+        # such. Confirmed live: the reservation kept claiming surplus
+        # for hours after the car left for a zone called "Arbeit".
+        return present_state is not None and present_state.state in ("on", "home")
+
+    def _wallbox_post_sunset_hold(
+        self, wallbox_id: str, wallbox_dev: dict, now: datetime
+    ) -> float | None:
+        """Keeps the last pre-sunset reservation for
+        WALLBOX_RESERVATION_POST_SUNSET_H after the solar window closed,
+        so the battery path doesn't open the very minute the sun sets
+        (confirmed live 2026-09-25: reservation 10.5 -> 0 at sunset, pool
+        pump and miner switched on at 19:09 on "battery reaches solar
+        start" and were off again 10 minutes later at the export gate).
+        Frozen, not recomputed: neither the solar window nor the PV gate
+        applies here, and the deadline rate would already point at
+        tomorrow's sunset. Nothing is remembered while holding, so
+        _wallbox_last_good_at keeps marking when the window closed, which
+        is also what ends the hold. Returns None (= no hold, reservation
+        0 as before) if nothing was reserved right before, the hold has
+        run out, or the car isn't home."""
+        last_value = self._wallbox_last_good_reserved_kw.get(wallbox_id)
+        last_at = self._wallbox_last_good_at.get(wallbox_id)
+        if not last_value or last_at is None:
+            return None
+        if now - last_at > timedelta(hours=WALLBOX_RESERVATION_POST_SUNSET_H) + CORE_SENSOR_GRACE_PERIOD:
+            return None
+        if not self._wallbox_car_present(wallbox_dev):
+            return None
+        return last_value
 
     def _wallbox_remember_reserved(self, wallbox_id: str, now: datetime, value: float) -> float:
         """Stash a genuinely-computed _wallbox_reserved_kw result (real

@@ -193,6 +193,10 @@ WALLBOX_TARGET_TIME_BUFFER_H = 2.0
 # number. Reserving hard for the last stretch is correct; reserving an
 # absurd number isn't.
 WALLBOX_TARGET_MIN_HOURS = 0.25
+# How long the last pre-sunset wallbox reservation keeps holding after the
+# sun has set (see coordinator._wallbox_post_sunset_hold). Without it the
+# reservation fell to 0 at sunset and the battery path opened at once.
+WALLBOX_RESERVATION_POST_SUNSET_H = 1.0
 # The dynamic wallbox reservation stays at 0 while *gross* PV production
 # is below this. At that little generation the car's charger can't hold a
 # charge at all (a single-phase EVSE needs ~1.4 kW, three-phase far
