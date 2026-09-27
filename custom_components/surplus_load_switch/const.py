@@ -177,6 +177,16 @@ CONF_DEVICE_ENABLED = "enabled"
 SURPLUS_ON_THRESHOLD = 0.2    # kW: turn on when surplus > this
 SURPLUS_OFF_THRESHOLD = -0.2  # kW: turn off when surplus < this
 BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
+# How many consecutive cycles a raw batt_ok crossing (h_battery vs.
+# effective_h_to_solar + BATT_OK_BUFFER_H) must persist before the value
+# actually used (Modus sensor, and the battery_eligible_ids drop-side
+# debounce gate — see _update_batt_ok_latch in coordinator.py) flips.
+# Without this, a discharge rate hovering right at the threshold (e.g. a
+# wallbox repeatedly suspending/resuming at dusk) flips batt_ok every few
+# cycles — and each flip to False resets the drop-side debounce that
+# exists specifically to absorb this kind of noise, defeating it entirely.
+# 10 min comfortably exceeds the ~5 min oscillation period seen live.
+BATT_OK_FLIP_DWELL_CYCLES = _minutes_to_cycles(10)
 # Below this, a wallbox counts as "not really charging" for
 # _wallbox_satisfied's idle-release check — low enough that a genuinely
 # charging car is never mistaken for an idle one.

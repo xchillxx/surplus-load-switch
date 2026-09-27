@@ -28,6 +28,7 @@ from .const import (
     BATTERY_FULL_TARGET_TIME_BUFFER_H,
     BATTERY_ON_TRACK_COMFORT_FRACTION,
     BATT_OK_BUFFER_H,
+    BATT_OK_FLIP_DWELL_CYCLES,
     CALIBRATION_INTERVAL_HOURS,
     CHARGE_RATE_RAMP_LOOKBACK,
     CLIMATE_STABILITY_MULTIPLIER,
@@ -372,6 +373,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # many consecutive cycles it has been dropped. See _evaluate_devices.
         self._debounced_battery_eligible_ids: frozenset[str] = frozenset()
         self._battery_eligible_off_counter: dict[str, int] = {}
+        # Dwell latch on batt_ok itself (see _update_batt_ok_latch) — batt_ok
+        # feeds the Modus sensor directly and gates whether the drop-side
+        # debounce above even applies, so if batt_ok itself flips on every
+        # noisy h_battery reading, that whole debounce gets reset on every
+        # such flip and never actually protects anything. Starts False
+        # (fail toward "don't yet trust the battery") until the first
+        # cycle's own _update_batt_ok_latch call establishes a real value.
+        self._batt_ok_latched: bool = False
+        self._batt_ok_flip_counter: int = 0
         # Rolling window + hysteresis latch for the battery-path export
         # gate (see CONF_EXPORT_POWER_SENSOR / EXPORT_GATE_MIN_KW). Starts
         # closed: with no reading yet there's no proof of export, and the
@@ -1857,6 +1867,40 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             return round(STABLE_ON_CYCLES * CLIMATE_STABILITY_MULTIPLIER)
         return STABLE_ON_CYCLES
 
+    def _update_batt_ok_latch(self, raw: bool) -> bool:
+        """Dwell-latches batt_ok against BATT_OK_FLIP_DWELL_CYCLES so a
+        raw h_battery/threshold crossing has to persist, not just occur
+        once, before the value actually used (Modus sensor, and next
+        cycle's provisional value for the battery_eligible_ids drop-side
+        debounce gate) flips.
+
+        Confirmed live 2026-09-26: with no latch at all, h_battery hovered
+        right at the effective_h_to_solar+buffer edge for two hours at
+        dusk (Tesla wallbox suspending/resuming, tapering solar) and
+        batt_ok flipped every few cycles. Each flip to False cleared
+        _battery_eligible_off_counter (see _evaluate_devices) — the very
+        debounce meant to absorb exactly this kind of noise — so the
+        cascade re-derived battery_eligible_ids from scratch on every
+        flip, and the pool pump and miner relays cycled on/off roughly
+        every 13-15 minutes for two hours straight.
+
+        Symmetric (unlike the drop-side relief above, which is
+        deliberately asymmetric): a real, sustained low-battery shed
+        still only takes BATT_OK_FLIP_DWELL_CYCLES to engage, not
+        instantly — comfort-device relay wear from flapping matters more
+        here than shedding a few minutes later, since a genuine deficit
+        was already going to be caught by the (much faster) per-device
+        should_off thresholds regardless of what batt_ok itself reads.
+        """
+        if raw == self._batt_ok_latched:
+            self._batt_ok_flip_counter = 0
+            return self._batt_ok_latched
+        self._batt_ok_flip_counter += 1
+        if self._batt_ok_flip_counter >= BATT_OK_FLIP_DWELL_CYCLES:
+            self._batt_ok_latched = raw
+            self._batt_ok_flip_counter = 0
+        return self._batt_ok_latched
+
     def _get_solar_start(self) -> datetime:
         sun = self.hass.states.get("sun.sun")
         configured_defaults = self._config.get(CONF_SOLAR_OFFSETS, DEFAULT_SOLAR_OFFSETS)
@@ -2086,7 +2130,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             or smoothed_charge > BATTERY_FULL_PROJECTION_MIN_CHARGE_KW
         )
 
-        batt_ok = h_battery > (effective_h_to_solar + BATT_OK_BUFFER_H) and soc > min_soc
+        # Provisional value for this cycle's device loop (see
+        # _update_batt_ok_latch): the loop needs *a* batt_ok before the
+        # windowed, more accurate h_battery further below even exists, so
+        # it reads last cycle's settled/latched value rather than a fresh
+        # unlatched threshold check — h_battery moves gradually enough
+        # cycle-to-cycle (SOC barely changes in 60s) that this is a safe
+        # stand-in, and it means the debounce-enable gate below is
+        # governed by the same stable signal as the final Modus value
+        # instead of an independent, equally noisy one.
+        batt_ok = self._batt_ok_latched
 
         # Battery-path export gate: a device may only run *purely on
         # battery affordability* (not on modelled live surplus) while the
@@ -3632,6 +3685,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         data.h_battery = self._hours_until_depleted(
             committed_segments, now_dt, data.avail_kwh, base_discharge_kw, available_surplus
         )
-        data.batt_ok = (
+        batt_ok_raw = (
             data.h_battery > (data.effective_h_to_solar + BATT_OK_BUFFER_H) and data.soc > data.min_soc
         )
+        data.batt_ok = self._update_batt_ok_latch(batt_ok_raw)

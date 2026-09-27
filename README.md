@@ -82,6 +82,14 @@ cloud passes over or another appliance briefly kicks in.
   median. Optionally add a heat-pump power sensor and an outdoor
   temperature sensor: the heat pump is then subtracted from the profile
   and learned separately per temperature band (mean, since it cycles).
+- **batt_ok dwell latch (v2.42.0)** — the h_battery/effective_h_to_solar
+  threshold that drives the Modus sensor and gates the battery_eligible_ids
+  drop-side debounce is itself latched: a raw crossing must persist for
+  BATT_OK_FLIP_DWELL_CYCLES (10 min) before the used value flips. Fixes a
+  case where a discharge rate hovering right at the threshold (a wallbox
+  repeatedly suspending/resuming at dusk) flipped batt_ok every few cycles,
+  each flip clearing the very debounce meant to absorb that noise, cycling
+  the pool pump and miner on/off roughly every 13-15 minutes for two hours.
 - **Spike-resistant** — the battery-margin projection uses a 20-minute
   rolling median of the discharge rate, so a stove or kettle running for a
   few minutes doesn't get projected forward as if it continued all night.
