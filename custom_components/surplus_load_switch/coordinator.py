@@ -3632,6 +3632,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                         f"eingespeist ({data.export_smoothed_kw:.2f} kW) — der Akku-Pfad bleibt "
                         f"zu, weil der Strom sonst nicht übrig wäre"
                     )
+                elif data.daily_budget_sensor_configured and not data.daily_budget_gate_open:
+                    decision_titel = "Ausschalten — Tagesbudget negativ"
+                    decision_reason = (
+                        f"Überschuss reicht nicht ({remaining_surplus:.2f} kW verfügbar, "
+                        f"{predicted_power:.2f} kW benötigt) und der Vorab-Tagescheck zeigt "
+                        f"{data.daily_budget_kwh:.2f} kWh — der heutige Forecast deckt Grundlast, "
+                        f"Mindestlaufzeiten und die volle Akku-Ladung schon nicht, der Akku-Pfad "
+                        f"bleibt deshalb über Nacht zu"
+                    )
                 elif would_delay_battery_full:
                     decision_titel = "Ausschalten — Akku würde nicht rechtzeitig voll"
                     decision_reason = (
