@@ -15,7 +15,8 @@
           "heatpump_power_sensor": "Heat-pump power sensor (optional, W/kW) — load-profile learner only (diagnostic): its draw is subtracted from the learned house base and recorded separately per outdoor temperature",
           "outdoor_temp_sensor": "Outdoor temperature sensor (optional, °C) — load-profile learner only: temperature bands for the heat-pump profile",
           "solar_forecast_remaining_entity": "PV forecast — remaining today (optional, kWh, e.g. Forecast.Solar) — lets the wallbox reservation follow the sun's actual daily curve instead of a flat time average",
-          "export_power_sensor": "Grid export power sensor (optional, W/kW, e.g. a Tibber Pulse feed-in reading) — the battery path (a device running only because the house battery could afford it) then stays open only while the meter shows a real feed-in"
+          "export_power_sensor": "Grid export power sensor (optional, W/kW, e.g. a Tibber Pulse feed-in reading) — the battery path (a device running only because the house battery could afford it) then stays open only while the meter shows a real feed-in",
+          "daily_budget_sensor": "Daily budget check sensor (optional, kWh) — negative means today's PV forecast already falls short of baseline load + every device's minimum runtime + filling the battery; the overnight battery path (a device running only because the house battery could afford it) then stays closed"
         }
       },
       "device_intro": {
@@ -159,7 +160,8 @@
           "heatpump_power_sensor": "Heat-pump power sensor (optional, W/kW) — load-profile learner only (diagnostic): its draw is subtracted from the learned house base and recorded separately per outdoor temperature",
           "outdoor_temp_sensor": "Outdoor temperature sensor (optional, °C) — load-profile learner only: temperature bands for the heat-pump profile",
           "solar_forecast_remaining_entity": "PV forecast — remaining today (optional, kWh, e.g. Forecast.Solar) — lets the wallbox reservation follow the sun's actual daily curve instead of a flat time average",
-          "export_power_sensor": "Grid export power sensor (optional, W/kW, e.g. a Tibber Pulse feed-in reading) — the battery path (a device running only because the house battery could afford it) then stays open only while the meter shows a real feed-in"
+          "export_power_sensor": "Grid export power sensor (optional, W/kW, e.g. a Tibber Pulse feed-in reading) — the battery path (a device running only because the house battery could afford it) then stays open only while the meter shows a real feed-in",
+          "daily_budget_sensor": "Daily budget check sensor (optional, kWh) — negative means today's PV forecast already falls short of baseline load + every device's minimum runtime + filling the battery; the overnight battery path (a device running only because the house battery could afford it) then stays closed"
         }
       },
       "add_climate_device": {

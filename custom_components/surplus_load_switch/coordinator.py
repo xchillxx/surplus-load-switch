@@ -52,6 +52,7 @@ from .const import (
     CONF_DEVICE_STOPS_OVERNIGHT,
     CONF_DEVICE_WINDOW_END,
     CONF_DEVICE_WINDOW_START,
+    CONF_DAILY_BUDGET_SENSOR,
     CONF_EXPORT_POWER_SENSOR,
     CONF_HAUSMODUS_ENTITY,
     CONF_HEATPUMP_POWER_SENSOR,
@@ -74,6 +75,8 @@ from .const import (
     DEFAULT_MAX_ASSUMED_RUNTIME_H,
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
+    DAILY_BUDGET_GATE_CLOSE_KWH,
+    DAILY_BUDGET_GATE_OPEN_KWH,
     DOMAIN,
     EXPORT_GATE_MEDIAN_WINDOW,
     EXPORT_GATE_MIN_KW,
@@ -278,6 +281,13 @@ class CoordinatorData:
     export_smoothed_kw: float = 0.0
     export_gate_open: bool = True
     export_sensor_configured: bool = False
+    # Overnight battery-path budget gate — see CONF_DAILY_BUDGET_SENSOR.
+    # daily_budget_gate_open stays True whenever no budget sensor is
+    # configured, or during the day (the export gate already covers the
+    # daytime case), so installs without one are unchanged.
+    daily_budget_kwh: float = 0.0
+    daily_budget_gate_open: bool = True
+    daily_budget_sensor_configured: bool = False
 
 
 class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
@@ -389,6 +399,13 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # restart is harmless and on the safe side.
         self._export_samples: deque[float] = deque(maxlen=EXPORT_GATE_MEDIAN_WINDOW)
         self._export_gate_open: bool = False
+        # Hysteresis latch for the overnight battery-path budget gate (see
+        # CONF_DAILY_BUDGET_SENSOR / DAILY_BUDGET_GATE_CLOSE_KWH). Starts
+        # closed for the same reason as _export_gate_open above: with no
+        # reading yet there's no proof the budget is fine, and the battery
+        # path staying shut for the first cycle or two after a restart is
+        # harmless and on the safe side.
+        self._daily_budget_gate_open: bool = False
         # Which managed devices were on as of the last cycle — used to
         # detect a composition change and reset the discharge smoothing
         # window when one happens (see _evaluate_devices).
@@ -2183,6 +2200,36 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             export_smoothed = 0.0
             export_gate_open = True
 
+        # Overnight battery-path budget gate: the export gate above is a
+        # *daytime* rule (real production falling short shows up in the
+        # meter within a cycle or two). Overnight and in the pre-dawn gap
+        # there's no meter signal to react to at all — battery_would_last
+        # only ever asks "does the battery last until solar start?", never
+        # "will today actually refill what I'm about to spend?". A device
+        # can happily cycle the battery all night on a day whose forecast
+        # already shows it won't earn that back. When a budget sensor is
+        # configured (see CONF_DAILY_BUDGET_SENSOR), the overnight battery
+        # path is only kept open while it reads non-negative — hysteresis-
+        # latched so a reading sitting right on zero doesn't toggle the
+        # whole low-priority cascade with it. Forced open during the day
+        # (battery_full_projection_applies) — that window is the export
+        # gate's job, not this one's. No sensor configured → always open.
+        budget_entity = self._config.get(CONF_DAILY_BUDGET_SENSOR)
+        budget_configured = bool(budget_entity)
+        budget_kwh = self._get_power_kw(budget_entity) if budget_configured else 0.0
+        if budget_configured:
+            if self._daily_budget_gate_open:
+                if budget_kwh < DAILY_BUDGET_GATE_CLOSE_KWH:
+                    self._daily_budget_gate_open = False
+            elif budget_kwh >= DAILY_BUDGET_GATE_OPEN_KWH:
+                self._daily_budget_gate_open = True
+            daily_budget_gate_open = (
+                battery_full_projection_applies
+                or self._daily_budget_gate_open
+            )
+        else:
+            daily_budget_gate_open = True
+
         data = CoordinatorData(
             solar_kw=solar,
             load_kw=load,
@@ -2216,6 +2263,9 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             export_smoothed_kw=export_smoothed,
             export_gate_open=export_gate_open,
             export_sensor_configured=export_configured,
+            daily_budget_kwh=budget_kwh,
+            daily_budget_gate_open=daily_budget_gate_open,
+            daily_budget_sensor_configured=budget_configured,
         )
 
         await self._evaluate_devices(data)
@@ -3083,6 +3133,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             wallbox_starved_effective
             or battery_behind_schedule_effective
             or not data.export_gate_open
+            or not data.daily_budget_gate_open
         ):
             # Every device below would run on battery, not on live
             # surplus, while either the wallbox is still short of what it
@@ -3098,10 +3149,17 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # needs more than is there). That last clause is a daytime rule
             # only — see export_gate_open in _async_update_data; at night
             # it reports True and the overnight "Akku reicht" path is
-            # unchanged. force_runtime devices are
-            # unaffected: they never go through battery_eligible_ids,
-            # they're already in mandatory_segments and win via their own
-            # should_on branch further down.
+            # unchanged there, EXCEPT when a daily-budget sensor is
+            # configured and reads negative (see CONF_DAILY_BUDGET_SENSOR
+            # / daily_budget_gate_open) — today's forecast already shows
+            # the essentials (baseline load, every device's minimum
+            # runtime, filling the battery) won't be covered, so spending
+            # battery overnight on a device that only runs because the
+            # battery could currently afford it just digs that hole
+            # deeper. force_runtime devices are unaffected: they never go
+            # through battery_eligible_ids, they're already in
+            # mandatory_segments and win via their own should_on branch
+            # further down.
             battery_eligible_ids = frozenset()
 
         # A device *re-joining* the set (wasn't eligible last cycle) must

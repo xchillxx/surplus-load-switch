@@ -19,6 +19,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     CLIMATE_HVAC_MODE_OPTIONS,
     CONF_BATT_SENSOR,
+    CONF_DAILY_BUDGET_SENSOR,
     CONF_DEVICES,
     CONF_DEVICE_CLIMATE_ENTITY,
     CONF_DEVICE_CLIMATE_ON_MODE,
@@ -57,6 +58,9 @@ async def async_setup_entry(
         PVGlobalSensorSelect(coordinator, entry, CONF_BATT_SENSOR, "Akku-Leistungssensor"),
         PVGlobalOptionalSensorSelect(
             coordinator, entry, CONF_EXPORT_POWER_SENSOR, "Einspeise-Leistungssensor"
+        ),
+        PVGlobalOptionalSensorSelect(
+            coordinator, entry, CONF_DAILY_BUDGET_SENSOR, "Vorab-Tagescheck-Sensor"
         ),
     ]
     devices = entry.data.get(CONF_DEVICES, [])

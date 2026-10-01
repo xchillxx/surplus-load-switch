@@ -148,6 +148,14 @@ class PVSurplusSensor(_PVSensorBase):
                 if d.export_sensor_configured
                 else {}
             ),
+            **(
+                {
+                    "tagesbudget_kwh": round(d.daily_budget_kwh, 3),
+                    "tagesbudget_gate_offen": d.daily_budget_gate_open,
+                }
+                if d.daily_budget_sensor_configured
+                else {}
+            ),
         }
 
 

@@ -62,6 +62,27 @@ CONF_SOLAR_FORECAST_REMAINING_ENTITY = "solar_forecast_remaining_entity"
 # battery path behaves exactly as before (gated only by the battery-full
 # projection).
 CONF_EXPORT_POWER_SENSOR = "export_power_sensor"
+# Optional: a sensor reporting today's remaining kWh budget *after*
+# subtracting the house's own baseline load, every device's configured
+# minimum-runtime commitment, and however much is still missing to bring
+# the house battery to full — i.e. what a user-built forecast/budget
+# sensor is for (solar forecast for today minus those three claims).
+# Negative means today's forecast doesn't even cover the non-negotiable
+# stuff, let alone leave anything for a device that only ever runs
+# because the battery could currently afford it. The export gate above
+# already covers the *daytime* version of "is this really spare?" (it
+# reacts within a cycle or two once real production falls short); this
+# sensor covers the gap that gate can't: the overnight/pre-dawn battery
+# path (battery_eligible_ids via battery_would_last) has no visibility
+# into tomorrow's forecast at all, so a device can spend the night
+# cycling the battery it could have used that same day trying to refill.
+# When configured, the battery path at night is only kept open while
+# this sensor reads non-negative (hysteresis-latched — see
+# DAILY_BUDGET_GATE_CLOSE_KWH/OPEN_KWH). Mirrors CONF_EXPORT_POWER_SENSOR
+# in every other respect: optional, no-op when unset, daytime behaviour
+# unaffected (battery_full_projection_applies forces this gate open then,
+# same as export_gate_open is forced open at night).
+CONF_DAILY_BUDGET_SENSOR = "daily_budget_sensor"
 
 # Config keys — per device
 CONF_DEVICES = "devices"
@@ -552,6 +573,16 @@ EXPORT_GATE_MIN_KW = 0.15
 EXPORT_GATE_RELEASE_KW = 0.05
 EXPORT_GATE_MEDIAN_WINDOW = 3
 EXPORT_GATE_SOC_OVERRIDE = 99.0
+
+# Overnight battery-path budget gate (see CONF_DAILY_BUDGET_SENSOR).
+# Hysteresis-latched the same way as the export gate above, but on the
+# budget sensor's own reading directly (it's already a derived/smoothed
+# figure, not raw per-second telemetry, so no extra median window is
+# needed here). OPEN_KWH sits a little above zero rather than right at
+# the close threshold so a budget sitting on the edge doesn't reopen the
+# instant it ticks up by a few Wh.
+DAILY_BUDGET_GATE_CLOSE_KWH = 0.0
+DAILY_BUDGET_GATE_OPEN_KWH = 1.0
 
 # Default monthly solar offsets (hours after sunrise until PV is useful)
 DEFAULT_SOLAR_OFFSETS = [3.5, 3.0, 2.5, 2.0, 2.0, 2.2, 2.2, 2.0, 2.5, 3.0, 3.5, 4.0]

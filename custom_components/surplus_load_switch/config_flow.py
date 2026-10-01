@@ -29,6 +29,7 @@ from .const import (
     CONF_DEVICE_SWITCH,
     CONF_DEVICE_WINDOW_END,
     CONF_DEVICE_WINDOW_START,
+    CONF_DAILY_BUDGET_SENSOR,
     CONF_EXPORT_POWER_SENSOR,
     CONF_HAUSMODUS_ENTITY,
     CONF_HEATPUMP_POWER_SENSOR,
@@ -101,6 +102,11 @@ def _global_settings_schema(defaults: dict | None = None) -> vol.Schema:
             CONF_EXPORT_POWER_SENSOR, **_default(d, CONF_EXPORT_POWER_SENSOR)
         ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor", device_class="power")
+        ),
+        vol.Optional(
+            CONF_DAILY_BUDGET_SENSOR, **_default(d, CONF_DAILY_BUDGET_SENSOR)
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
         ),
     })
 
