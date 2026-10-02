@@ -22,6 +22,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BATTERY_DROP_FASTPATH_MIN_DISCHARGE_KW,
     BATTERY_ELIGIBLE_RELIEF_CYCLES,
     BATTERY_FULL_PROJECTION_MIN_CHARGE_KW,
     BATTERY_FULL_RELIEF_CYCLES,
@@ -3137,8 +3138,16 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # debounced — a device the set newly grants is granted at once,
         # still subject to the comfort buffer below. Only applied while the
         # battery genuinely has margin (batt_ok): a real low-battery shed
-        # must stay immediate, and Sparmodus should not be softened.
-        if data.batt_ok:
+        # must stay immediate, and Sparmodus should not be softened. Also
+        # skipped (v2.45.0) while the battery is visibly carrying a real
+        # shortfall — see BATTERY_DROP_FASTPATH_MIN_DISCHARGE_KW.
+        recent_discharge = list(self._discharge_samples)[-2:]
+        battery_drop_fastpath = (
+            available_surplus < 0.0
+            and len(recent_discharge) == 2
+            and min(recent_discharge) > BATTERY_DROP_FASTPATH_MIN_DISCHARGE_KW
+        )
+        if data.batt_ok and not battery_drop_fastpath:
             held = set(battery_eligible_ids)
             for cand_id, *_ in optional_candidates:
                 if cand_id in battery_eligible_ids:

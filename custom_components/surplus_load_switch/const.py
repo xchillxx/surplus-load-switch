@@ -546,6 +546,20 @@ COMPOSITION_RESET_MIN_DELTA_KW = 0.4
 # by a few extra minutes costs almost nothing.
 BATTERY_ELIGIBLE_RELIEF_CYCLES = _minutes_to_cycles(15)
 
+# Fast path past the hold above (v2.45.0): when the house battery is
+# demonstrably carrying the shortfall right now — the last two genuinely
+# distinct battery readings both discharge above this, and the modelled
+# surplus is already negative — a device the optimal set just dropped has
+# no business being held for another BATTERY_ELIGIBLE_RELIEF_CYCLES. The
+# hold exists to absorb 1-2 cycles of base_discharge_kw noise on a
+# knife-edge overnight fit, where the battery is NOT visibly discharging
+# faster than the model assumed; a clouded afternoon only dips surplus,
+# never battery discharge above ~1 kW for two readings in a row with the
+# surplus below zero. The device's own off-delay (STABLE_OFF_CYCLES) still
+# applies afterwards, and a composition change clears the discharge
+# samples, so devices are still shed one after another, not all at once.
+BATTERY_DROP_FASTPATH_MIN_DISCHARGE_KW = 1.0
+
 # How many consecutive cycles wallbox_starved must read False before a
 # device is actually allowed back into battery_eligible_ids — asymmetric
 # on purpose: starving takes effect immediately (protecting the wallbox
