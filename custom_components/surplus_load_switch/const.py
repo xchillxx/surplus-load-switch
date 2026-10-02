@@ -81,7 +81,10 @@ CONF_EXPORT_POWER_SENSOR = "export_power_sensor"
 # DAILY_BUDGET_GATE_CLOSE_KWH/OPEN_KWH). Mirrors CONF_EXPORT_POWER_SENSOR
 # in every other respect: optional, no-op when unset, daytime behaviour
 # unaffected (battery_full_projection_applies forces this gate open then,
-# same as export_gate_open is forced open at night).
+# same as export_gate_open is forced open at night). Since v2.44.0 a
+# negative budget also acts during the day while the house battery is still
+# below its target: the battery then claims its full charge rate and the
+# modelled-surplus path stays shut (see daily_budget_day_block).
 CONF_DAILY_BUDGET_SENSOR = "daily_budget_sensor"
 
 # Config keys — per device

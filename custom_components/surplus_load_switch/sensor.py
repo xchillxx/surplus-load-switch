@@ -152,6 +152,7 @@ class PVSurplusSensor(_PVSensorBase):
                 {
                     "tagesbudget_kwh": round(d.daily_budget_kwh, 3),
                     "tagesbudget_gate_offen": d.daily_budget_gate_open,
+                    "tagesbudget_tagessperre": d.daily_budget_day_block,
                 }
                 if d.daily_budget_sensor_configured
                 else {}

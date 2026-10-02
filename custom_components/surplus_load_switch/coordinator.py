@@ -288,6 +288,9 @@ class CoordinatorData:
     daily_budget_kwh: float = 0.0
     daily_budget_gate_open: bool = True
     daily_budget_sensor_configured: bool = False
+    # Daytime counterpart: budget negative AND the house battery is still
+    # below its daily target — see _async_update_data.
+    daily_budget_day_block: bool = False
 
 
 class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
@@ -2230,6 +2233,27 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         else:
             daily_budget_gate_open = True
 
+        # Daytime half of the budget gate. A negative budget means today's
+        # forecast can't cover baseline load, minimum runtimes, filling the
+        # house battery AND the car's missing charge. The car takes whatever
+        # PV exists from solar start on, so the battery only ever gets the
+        # morning ramp: every watt a low-priority device uses then is a watt
+        # the battery never gets back, and the "battery comfortably on
+        # track" pace relaxation (which doesn't know about the car) is
+        # wrong. So while the budget is negative and the battery is still
+        # short of its target, the battery claims its full charge rate and
+        # the modelled-surplus path stays shut. Real feed-in (export gate
+        # latched open) or a full battery still lifts it — then the power
+        # is genuinely spare. force_runtime devices are unaffected.
+        daily_budget_day_block = (
+            budget_configured
+            and not self._daily_budget_gate_open
+            and battery_full_projection_applies
+            and battery_full_missing_kwh > 0.0
+            and soc < EXPORT_GATE_SOC_OVERRIDE
+            and not (export_configured and self._export_gate_open)
+        )
+
         data = CoordinatorData(
             solar_kw=solar,
             load_kw=load,
@@ -2266,6 +2290,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             daily_budget_kwh=budget_kwh,
             daily_budget_gate_open=daily_budget_gate_open,
             daily_budget_sensor_configured=budget_configured,
+            daily_budget_day_block=daily_budget_day_block,
         )
 
         await self._evaluate_devices(data)
@@ -2767,7 +2792,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # remaining charge is pure 100%-top-off and is handed over in
         # full.
         battery_claim_kw = data.battery_smoothed_charge_kw
-        if data.battery_full_projection_applies:
+        if data.battery_full_projection_applies and not data.daily_budget_day_block:
             if data.battery_full_missing_kwh <= 0.0:
                 battery_claim_kw = 0.0
             elif (
@@ -3554,7 +3579,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # device that passes this check isn't taking anything the
             # wallbox needed or the battery couldn't spare, independent of
             # what the grid meter shows at this exact moment.
-            would_delay_battery_full = not self._battery_would_still_reach_full(
+            would_delay_battery_full = data.daily_budget_day_block or not self._battery_would_still_reach_full(
                 data, cumulative_battery_competing_draw + predicted_power
             )
             should_on = (
@@ -3631,6 +3656,15 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
                         f"{predicted_power:.2f} kW benötigt) und es wird gerade nicht ins Netz "
                         f"eingespeist ({data.export_smoothed_kw:.2f} kW) — der Akku-Pfad bleibt "
                         f"zu, weil der Strom sonst nicht übrig wäre"
+                    )
+                elif data.daily_budget_day_block:
+                    decision_titel = "Ausschalten — Tagesbudget negativ"
+                    decision_reason = (
+                        f"Tagesbudget {data.daily_budget_kwh:.2f} kWh: der Forecast deckt heute "
+                        f"Grundlast, Akku-Ladung und Auto nicht — der Akku (fehlend "
+                        f"{data.battery_full_missing_kwh:.2f} kWh) bekommt den ganzen Überschuss, "
+                        f"Geräte bleiben zu bis er voll ist ({remaining_surplus:.2f} kW verfügbar, "
+                        f"{predicted_power:.2f} kW benötigt)"
                     )
                 elif data.daily_budget_sensor_configured and not data.daily_budget_gate_open:
                     decision_titel = "Ausschalten — Tagesbudget negativ"
