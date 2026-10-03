@@ -362,6 +362,15 @@ BATTERY_ON_TRACK_COMFORT_FRACTION = 0.7
 # long until tomorrow's threshold" once today's has passed).
 DAYTIME_PROJECTION_HORIZON_H = 1.0
 
+# Dusk counts as night for the battery projection (v2.46.0): once the sun
+# is within this many hours of setting, the short DAYTIME_PROJECTION_HORIZON_H
+# cap and the daytime base-discharge formula no longer apply — the horizon
+# is the real "hours until tomorrow's solar start" and the unavoidable
+# rate is the household's smoothed base load. Same 2 h margin as the end of
+# the solar generation window (WALLBOX_TARGET_TIME_BUFFER_H): past it there
+# is no useful PV left to wait for, however the last bit of sun still reads.
+DUSK_NIGHT_RULE_BEFORE_SUNSET_H = 2.0
+
 # Stability: how many coordinator cycles must the condition hold, expressed
 # as wall-clock minutes (via _minutes_to_cycles) rather than a fixed cycle
 # count — a fixed count would silently double every hold time below if

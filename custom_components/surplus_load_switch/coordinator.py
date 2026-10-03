@@ -73,6 +73,7 @@ from .const import (
     CONF_WALLBOX_TARGET_SOC_ENTITY,
     CORE_SENSOR_GRACE_PERIOD,
     DAYTIME_PROJECTION_HORIZON_H,
+    DUSK_NIGHT_RULE_BEFORE_SUNSET_H,
     DEFAULT_MAX_ASSUMED_RUNTIME_H,
     DEFAULT_SOLAR_OFFSETS,
     DISCHARGE_SMOOTHING_SAMPLES,
@@ -292,6 +293,8 @@ class CoordinatorData:
     # Daytime counterpart: budget negative AND the house battery is still
     # below its daily target — see _async_update_data.
     daily_budget_day_block: bool = False
+    # Dusk (sun within DUSK_NIGHT_RULE_BEFORE_SUNSET_H of setting): overnight rules.
+    dusk_night_rule: bool = False
 
 
 class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
@@ -1230,6 +1233,25 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         solar_start_today = next_rising + timedelta(hours=offset_h) - timedelta(hours=24)
         return now >= solar_start_today
 
+    def _is_dusk(self, now: datetime) -> bool:
+        """True while the sun is still up but less than
+        DUSK_NIGHT_RULE_BEFORE_SUNSET_H from setting — the battery
+        projection then already uses the overnight rules. False on any
+        missing sun data (keeps the previous behaviour)."""
+        sun = self.hass.states.get("sun.sun")
+        if sun is None or sun.state != "above_horizon":
+            return False
+        raw = sun.attributes.get("next_setting")
+        if isinstance(raw, datetime):
+            next_setting = raw
+        elif isinstance(raw, str):
+            next_setting = dt_util.parse_datetime(raw)
+        else:
+            return False
+        if next_setting is None:
+            return False
+        return next_setting - now <= timedelta(hours=DUSK_NIGHT_RULE_BEFORE_SUNSET_H)
+
     def _wallbox_reserved_kw(
         self,
         wallbox_dev: dict,
@@ -2128,9 +2150,10 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # instant — smoothing the transition into a gradual, still-
         # sequential shed instead of a last-second cliff. Daytime
         # (sun_above_horizon and meaningful solar) is unaffected.
+        dusk = self._is_dusk(now)
         effective_h_to_solar = (
             DAYTIME_PROJECTION_HORIZON_H
-            if sun_above_horizon and solar >= SOLAR_START_MIN_KW
+            if sun_above_horizon and solar >= SOLAR_START_MIN_KW and not dusk
             else h_to_solar
         )
 
@@ -2292,6 +2315,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             daily_budget_gate_open=daily_budget_gate_open,
             daily_budget_sensor_configured=budget_configured,
             daily_budget_day_block=daily_budget_day_block,
+            dusk_night_rule=dusk,
         )
 
         await self._evaluate_devices(data)
@@ -2977,7 +3001,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
         managed_discharge_kw = max(
             effective_managed_power_kw_discharge - max(available_surplus, 0.0), 0.0
         )
-        if data.sun_above_horizon:
+        if data.sun_above_horizon and not data.dusk_night_rule:
             # Floored at the same learned floor as base_load, not a hard
             # 0.0 — a household never genuinely idles at 0 kW, and this
             # same live-attribution formula can read as "fully covered"
