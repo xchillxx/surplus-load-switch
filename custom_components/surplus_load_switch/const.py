@@ -371,6 +371,18 @@ DAYTIME_PROJECTION_HORIZON_H = 1.0
 # is no useful PV left to wait for, however the last bit of sun still reads.
 DUSK_NIGHT_RULE_BEFORE_SUNSET_H = 2.0
 
+# Safety reserve for everything the battery projection decides (v2.47.0):
+# this much of the usable battery energy (above min_soc) is never counted
+# as available to the cascade. The battery path fit (battery_would_last /
+# _select_battery_optimal_set), the "Akku reicht" runway, batt_ok/Modus and
+# the re-inclusion comfort check all read data.avail_kwh, so they stay
+# consistent. Without it a device passes on a knife-edge (projection fits
+# with ~0 kWh to spare) and any evening load peak (a 3.5 kW oven/dishwasher
+# for an hour) or a base-load estimate a little below the real night
+# average eats the margin; the device then only stops at its own SOC floor.
+# 1 kWh is roughly 1.5-2 h of a typical night's base consumption.
+BATTERY_PATH_SAFETY_RESERVE_KWH = 1.0
+
 # Stability: how many coordinator cycles must the condition hold, expressed
 # as wall-clock minutes (via _minutes_to_cycles) rather than a fixed cycle
 # count — a fixed count would silently double every hold time below if
