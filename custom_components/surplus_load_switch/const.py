@@ -200,7 +200,10 @@ CONF_DEVICE_ENABLED = "enabled"
 # Logic thresholds
 SURPLUS_ON_THRESHOLD = 0.2    # kW: turn on when surplus > this
 SURPLUS_OFF_THRESHOLD = -0.2  # kW: turn off when surplus < this
-BATT_OK_BUFFER_H = 0.5        # h: extra buffer over h_to_solar
+# Extra hours of runway required beyond h_to_solar, for batt_ok/Modus and for
+# the battery path's projection horizon alike (v2.48.0: 0.5 -> 1.0; at a
+# typical ~0.5 kW night load that is ~0.5 kWh of margin a device has to leave).
+BATT_OK_BUFFER_H = 1.0        # h: extra buffer over h_to_solar
 # How many consecutive cycles a raw batt_ok crossing (h_battery vs.
 # effective_h_to_solar + BATT_OK_BUFFER_H) must persist before the value
 # actually used (Modus sensor, and the battery_eligible_ids drop-side
@@ -370,18 +373,6 @@ DAYTIME_PROJECTION_HORIZON_H = 1.0
 # the solar generation window (WALLBOX_TARGET_TIME_BUFFER_H): past it there
 # is no useful PV left to wait for, however the last bit of sun still reads.
 DUSK_NIGHT_RULE_BEFORE_SUNSET_H = 2.0
-
-# Safety reserve for everything the battery projection decides (v2.47.0):
-# this much of the usable battery energy (above min_soc) is never counted
-# as available to the cascade. The battery path fit (battery_would_last /
-# _select_battery_optimal_set), the "Akku reicht" runway, batt_ok/Modus and
-# the re-inclusion comfort check all read data.avail_kwh, so they stay
-# consistent. Without it a device passes on a knife-edge (projection fits
-# with ~0 kWh to spare) and any evening load peak (a 3.5 kW oven/dishwasher
-# for an hour) or a base-load estimate a little below the real night
-# average eats the margin; the device then only stops at its own SOC floor.
-# 1 kWh is roughly 1.5-2 h of a typical night's base consumption.
-BATTERY_PATH_SAFETY_RESERVE_KWH = 1.0
 
 # Stability: how many coordinator cycles must the condition hold, expressed
 # as wall-clock minutes (via _minutes_to_cycles) rather than a fixed cycle

@@ -29,7 +29,6 @@ from .const import (
     BATTERY_FULL_TARGET_TIME_BUFFER_H,
     BATTERY_ON_TRACK_COMFORT_FRACTION,
     BATT_OK_BUFFER_H,
-    BATTERY_PATH_SAFETY_RESERVE_KWH,
     BATT_OK_FLIP_DWELL_CYCLES,
     CALIBRATION_INTERVAL_HOURS,
     CHARGE_RATE_RAMP_LOOKBACK,
@@ -2078,9 +2077,7 @@ class PVSurplusCoordinator(DataUpdateCoordinator[CoordinatorData]):
             smoothed_discharge = self._last_trusted_discharge_kw
         else:
             smoothed_discharge = discharge
-        avail_kwh = max(
-            (soc - min_soc) / 100.0 * battery_kwh - BATTERY_PATH_SAFETY_RESERVE_KWH, 0.0
-        )
+        avail_kwh = max((soc - min_soc) / 100.0 * battery_kwh, 0.0)
         h_battery = avail_kwh / smoothed_discharge if smoothed_discharge > 0.05 else 999.0
 
         # Mirrors the discharge smoothing directly above, for the
