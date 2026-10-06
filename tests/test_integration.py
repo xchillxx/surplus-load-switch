@@ -117,3 +117,28 @@ async def test_config_flow(hass: HomeAssistant):
     assert r["type"] == "create_entry", r
     await hass.async_block_till_done()
     assert entry.data["devices"][0]["name"] == "Boiler"
+
+
+async def test_unknown_plug_state_means_not_present(hass: HomeAssistant, freezer):
+    set_world(hass, pv=9.0, load=0.6, soc=96, car_soc=50)
+    hass.states.async_set("binary_sensor.car_plugged", "unavailable")
+    hass.states.async_set("sensor.car_soc", "unavailable")
+    hass.states.async_set("sensor.car_soc_fleet", 55)
+    hass.states.async_set("sensor.car_cable", "complete")
+    for e in ("switch.car_charge", "switch.miner", "switch.pump", "climate.pool"):
+        hass.states.async_set(e, "off")
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    co = hass.data[DOMAIN][entry.entry_id]
+    assert co.status["auto_da"] is False          # plug state unknown -> no commands
+    car = {**DATA["car"], "soc_fallback_sensor": "sensor.car_soc_fleet", "plugged_fallback_sensor": "sensor.car_cable"}
+    hass.config_entries.async_update_entry(entry, data={**DATA, "car": car})
+    await hass.async_block_till_done()
+    co = hass.data[DOMAIN][entry.entry_id]
+    await co.async_refresh()
+    assert co.status["auto_da"] is True and co.status["auto_soc"] == 55.0
+    hass.states.async_set("sensor.car_cable", "disconnected")
+    await co.async_refresh()
+    assert co.status["auto_da"] is False

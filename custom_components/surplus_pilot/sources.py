@@ -56,6 +56,22 @@ def is_on(hass: HomeAssistant, entity_id: str | None) -> bool | None:
     return st.state in ("on", "home", "true", "charging", "connected")
 
 
+_UNPLUGGED = {"off", "false", "disconnected", "unplugged", "not_connected", "no car connected", "none",
+              "no_power", "nopower"}
+
+
+def plugged(hass: HomeAssistant, entity_id: str | None) -> bool | None:
+    """Plugged-in from a binary sensor (on/off) or a text sensor whose state
+    names the cable/charge status (e.g. 'disconnected', 'complete',
+    'charging'). None = unknown."""
+    if not entity_id:
+        return None
+    st = hass.states.get(entity_id)
+    if st is None or st.state in BAD:
+        return None
+    return st.state.strip().lower() not in _UNPLUGGED
+
+
 def age_minutes(hass: HomeAssistant, entity_id: str | None) -> float | None:
     """Minutes since the sensor last reported (last_updated, not
     last_changed: a constant value that is still being reported is fresh)."""

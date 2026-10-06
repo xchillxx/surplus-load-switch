@@ -34,10 +34,13 @@ from .const import (
     CONF_CAR_LIMIT_ENTITY,
     CONF_CAR_PAUSE_ENTITY,
     CONF_CAR_PAUSE_STATE,
+    CONF_CAR_PLUGGED_FALLBACK,
     CONF_CAR_PLUGGED_SENSOR,
     CONF_CAR_POWER_SENSOR,
+    CONF_CAR_SOC_FALLBACK,
     CONF_CAR_SOC_SENSOR,
     CONF_CAR_TRACKER,
+    CONF_CAR_TRACKER_FALLBACK,
     CONF_DEV_CLIMATE_MODE,
     CONF_DEV_DEPENDS_ON,
     CONF_DEV_ENTITY,
@@ -89,6 +92,7 @@ from .sources import (
     async_tibber_prices,
     is_on,
     number,
+    plugged as plugged_state,
     power_kw,
     sensor_prices,
     tracker_home,
@@ -369,10 +373,22 @@ class PilotCoordinator(DataUpdateCoordinator):
             charging = bool(ch) if ch is not None else (car_kw > 0.3 or self.car.switch_on())
             if c.get(CONF_CAR_POWER_SENSOR) is None and charging and c.get(CONF_CAR_CURRENT_ENTITY):
                 car_kw = (number(self.hass, c[CONF_CAR_CURRENT_ENTITY]) or 0) * self.car.kw_per_a
-            plugged = is_on(self.hass, c.get(CONF_CAR_PLUGGED_SENSOR))
+            plugged = plugged_state(self.hass, c.get(CONF_CAR_PLUGGED_SENSOR))
+            if plugged is None:
+                plugged = plugged_state(self.hass, c.get(CONF_CAR_PLUGGED_FALLBACK))
             home = tracker_home(self.hass, c.get(CONF_CAR_TRACKER))
-            present = (plugged is not False) and (home is not False)
+            if home is None:
+                home = tracker_home(self.hass, c.get(CONF_CAR_TRACKER_FALLBACK))
+            has_plug_sensor = bool(c.get(CONF_CAR_PLUGGED_SENSOR) or c.get(CONF_CAR_PLUGGED_FALLBACK))
+            # unknown plug state with a plug sensor configured = not present:
+            # never send (possibly billed) commands to a car that may be away
+            plug_ok = plugged is True or (plugged is None and (not has_plug_sensor or charging))
+            present = plug_ok and (home is not False)
+            # a second source covers the primary one being empty (e.g. a fast
+            # MQTT sensor that only refills when the car reports again)
             car_soc = number(self.hass, c.get(CONF_CAR_SOC_SENSOR))
+            if car_soc is None:
+                car_soc = number(self.hass, c.get(CONF_CAR_SOC_FALLBACK))
             limit = number(self.hass, c.get(CONF_CAR_LIMIT_ENTITY)) or float(
                 c.get(CONF_CAR_LIMIT_DEFAULT, DEFAULT_CAR_LIMIT))
             car_in = P.CarInput(present=present, soc=car_soc, limit_soc=limit,
