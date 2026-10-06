@@ -480,7 +480,8 @@ class PilotCoordinator(DataUpdateCoordinator):
             elif self.car.decision is not None and not self.car.applied:
                 self.car.applied = True
                 self.car.action = ("pausiert" if paused else "nur_beobachten" if not self.active
-                                   else "steuerung_aus" if not self.store.data["car_control"] else "nicht_da")
+                                   else "steuerung_aus" if not self.store.data["car_control"]
+                                   else "nicht_da" if car_in is None or not car_in.present else "ladelimit_erreicht")
 
         # ---- devices (every cycle, 5-min median, car draw fixed)
         win5 = [s for s in self.samples if (now - s[0]).total_seconds() <= DEVICE_SMOOTH_MINUTES * 60]
