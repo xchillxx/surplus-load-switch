@@ -1,0 +1,314 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Surplus Pilot",
+        "description": "Energie-Sensoren. Auto und Geräte kommen danach unter 'Konfigurieren' dazu.",
+        "data": {
+          "pv_sensor": "PV-Leistung",
+          "load_sensor": "Hausverbrauch",
+          "grid_export_sensor": "Einspeiseleistung (optional)",
+          "battery_soc_sensor": "Hausakku-Ladestand (optional)",
+          "battery_capacity_kwh": "Hausakku-Kapazität",
+          "battery_min_soc": "Hausakku-Reserve",
+          "pv_end_before_sunset_h": "PV-Ende vor Sonnenuntergang",
+          "stale_minutes": "Sensor-Zeitlimit",
+          "price_source": "Strompreise",
+          "tibber_home": "Tibber-Zuhause (optional)",
+          "price_sensor": "Preissensor mit Prognose"
+        },
+        "data_description": {
+          "pv_sensor": "Aktuelle PV-Erzeugung (W oder kW).",
+          "load_sensor": "Gesamter Hausverbrauch INKLUSIVE Wallbox und gesteuerter Geräte.",
+          "grid_export_sensor": "Erlaubt Geräte über den Akku, solange ohnehin eingespeist wird.",
+          "battery_soc_sensor": "Leer lassen, wenn kein Hausakku vorhanden ist.",
+          "battery_min_soc": "Unter diesen Ladestand wird nie geplant.",
+          "pv_end_before_sunset_h": "So lange vor Sonnenuntergang soll der Akku voll sein.",
+          "stale_minutes": "Ein Sensor, der länger nichts meldet, gilt als eingefroren.",
+          "price_source": "Nur fürs Netzladen, wenn die PV eine Abfahrt nicht schafft.",
+          "price_sensor": "Z. B. Nordpool oder EPEX Spot (Attribute mit künftigen Preisen)."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Surplus Pilot",
+        "menu_options": {
+          "energy": "Energie & Preise",
+          "car": "Auto",
+          "device_add": "Gerät hinzufügen",
+          "device_edit": "Gerät bearbeiten",
+          "device_remove": "Gerät entfernen",
+          "car_remove": "Auto entfernen"
+        }
+      },
+      "energy": {
+        "title": "Energie & Preise",
+        "data": {
+          "pv_sensor": "PV-Leistung",
+          "load_sensor": "Hausverbrauch",
+          "grid_export_sensor": "Einspeiseleistung (optional)",
+          "battery_soc_sensor": "Hausakku-Ladestand (optional)",
+          "battery_capacity_kwh": "Hausakku-Kapazität",
+          "battery_min_soc": "Hausakku-Reserve",
+          "pv_end_before_sunset_h": "PV-Ende vor Sonnenuntergang",
+          "stale_minutes": "Sensor-Zeitlimit",
+          "price_source": "Strompreise",
+          "tibber_home": "Tibber-Zuhause (optional)",
+          "price_sensor": "Preissensor mit Prognose"
+        },
+        "data_description": {
+          "pv_sensor": "Aktuelle PV-Erzeugung (W oder kW).",
+          "load_sensor": "Gesamter Hausverbrauch INKLUSIVE Wallbox und gesteuerter Geräte.",
+          "grid_export_sensor": "Erlaubt Geräte über den Akku, solange ohnehin eingespeist wird.",
+          "battery_soc_sensor": "Leer lassen, wenn kein Hausakku vorhanden ist.",
+          "battery_min_soc": "Unter diesen Ladestand wird nie geplant.",
+          "pv_end_before_sunset_h": "So lange vor Sonnenuntergang soll der Akku voll sein.",
+          "stale_minutes": "Ein Sensor, der länger nichts meldet, gilt als eingefroren.",
+          "price_source": "Nur fürs Netzladen, wenn die PV eine Abfahrt nicht schafft.",
+          "price_sensor": "Z. B. Nordpool oder EPEX Spot (Attribute mit künftigen Preisen)."
+        }
+      },
+      "car": {
+        "title": "Auto",
+        "data": {
+          "name": "Name",
+          "charge_switch": "Laden an/aus (Schalter)",
+          "current_entity": "Ladestrom (Zahl)",
+          "soc_sensor": "Auto-Ladestand",
+          "limit_entity": "Ladelimit des Autos (optional)",
+          "limit_default": "Ladelimit (Ersatzwert)",
+          "plugged_sensor": "Angesteckt",
+          "charging_sensor": "Lädt gerade",
+          "power_sensor": "Ladeleistung",
+          "tracker": "Standort (optional)",
+          "capacity_kwh": "Akkukapazität Auto",
+          "efficiency": "Ladewirkungsgrad",
+          "min_amps": "Mindeststrom",
+          "max_amps": "Maximalstrom",
+          "phases": "Phasen",
+          "voltage": "Spannung",
+          "allow_grid": "Netzladen für Abfahrten",
+          "max_commands_per_day": "Max. Befehle pro Tag (0 = unbegrenzt)",
+          "pause_entity": "Pause-Entität (optional)",
+          "pause_state": "Pause-Zustand"
+        },
+        "data_description": {
+          "charge_switch": "Am Auto oder an der Wallbox.",
+          "current_entity": "Ampere-Entität am Auto oder an der Wallbox.",
+          "soc_sensor": "Ohne ihn lädt das Auto nur Überschuss, ohne Abfahrtsziele.",
+          "tracker": "Auto zählt nur als da, wenn 'home'.",
+          "allow_grid": "Aus dem Netz laden (günstigste Zeit, spät), wenn PV ein Abfahrtsziel nicht schafft.",
+          "max_commands_per_day": "Für kostenpflichtige Fahrzeug-APIs.",
+          "pause_entity": "Solange diese Entität den Zustand unten hat, lässt Surplus Pilot das Auto in Ruhe."
+        }
+      },
+      "car_remove": {
+        "title": "Auto entfernen",
+        "data": {
+          "confirm": "Wirklich entfernen"
+        }
+      },
+      "device_add": {
+        "title": "Gerät hinzufügen",
+        "data": {
+          "kind": "Art"
+        }
+      },
+      "device_edit": {
+        "title": "Gerät bearbeiten",
+        "data": {
+          "id": "Gerät"
+        }
+      },
+      "device_remove": {
+        "title": "Gerät entfernen",
+        "data": {
+          "id": "Gerät"
+        }
+      },
+      "device": {
+        "title": "Gerät",
+        "data": {
+          "name": "Name",
+          "entity": "Schalter / Thermostat",
+          "climate_on_mode": "Modus für 'an'",
+          "priority": "Priorität (1 = zuerst)",
+          "power_kw": "Leistung",
+          "power_sensor": "Leistungssensor (optional)",
+          "schedule": "Zeitplan-Helfer (optional)",
+          "window_start": "Zeitfenster Beginn (optional)",
+          "window_end": "Zeitfenster Ende (optional)",
+          "min_runtime_h": "Mindestlaufzeit pro Tag",
+          "soc_reserve": "Akku-Reserve für dieses Gerät",
+          "depends_on": "Nur zusammen mit"
+        },
+        "data_description": {
+          "power_kw": "Durchschnittliche Leistung im Betrieb.",
+          "power_sensor": "Die echte Leistung wird daraus gelernt.",
+          "min_runtime_h": "Wird in den günstigsten späten Slots des Fensters erzwungen, wenn PV es nicht schafft.",
+          "soc_reserve": "Läuft über den Hausakku nur oberhalb dieses Ladestands.",
+          "depends_on": "Z. B. eine Pool-Wärmepumpe, die die Pumpe braucht."
+        }
+      }
+    }
+  },
+  "selector": {
+    "price_source": {
+      "options": {
+        "none": "Keine",
+        "tibber": "Tibber",
+        "sensor": "Preissensor"
+      }
+    },
+    "device_kind": {
+      "options": {
+        "switch": "Schalter",
+        "climate": "Thermostat (climate)"
+      }
+    }
+  },
+  "device": {
+    "departures": {
+      "name": "Surplus Pilot Abfahrten"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Status"
+      },
+      "pv": {
+        "name": "PV-Leistung"
+      },
+      "grundlast": {
+        "name": "Grundlast"
+      },
+      "ueberschuss": {
+        "name": "Überschuss"
+      },
+      "akku_ziel": {
+        "name": "Akku-Reservierung"
+      },
+      "geraete_budget": {
+        "name": "Geräte-Budget"
+      },
+      "prognose_rest_heute": {
+        "name": "Prognose Rest heute"
+      },
+      "prognose_morgen": {
+        "name": "Prognose morgen"
+      },
+      "naechste_abfahrt": {
+        "name": "Nächste Abfahrt"
+      },
+      "log": {
+        "name": "Letzte Aktion"
+      },
+      "auto_leistung": {
+        "name": "Ladeleistung"
+      },
+      "auto_status": {
+        "name": "Ladestatus",
+        "state": {
+          "kein_auto": "Kein Auto",
+          "nicht_da": "Nicht da / nicht angesteckt",
+          "ladelimit_erreicht": "Ladelimit erreicht",
+          "netz_pflicht": "Netz: Abfahrtsziel",
+          "pflicht_minimum": "Abfahrtsziel, Mindeststrom",
+          "zu_wenig_ueberschuss": "Zu wenig Überschuss",
+          "pflicht": "Abfahrtsziel (PV)",
+          "pflicht_und_rest": "Abfahrtsziel + Rest",
+          "vorrang_rest": "Lädt vorrangig (morgen keine PV-Chance)",
+          "rest": "Rest nach den Geräten",
+          "haelt_minimum": "Hält Minimum",
+          "pausiert": "Pausiert",
+          "unbekannt": "Unbekannt"
+        }
+      },
+      "geraet_status": {
+        "name": "Status",
+        "state": {
+          "deaktiviert": "Deaktiviert",
+          "ausserhalb_zeitfenster": "Außerhalb Zeitfenster",
+          "wartet_auf_abhaengigkeit": "Wartet auf Abhängigkeit",
+          "mindestlaufzeit": "Mindestlaufzeit",
+          "ueberschuss": "PV-Überschuss",
+          "akku_reicht": "Akku reicht",
+          "akku_reserve": "Unter Akku-Reserve",
+          "kein_ueberschuss": "Kein Überschuss",
+          "akku_reicht_nicht": "Akku reicht nicht",
+          "manuell": "Manuell (Automatik aus)",
+          "unbekannt": "Unbekannt"
+        }
+      }
+    },
+    "switch": {
+      "auto_steuerung": {
+        "name": "Ladesteuerung"
+      },
+      "geraet_automatik": {
+        "name": "Automatik"
+      },
+      "slot_aktiv": {
+        "name": "Abfahrt {n} aktiv"
+      },
+      "einmalig_aktiv": {
+        "name": "Einmalige Abfahrt aktiv"
+      }
+    },
+    "number": {
+      "slot_ziel_soc": {
+        "name": "Abfahrt {n} Ziel"
+      },
+      "slot_weg_h": {
+        "name": "Abfahrt {n} weg für"
+      },
+      "slot_rhythmus": {
+        "name": "Abfahrt {n} alle"
+      },
+      "einmalig_ziel_soc": {
+        "name": "Einmalig Ziel"
+      },
+      "einmalig_weg_h": {
+        "name": "Einmalig weg für"
+      }
+    },
+    "time": {
+      "slot_uhrzeit": {
+        "name": "Abfahrt {n} Uhrzeit"
+      },
+      "einmalig_uhrzeit": {
+        "name": "Einmalig Uhrzeit"
+      }
+    },
+    "text": {
+      "slot_name": {
+        "name": "Abfahrt {n} Name"
+      }
+    },
+    "date": {
+      "slot_datum": {
+        "name": "Abfahrt {n} ab"
+      },
+      "einmalig_datum": {
+        "name": "Einmalig Datum"
+      }
+    },
+    "select": {
+      "betriebsart": {
+        "name": "Betriebsart",
+        "state": {
+          "auto": "Automatik",
+          "observe": "Nur beobachten",
+          "off": "Aus"
+        }
+      }
+    }
+  }
+}

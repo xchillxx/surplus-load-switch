@@ -1,0 +1,314 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Surplus Pilot",
+        "description": "Energy sensors. Car and devices are added afterwards under Configure.",
+        "data": {
+          "pv_sensor": "PV power",
+          "load_sensor": "House consumption",
+          "grid_export_sensor": "Grid feed-in power (optional)",
+          "battery_soc_sensor": "Home battery SoC (optional)",
+          "battery_capacity_kwh": "Home battery capacity",
+          "battery_min_soc": "Home battery reserve",
+          "pv_end_before_sunset_h": "PV end before sunset",
+          "stale_minutes": "Sensor timeout",
+          "price_source": "Electricity prices",
+          "tibber_home": "Tibber home name (optional)",
+          "price_sensor": "Price sensor with forecast"
+        },
+        "data_description": {
+          "pv_sensor": "Current PV production (W or kW).",
+          "load_sensor": "Total house load INCLUDING wallbox and managed devices.",
+          "grid_export_sensor": "Lets devices run on the battery while you are exporting anyway.",
+          "battery_soc_sensor": "Leave empty if you have no home battery.",
+          "battery_min_soc": "The battery is never planned below this SoC.",
+          "pv_end_before_sunset_h": "The battery should be full this long before sunset.",
+          "stale_minutes": "A sensor silent for longer is treated as frozen.",
+          "price_source": "Only used for grid charging when PV can't make a departure.",
+          "price_sensor": "E.g. Nordpool or EPEX Spot (attributes with future prices)."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Surplus Pilot",
+        "menu_options": {
+          "energy": "Energy & prices",
+          "car": "Car",
+          "device_add": "Add device",
+          "device_edit": "Edit device",
+          "device_remove": "Remove device",
+          "car_remove": "Remove car"
+        }
+      },
+      "energy": {
+        "title": "Energy & prices",
+        "data": {
+          "pv_sensor": "PV power",
+          "load_sensor": "House consumption",
+          "grid_export_sensor": "Grid feed-in power (optional)",
+          "battery_soc_sensor": "Home battery SoC (optional)",
+          "battery_capacity_kwh": "Home battery capacity",
+          "battery_min_soc": "Home battery reserve",
+          "pv_end_before_sunset_h": "PV end before sunset",
+          "stale_minutes": "Sensor timeout",
+          "price_source": "Electricity prices",
+          "tibber_home": "Tibber home name (optional)",
+          "price_sensor": "Price sensor with forecast"
+        },
+        "data_description": {
+          "pv_sensor": "Current PV production (W or kW).",
+          "load_sensor": "Total house load INCLUDING wallbox and managed devices.",
+          "grid_export_sensor": "Lets devices run on the battery while you are exporting anyway.",
+          "battery_soc_sensor": "Leave empty if you have no home battery.",
+          "battery_min_soc": "The battery is never planned below this SoC.",
+          "pv_end_before_sunset_h": "The battery should be full this long before sunset.",
+          "stale_minutes": "A sensor silent for longer is treated as frozen.",
+          "price_source": "Only used for grid charging when PV can't make a departure.",
+          "price_sensor": "E.g. Nordpool or EPEX Spot (attributes with future prices)."
+        }
+      },
+      "car": {
+        "title": "Car",
+        "data": {
+          "name": "Name",
+          "charge_switch": "Charging on/off switch",
+          "current_entity": "Charging current (number)",
+          "soc_sensor": "Car state of charge",
+          "limit_entity": "Car charge limit (optional)",
+          "limit_default": "Charge limit (fallback)",
+          "plugged_sensor": "Plugged in",
+          "charging_sensor": "Is charging",
+          "power_sensor": "Charging power",
+          "tracker": "Location (optional)",
+          "capacity_kwh": "Car battery capacity",
+          "efficiency": "Charging efficiency",
+          "min_amps": "Minimum current",
+          "max_amps": "Maximum current",
+          "phases": "Phases",
+          "voltage": "Voltage",
+          "allow_grid": "Grid charging for departures",
+          "max_commands_per_day": "Max. commands per day (0 = unlimited)",
+          "pause_entity": "Pause entity (optional)",
+          "pause_state": "Pause state"
+        },
+        "data_description": {
+          "charge_switch": "On the car or on the wallbox.",
+          "current_entity": "Ampere entity on the car or wallbox.",
+          "soc_sensor": "Without it the car charges on surplus only, no departure targets.",
+          "tracker": "Car only counts as present when 'home'.",
+          "allow_grid": "Charge from the grid (cheapest slots, late) when PV can't reach a departure target.",
+          "max_commands_per_day": "For paid vehicle APIs.",
+          "pause_entity": "While this entity has the state below, Surplus Pilot leaves the car alone."
+        }
+      },
+      "car_remove": {
+        "title": "Remove car",
+        "data": {
+          "confirm": "Really remove"
+        }
+      },
+      "device_add": {
+        "title": "Add device",
+        "data": {
+          "kind": "Type"
+        }
+      },
+      "device_edit": {
+        "title": "Edit device",
+        "data": {
+          "id": "Device"
+        }
+      },
+      "device_remove": {
+        "title": "Remove device",
+        "data": {
+          "id": "Device"
+        }
+      },
+      "device": {
+        "title": "Device",
+        "data": {
+          "name": "Name",
+          "entity": "Switch / thermostat",
+          "climate_on_mode": "Mode for 'on'",
+          "priority": "Priority (1 = first)",
+          "power_kw": "Power",
+          "power_sensor": "Power sensor (optional)",
+          "schedule": "Schedule helper (optional)",
+          "window_start": "Window start (optional)",
+          "window_end": "Window end (optional)",
+          "min_runtime_h": "Minimum runtime per day",
+          "soc_reserve": "Battery reserve for this device",
+          "depends_on": "Only together with"
+        },
+        "data_description": {
+          "power_kw": "Average draw while on.",
+          "power_sensor": "Real draw is learned from it.",
+          "min_runtime_h": "Enforced in the cheapest late slots of the window if PV doesn't do it.",
+          "soc_reserve": "Runs on the home battery only above this SoC.",
+          "depends_on": "E.g. a pool heat pump that needs the pump running."
+        }
+      }
+    }
+  },
+  "selector": {
+    "price_source": {
+      "options": {
+        "none": "None",
+        "tibber": "Tibber",
+        "sensor": "Price sensor"
+      }
+    },
+    "device_kind": {
+      "options": {
+        "switch": "Switch",
+        "climate": "Thermostat (climate)"
+      }
+    }
+  },
+  "device": {
+    "departures": {
+      "name": "Surplus Pilot departures"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Status"
+      },
+      "pv": {
+        "name": "PV power"
+      },
+      "grundlast": {
+        "name": "Base load"
+      },
+      "ueberschuss": {
+        "name": "Surplus"
+      },
+      "akku_ziel": {
+        "name": "Battery reservation"
+      },
+      "geraete_budget": {
+        "name": "Device budget"
+      },
+      "prognose_rest_heute": {
+        "name": "Forecast rest of today"
+      },
+      "prognose_morgen": {
+        "name": "Forecast tomorrow"
+      },
+      "naechste_abfahrt": {
+        "name": "Next departure"
+      },
+      "log": {
+        "name": "Last action"
+      },
+      "auto_leistung": {
+        "name": "Charging power"
+      },
+      "auto_status": {
+        "name": "Charging status",
+        "state": {
+          "kein_auto": "No car",
+          "nicht_da": "Not home / not plugged in",
+          "ladelimit_erreicht": "Charge limit reached",
+          "netz_pflicht": "Grid: departure target",
+          "pflicht_minimum": "Departure target, minimum current",
+          "zu_wenig_ueberschuss": "Not enough surplus",
+          "pflicht": "Departure target (PV)",
+          "pflicht_und_rest": "Departure target + rest",
+          "vorrang_rest": "Charging first (no PV chance tomorrow)",
+          "rest": "Surplus after devices",
+          "haelt_minimum": "Holding minimum",
+          "pausiert": "Paused",
+          "unbekannt": "Unknown"
+        }
+      },
+      "geraet_status": {
+        "name": "Status",
+        "state": {
+          "deaktiviert": "Disabled",
+          "ausserhalb_zeitfenster": "Outside time window",
+          "wartet_auf_abhaengigkeit": "Waiting for dependency",
+          "mindestlaufzeit": "Minimum runtime",
+          "ueberschuss": "PV surplus",
+          "akku_reicht": "Battery lasts",
+          "akku_reserve": "Below battery reserve",
+          "kein_ueberschuss": "No surplus",
+          "akku_reicht_nicht": "Battery would not last",
+          "manuell": "Manual (automation off)",
+          "unbekannt": "Unknown"
+        }
+      }
+    },
+    "switch": {
+      "auto_steuerung": {
+        "name": "Charging control"
+      },
+      "geraet_automatik": {
+        "name": "Automatic"
+      },
+      "slot_aktiv": {
+        "name": "Departure {n} active"
+      },
+      "einmalig_aktiv": {
+        "name": "One-off departure active"
+      }
+    },
+    "number": {
+      "slot_ziel_soc": {
+        "name": "Departure {n} target"
+      },
+      "slot_weg_h": {
+        "name": "Departure {n} away for"
+      },
+      "slot_rhythmus": {
+        "name": "Departure {n} every"
+      },
+      "einmalig_ziel_soc": {
+        "name": "One-off target"
+      },
+      "einmalig_weg_h": {
+        "name": "One-off away for"
+      }
+    },
+    "time": {
+      "slot_uhrzeit": {
+        "name": "Departure {n} time"
+      },
+      "einmalig_uhrzeit": {
+        "name": "One-off time"
+      }
+    },
+    "text": {
+      "slot_name": {
+        "name": "Departure {n} name"
+      }
+    },
+    "date": {
+      "slot_datum": {
+        "name": "Departure {n} from"
+      },
+      "einmalig_datum": {
+        "name": "One-off date"
+      }
+    },
+    "select": {
+      "betriebsart": {
+        "name": "Operating mode",
+        "state": {
+          "auto": "Automatic",
+          "observe": "Observe only",
+          "off": "Off"
+        }
+      }
+    }
+  }
+}

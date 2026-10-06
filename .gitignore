@@ -3,3 +3,6 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+__pycache__/
+*.pyc
+.pytest_cache/

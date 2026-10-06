@@ -1,0 +1,411 @@
+"""The energy plan: one pure function that splits the PV power between the
+car, the home battery and the managed devices.
+
+No Home Assistant imports — the integration and the offline simulator
+(tools/simulate.py) call exactly this code, so every simulation result is a
+statement about the shipped logic.
+
+Priority order (validated on 30 days of recorded data, see README):
+  1. Car obligation   — what the car must still get for its next departure
+                        target, spread over the PV hours left before it.
+  2. Home battery     — enough to be full by the end of the PV day. When the
+                        car leaves before that, the PV after the departure
+                        is counted in (it can fill the battery on its own).
+  3. Devices          — by priority; a running device's own draw counts as
+                        available to it (the base load excludes it).
+  4. Car top-up       — the rest, up to the car's charge limit.
+     Exception: top-up goes BEFORE the devices when the car will not get a
+     PV chance tomorrow (away during tomorrow's PV window, or tomorrow's
+     forecast can't fill it) — then today is the day to charge.
+  5. Whatever is left is exported.
+
+If the forecast PV before a departure can't cover the obligation, the car
+charges from the grid in the cheapest slots of a short window right before
+the departure (as late as possible, so a sunnier-than-forecast day still
+wins).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+# --- tuning (all validated in tools/simulate.py) ---
+FORECAST_SAFETY = 0.7          # forecast is trusted at 70 %
+DEVICE_HYSTERESIS_KW = 0.2     # on above need + 0.2, off below need - 0.2
+BATTERY_MAX_TARGET_KW = 6.9    # never reserve more than the battery accepts
+MIN_HOURS_LEFT = 0.25
+BATTERY_PATH_BUFFER_H = 1.0    # battery must last until solar start + 1 h
+EXPORT_GATE_KW = 0.15          # daytime battery path only while exporting
+MUST_MIN_SURPLUS_KW = 0.5      # obligation only draws on real surplus
+GRID_WINDOW_MIN_H = 4.0        # grid fallback only in the last 4 h (or 2x the time needed)
+PV_HOUR_MARGIN_KW = 1.0        # an hour counts as "PV hour" when forecast > base + 1 kW
+TOMORROW_SHARE = 0.5           # tomorrow must cover this share of the car's missing energy
+
+
+@dataclass
+class ForecastHour:
+    end: datetime   # energy of the hour ENDING here (Forecast.Solar convention)
+    kwh: float
+
+
+@dataclass
+class PriceSlot:
+    start: datetime
+    end: datetime
+    price: float
+
+
+@dataclass
+class Departure:
+    start: datetime
+    target_soc: float
+    name: str = ""
+    returns: datetime | None = None
+
+
+@dataclass
+class DeviceInput:
+    id: str
+    name: str
+    priority: int
+    decision_kw: float          # what the device is expected to draw
+    is_on: bool                 # physically on right now
+    enabled: bool = True
+    in_window: bool = True
+    window_end: datetime | None = None
+    depends_on: str | None = None
+    forced: bool = False        # min daily runtime must be enforced now
+    soc_reserve: float = 0.0    # battery path only above this home-battery SoC
+
+
+@dataclass
+class CarInput:
+    present: bool               # home and plugged in
+    soc: float | None
+    limit_soc: float
+    capacity_kwh: float
+    efficiency: float
+    min_kw: float
+    max_kw: float
+    current_kw: float = 0.0
+
+
+@dataclass
+class Inputs:
+    now: datetime
+    pv_kw: float
+    base_kw: float              # house load WITHOUT car and managed devices
+    battery_soc: float | None   # None = no home battery
+    battery_capacity_kwh: float
+    battery_min_soc: float
+    export_kw: float | None
+    solar_start: datetime       # next (or today's, if still ahead) usable PV start
+    solar_start_today: datetime
+    sunset: datetime            # next sunset
+    pv_end: datetime            # sunset - margin
+    night_base_kw: float
+    forecast: list[ForecastHour] = field(default_factory=list)
+    prices: list[PriceSlot] = field(default_factory=list)
+    departures: list[Departure] = field(default_factory=list)
+    car: CarInput | None = None
+    devices: list[DeviceInput] = field(default_factory=list)
+    allow_grid_for_car: bool = True
+    # Between two car decisions the car's current draw is fixed: the devices
+    # are then planned on what's left after it (car is not re-planned).
+    car_fixed_kw: float | None = None
+
+
+@dataclass
+class DeviceDecision:
+    on: bool
+    reason: str
+    path: str = ""   # "ueberschuss" | "akku" | "pflicht" | ""
+
+
+@dataclass
+class Plan:
+    battery_target_kw: float
+    battery_mode: str
+    car_kw: float
+    car_must_kw: float
+    car_grid: bool
+    car_reason: str
+    car_first: bool
+    need_kwh: float
+    uncovered_kwh: float
+    next_departure: Departure | None
+    devices: dict[str, DeviceDecision]
+    budget: dict
+
+
+# ---------------------------------------------------------------- helpers
+
+def forecast_kwh(rows: list[ForecastHour], start: datetime, end: datetime) -> float:
+    """Forecast kWh between two instants (partial hours pro rata)."""
+    if end <= start:
+        return 0.0
+    total = 0.0
+    for r in rows:
+        lo, hi = max(r.end - timedelta(hours=1), start), min(r.end, end)
+        if hi > lo:
+            total += r.kwh * (hi - lo).total_seconds() / 3600.0
+    return total
+
+
+def forecast_surplus_kwh(rows, start, end, base_kw, safety=FORECAST_SAFETY) -> tuple[float, float]:
+    """(kWh of forecast PV above the base load, hours with useful PV)."""
+    if end <= start:
+        return 0.0, 0.0
+    total, pv_hours = 0.0, 0.0
+    for r in rows:
+        lo, hi = max(r.end - timedelta(hours=1), start), min(r.end, end)
+        if hi <= lo:
+            continue
+        frac = (hi - lo).total_seconds() / 3600.0
+        kw = r.kwh * safety  # hourly kWh == mean kW
+        total += max(0.0, kw - base_kw) * frac
+        if kw > base_kw + PV_HOUR_MARGIN_KW:
+            pv_hours += frac
+    return total, pv_hours
+
+
+def next_departure(deps: list[Departure], now: datetime) -> Departure | None:
+    future = [d for d in deps if d.start > now]
+    return min(future, key=lambda d: d.start) if future else None
+
+
+def battery_target_kw(inp: Inputs, dep: Departure | None) -> tuple[float, str]:
+    """Charge rate the home battery needs to be full by the PV end. With a
+    departure before that, the PV after it (forecast x safety minus base
+    load) can fill part of the battery on its own."""
+    if inp.battery_soc is None:
+        return 0.0, "kein_akku"
+    missing = max(0.0, (100.0 - inp.battery_soc) / 100.0 * inp.battery_capacity_kwh)
+    if missing <= 0:
+        return 0.0, "voll"
+    hours_left = (inp.pv_end - inp.now).total_seconds() / 3600.0
+    target = min(BATTERY_MAX_TARGET_KW, missing / max(hours_left, MIN_HOURS_LEFT))
+    mode = "frist"
+    car_home = inp.car is not None and inp.car.present
+    if dep is not None and car_home and inp.now < dep.start < inp.pv_end and inp.forecast:
+        after = forecast_kwh(inp.forecast, dep.start, inp.pv_end) * FORECAST_SAFETY
+        h_dep = (dep.start - inp.now).total_seconds() / 3600.0
+        h_after = (inp.pv_end - dep.start).total_seconds() / 3600.0
+        fill_after = min(BATTERY_MAX_TARGET_KW * h_after, max(0.0, after - inp.base_kw * h_after), missing)
+        target = min(BATTERY_MAX_TARGET_KW, max(0.0, missing - fill_after) / max(h_dep, MIN_HOURS_LEFT))
+        mode = "abfahrt"
+    return max(0.0, target), mode
+
+
+def is_daytime(inp: Inputs) -> bool:
+    """Usable PV day: from today's solar start until the PV end. Dusk counts
+    as night (battery path rules)."""
+    # pv_end is derived from the NEXT sunset: after today's sunset it already
+    # points to tomorrow, which must read as night.
+    return inp.solar_start_today <= inp.now < inp.pv_end and inp.pv_end.date() == inp.now.date()
+
+
+def car_pv_chance_tomorrow(inp: Inputs, car_missing_kwh: float) -> bool:
+    """Will the car be home during most of tomorrow's PV window AND is the
+    forecast good enough to fill it then? If not, today is the day."""
+    now = inp.now
+    start = inp.solar_start if inp.solar_start.date() > now.date() else inp.solar_start + timedelta(days=1)
+    end = inp.pv_end if inp.pv_end.date() > now.date() else inp.pv_end + timedelta(days=1)
+    if end <= start:
+        return True
+    window_h = (end - start).total_seconds() / 3600.0
+    away_h = 0.0
+    for d in inp.departures:
+        ret = d.returns
+        if ret is None:
+            continue  # unknown return: assume the car is back for the PV day
+        lo, hi = max(d.start, start), min(ret, end)
+        if hi > lo:
+            away_h += (hi - lo).total_seconds() / 3600.0
+    if away_h > 0.5 * window_h:
+        return False
+    if not inp.forecast:
+        return True
+    surplus, _ = forecast_surplus_kwh(inp.forecast, start, end, inp.night_base_kw)
+    if surplus <= 0 and forecast_kwh(inp.forecast, start, end) == 0:
+        return True  # no forecast published for tomorrow yet -> don't panic
+    battery_missing = 0.0  # battery is usually refilled first tomorrow
+    if inp.battery_soc is not None:
+        battery_missing = 0.5 * inp.battery_capacity_kwh
+    return surplus - battery_missing >= TOMORROW_SHARE * car_missing_kwh
+
+
+def battery_lasts(inp: Inputs, planned_on: dict[str, bool], extra: DeviceInput | None) -> bool:
+    """Battery path: would the home battery still carry the night base load
+    plus all planned devices (each until its window end) until solar start
+    + buffer?"""
+    if inp.battery_soc is None:
+        return False
+    if extra is not None and inp.battery_soc < extra.soc_reserve:
+        return False
+    end = inp.solar_start + timedelta(hours=BATTERY_PATH_BUFFER_H)
+    h = max(0.0, (end - inp.now).total_seconds() / 3600.0)
+    avail = max(0.0, (inp.battery_soc - inp.battery_min_soc) / 100.0 * inp.battery_capacity_kwh)
+    load = inp.night_base_kw * h
+    for d in inp.devices:
+        if planned_on.get(d.id) or (extra is not None and d.id == extra.id):
+            hh = h
+            if d.window_end is not None:
+                hh = max(0.0, min(h, (d.window_end - inp.now).total_seconds() / 3600.0))
+            load += d.decision_kw * hh
+    return avail >= load
+
+
+def _grid_slot_now(inp: Inputs, dep: Departure, uncovered_kwh: float, max_kw: float) -> bool:
+    """Grid fallback: is NOW one of the cheapest slots in the late window
+    before the departure that together cover the uncovered energy?"""
+    need_h = uncovered_kwh / max(max_kw, 0.1)
+    window_start = dep.start - timedelta(hours=max(GRID_WINDOW_MIN_H, 2 * need_h))
+    if inp.now < window_start:
+        return False
+    slots = [p for p in inp.prices if p.end > inp.now and p.start < dep.start]
+    if not slots:
+        # no prices: charge only when it's really needed now
+        left_h = (dep.start - inp.now).total_seconds() / 3600.0
+        return left_h <= need_h + 0.25
+    slots.sort(key=lambda p: p.price)
+    covered, chosen = 0.0, []
+    for p in slots:
+        if covered >= need_h:
+            break
+        lo = max(p.start, inp.now)
+        covered += (p.end - lo).total_seconds() / 3600.0
+        chosen.append(p)
+    return any(p.start <= inp.now < p.end for p in chosen)
+
+
+# ---------------------------------------------------------------- the plan
+
+def make_plan(inp: Inputs) -> Plan:
+    surplus = inp.pv_kw - inp.base_kw
+    dep = next_departure(inp.departures, inp.now)
+    target_b, b_mode = battery_target_kw(inp, dep)
+    car = inp.car
+
+    if inp.car_fixed_kw is not None:
+        avail = surplus - inp.car_fixed_kw - target_b
+        devices = _devices(inp, avail)
+        budget = {"pv_kw": inp.pv_kw, "grundlast_kw": inp.base_kw, "akku_ziel_kw": target_b,
+                  "auto_kw": inp.car_fixed_kw, "geraete_kw": _used(inp, devices),
+                  "frei_kw": avail - _used(inp, devices, surplus_only=True)}
+        return Plan(target_b, b_mode, inp.car_fixed_kw, 0.0, False, "fest", False, 0.0, 0.0, dep,
+                    devices, budget)
+
+    must_kw, need_kwh, uncovered, grid = 0.0, 0.0, 0.0, False
+    car_reason = "kein_auto"
+    car_ok = car is not None and car.present and (car.soc is None or car.soc < car.limit_soc)
+    if car is not None and not car.present:
+        car_reason = "nicht_da"
+    elif car is not None and car.soc is not None and car.soc >= car.limit_soc:
+        car_reason = "ladelimit_erreicht"
+
+    if car_ok and car.soc is not None and dep is not None and dep.target_soc > car.soc:
+        need_kwh = (dep.target_soc - car.soc) / 100.0 * car.capacity_kwh / car.efficiency
+        pv_before, pv_h = forecast_surplus_kwh(inp.forecast, inp.now, dep.start, inp.base_kw + 0.3)
+        if surplus > MUST_MIN_SURPLUS_KW:
+            must_kw = min(car.max_kw, need_kwh / max(pv_h, MIN_HOURS_LEFT))
+        uncovered = max(0.0, need_kwh - pv_before)
+        if uncovered > 0 and inp.allow_grid_for_car and surplus < car.min_kw:
+            grid = _grid_slot_now(inp, dep, uncovered, car.max_kw)
+
+    devices: dict[str, DeviceDecision] = {}
+    budget = {"pv_kw": inp.pv_kw, "grundlast_kw": inp.base_kw, "akku_ziel_kw": target_b}
+
+    if grid:
+        car_kw = car.max_kw
+        avail = surplus - car_kw - target_b
+        devices = _devices(inp, avail)
+        budget.update(auto_pflicht_kw=car_kw, geraete_kw=_used(inp, devices), auto_rest_kw=0.0)
+        return Plan(target_b, b_mode, car_kw, car_kw, True, "netz_pflicht", False, need_kwh, uncovered,
+                    dep, devices, budget)
+
+    car_must = min(must_kw, max(surplus, 0.0)) if car_ok else 0.0
+    avail = surplus - car_must - target_b
+
+    car_first = False
+    if car_ok:
+        missing_to_limit = 0.0
+        if car.soc is not None:
+            missing_to_limit = (car.limit_soc - car.soc) / 100.0 * car.capacity_kwh / car.efficiency
+        car_first = not car_pv_chance_tomorrow(inp, missing_to_limit)
+
+    topup = 0.0
+    if car_first:
+        topup = max(0.0, min(avail, car.max_kw - car_must))
+        devices = _devices(inp, avail - topup)
+    else:
+        devices = _devices(inp, avail)
+        rest = avail - _used(inp, devices, surplus_only=True)
+        if car_ok:
+            topup = max(0.0, min(rest, car.max_kw - car_must))
+
+    car_kw = car_must + topup if car_ok else 0.0
+    if car_ok:
+        if car_kw < car.min_kw:
+            if must_kw > MUST_MIN_SURPLUS_KW and car_must > 0:
+                car_kw, car_reason = car.min_kw, "pflicht_minimum"  # battery helps briefly
+            else:
+                car_kw, car_reason = 0.0, "zu_wenig_ueberschuss"
+        else:
+            car_reason = ("pflicht" if topup < 0.05 else "pflicht_und_rest") if car_must > 0 else (
+                "vorrang_rest" if car_first else "rest")
+    budget.update(auto_pflicht_kw=car_must, geraete_kw=_used(inp, devices), auto_rest_kw=topup,
+                  frei_kw=surplus - car_must - target_b - _used(inp, devices, surplus_only=True) - topup)
+    return Plan(target_b, b_mode, car_kw, car_must, False, car_reason, car_first, need_kwh, uncovered,
+                dep, devices, budget)
+
+
+def _used(inp: Inputs, decisions: dict[str, DeviceDecision], surplus_only: bool = False) -> float:
+    total = 0.0
+    for d in inp.devices:
+        dec = decisions.get(d.id)
+        if dec and dec.on and (not surplus_only or dec.path in ("ueberschuss", "pflicht")):
+            total += d.decision_kw
+    return total
+
+
+def _devices(inp: Inputs, remaining: float) -> dict[str, DeviceDecision]:
+    out: dict[str, DeviceDecision] = {}
+    planned: dict[str, bool] = {}
+    day = is_daytime(inp)
+    exporting = inp.export_kw is not None and inp.export_kw > EXPORT_GATE_KW
+    battery_full = inp.battery_soc is not None and inp.battery_soc >= 98.0
+    for d in sorted(inp.devices, key=lambda x: x.priority):
+        if not d.enabled:
+            out[d.id] = DeviceDecision(False, "deaktiviert")
+            continue
+        if not d.in_window:
+            out[d.id] = DeviceDecision(False, "ausserhalb_zeitfenster")
+            continue
+        if d.depends_on and not planned.get(d.depends_on):
+            out[d.id] = DeviceDecision(False, "wartet_auf_abhaengigkeit")
+            continue
+        if d.forced:
+            out[d.id] = DeviceDecision(True, "mindestlaufzeit", "pflicht")
+            planned[d.id] = True
+            remaining -= d.decision_kw
+            continue
+        need = d.decision_kw + (-DEVICE_HYSTERESIS_KW if d.is_on else DEVICE_HYSTERESIS_KW)
+        if remaining >= need:
+            out[d.id] = DeviceDecision(True, "ueberschuss", "ueberschuss")
+            planned[d.id] = True
+            remaining -= d.decision_kw
+            continue
+        gate = (not day) or exporting or battery_full
+        if gate and battery_lasts(inp, planned, d):
+            out[d.id] = DeviceDecision(True, "akku_reicht", "akku")
+            planned[d.id] = True
+            continue
+        if inp.battery_soc is not None and inp.battery_soc < d.soc_reserve:
+            reason = "akku_reserve"
+        elif day:
+            reason = "kein_ueberschuss"
+        else:
+            reason = "akku_reicht_nicht"
+        out[d.id] = DeviceDecision(False, reason)
+    return out
