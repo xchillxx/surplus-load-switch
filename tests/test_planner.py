@@ -72,3 +72,17 @@ def test_slots_rhythm_and_oneoff():
     starts = [d.start.strftime("%m-%d %H:%M") for d in deps]
     assert starts == ["10-06 16:30", "10-08 09:00"]  # every 4 days: next one 10-10, beyond the 4-day horizon
     assert deps[0].returns == deps[0].start + timedelta(hours=14)
+
+
+def test_departure_battery_mode_only_while_car_can_charge():
+    now = datetime(2026, 10, 6, 14, 0, tzinfo=TZ)
+    dep = P.Departure(start=now.replace(hour=16, minute=30), target_soc=50.0)
+    fc = [P.ForecastHour(end=now.replace(hour=0) + timedelta(hours=h), kwh=6.0 if 10 <= h <= 17 else 0.0)
+          for h in range(24)]
+    full = P.CarInput(present=True, soc=80.0, limit_soc=80.0, capacity_kwh=72.9, efficiency=0.9, min_kw=3.45,
+                      max_kw=11.04)
+    plan = P.make_plan(base_inputs(now, pv_kw=6.0, battery_soc=80.0, car=full, departures=[dep], forecast=fc))
+    assert plan.battery_mode == "frist"
+    half = P.CarInput(**{**full.__dict__, "soc": 60.0})
+    plan = P.make_plan(base_inputs(now, pv_kw=6.0, battery_soc=80.0, car=half, departures=[dep], forecast=fc))
+    assert plan.battery_mode == "abfahrt"

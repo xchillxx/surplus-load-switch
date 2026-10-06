@@ -186,7 +186,9 @@ def battery_target_kw(inp: Inputs, dep: Departure | None) -> tuple[float, str]:
     hours_left = (inp.pv_end - inp.now).total_seconds() / 3600.0
     target = min(BATTERY_MAX_TARGET_KW, missing / max(hours_left, MIN_HOURS_LEFT))
     mode = "frist"
-    car_home = inp.car is not None and inp.car.present
+    # only worth it while the car can still use the PV it frees up
+    car_home = inp.car is not None and inp.car.present and (
+        inp.car.soc is None or inp.car.soc < inp.car.limit_soc)
     if dep is not None and car_home and inp.now < dep.start < inp.pv_end and inp.forecast:
         after = forecast_kwh(inp.forecast, dep.start, inp.pv_end) * FORECAST_SAFETY
         h_dep = (dep.start - inp.now).total_seconds() / 3600.0
