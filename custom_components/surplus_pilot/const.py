@@ -21,6 +21,7 @@ CONF_STALE_MINUTES = "stale_minutes"
 CONF_PRICE_SOURCE = "price_source"
 CONF_TIBBER_HOME = "tibber_home"
 CONF_PRICE_SENSOR = "price_sensor"
+CONF_PRICE_HISTORY_SENSOR = "price_history_sensor"
 CONF_PV_END_BEFORE_SUNSET_H = "pv_end_before_sunset_h"
 
 PRICE_NONE = "none"
@@ -126,4 +127,10 @@ CALIBRATION_MIN_GOOD_DAYS = 5
 CALIBRATION_MAX_INTERP_MONTHS = 2
 
 DEFAULT_NIGHT_BASE_KW = 0.5
+
+# cheap grid top-up (threshold = percentile of the last days' prices)
+PRICE_ARCHIVE_DAYS = 8
+PRICE_MIN_SAMPLES_H = 48
+DEFAULT_CHEAP_PERCENTILE = 10
+DEFAULT_CHEAP_TARGET = 80
 LOG_LENGTH = 60

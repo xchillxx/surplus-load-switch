@@ -5,6 +5,8 @@ a device's automation must not reload the integration (that would interrupt
 a running charge and reset every debounce timer)."""
 from __future__ import annotations
 
+from datetime import timedelta
+
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -45,6 +47,10 @@ class PilotStore:
         data.setdefault("night_base_kw", DEFAULT_NIGHT_BASE_KW)
         data.setdefault("runtime", {"date": dt_util.now().date().isoformat(), "seconds": {}})
         data.setdefault("learned_kw", {})
+        data.setdefault("price_archive", {})
+        data.setdefault("cheap_enabled", True)
+        data.setdefault("cheap_percentile", 10)
+        data.setdefault("cheap_target", 80)
         data.setdefault("commands", {"date": dt_util.now().date().isoformat(), "count": 0})
         self.data = data
 
@@ -87,3 +93,13 @@ class PilotStore:
     def learn_night_base(self, kw: float, weight: float = 0.01) -> None:
         old = self.data["night_base_kw"]
         self.data["night_base_kw"] = old + weight * (kw - old)
+
+    # ---- price archive (published prices are kept; Tibber can't return past ones)
+    def archive_prices(self, slots, now, days: int) -> None:
+        arch = self.data["price_archive"]
+        for p in slots:
+            if p.start < now:
+                arch[p.start.isoformat()] = p.price
+        cutoff = (now - timedelta(days=days)).isoformat()
+        for k in [k for k in arch if k < cutoff]:
+            arch.pop(k)

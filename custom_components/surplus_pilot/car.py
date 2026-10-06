@@ -97,7 +97,7 @@ class CarController:
         """Turn the planned kW into a current, with the start/stop hysteresis
         (one window at the minimum before stopping)."""
         if plan.car_grid:
-            amps, reason = self.max_a, "netz_pflicht"
+            amps, reason = self.max_a, plan.car_reason
             self.low_windows = 0
         else:
             raw = max(0, min(self.max_a, math.floor(plan.car_kw / self.kw_per_a + 1e-9)))

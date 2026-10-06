@@ -34,9 +34,20 @@ and splits the surplus in this order:
    the devices today.
 5. The rest is exported.
 
-If the forecast says PV can't reach a departure target, the car charges from
-the grid in the **cheapest slots of a short window right before the
-departure** — as late as possible, so a sunnier day than forecast still wins.
+If the forecast says PV can't reach a departure target, the car charges the
+missing part from the grid in the **cheapest 15-minute slots between now and
+the departure**. Prices that aren't published yet (Tibber publishes tomorrow
+at ~13:00) are estimated from the median of the same hour over the last 8
+days — so a cheap midday today can win over a night that is usually dearer.
+Among equally cheap slots the later ones are taken (a sunnier hour may still
+help), and once there is just enough time left it charges regardless.
+
+**Cheap charging (optional):** while the price is below the cheap threshold
+(default: the cheapest 10 % of the last 8 days) the car is topped up from the
+grid up to a target (default 80 %) — but only by the energy the PV forecast
+won't bring before the next departure anyway, so a sunny tomorrow isn't
+wasted. Replayed on a sunny September this cost 6 kWh of grid energy a month;
+on dark days it is what buys the cheap hours.
 
 At night devices run on the home battery only if it lasts until the next
 solar start (+1 h) with all planned loads, and only above each device's
@@ -74,7 +85,8 @@ Only Home Assistant. Everything else is chosen from your own entities:
 - PV forecast — taken automatically from every integration that feeds the
   Energy dashboard (Forecast.Solar, Solcast, Open-Meteo Solar Forecast, …)
 - Electricity prices — Tibber, or any price sensor with a forecast attribute
-  (Nordpool `raw_today`/`raw_tomorrow`, EPEX Spot `data`, …)
+  (Nordpool `raw_today`/`raw_tomorrow`, EPEX Spot `data`, …). Optionally a
+  current-price sensor whose statistics seed the price history on day one
 
 **Car (optional, any brand)**
 - A switch that starts/stops charging and a number for the charging current —
@@ -110,6 +122,8 @@ Only Home Assistant. Everything else is chosen from your own entities:
 | `sensor.<device>_status` | Why a device is on/off, countdown to the next switch, runtime today, learned power |
 | `switch.<device>_automatik` | Off = Surplus Pilot leaves this device alone |
 | `switch.<car>_ladesteuerung` | Car control on/off |
+| `switch.<car>_billig_laden`, `number.<car>_billig_schwelle_perzentil`, `number.<car>_billig_laden_bis` | Cheap charging on/off, threshold percentile, target |
+| `sensor.<car>_billig_schwelle`, `sensor.<car>_strompreis_jetzt` | Threshold and current price in ct/kWh |
 | Departure slots | 4 repeating departures (time, target SoC, away duration, every N days, from date) + one one-off departure |
 
 *Observe only* computes and shows everything but switches nothing — useful to

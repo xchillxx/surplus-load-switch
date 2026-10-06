@@ -15,7 +15,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEnt
     ents = []
     car = entry.data.get(CONF_CAR)
     if car:
-        ents.append(CarControlSwitch(co, car_info(entry.entry_id, car.get(CONF_CAR_NAME) or "Auto")))
+        cinfo = car_info(entry.entry_id, car.get(CONF_CAR_NAME) or "Auto")
+        ents.append(CarControlSwitch(co, cinfo))
+        ents.append(CheapSwitch(co, cinfo))
         dinfo = departures_info(entry.entry_id)
         for n in range(1, NUM_SLOTS + 1):
             ents.append(SlotSwitch(co, dinfo, n))
@@ -98,6 +100,32 @@ class SlotSwitch(PilotEntity, SwitchEntity):
 
     async def _set(self, v: bool):
         slot_ref(self.coordinator, self._n)["enabled"] = v
+        self.coordinator.store.save()
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_on(self, **kw):
+        await self._set(True)
+
+    async def async_turn_off(self, **kw):
+        await self._set(False)
+
+
+class CheapSwitch(PilotEntity, SwitchEntity):
+    """Grid top-up while prices are below the cheap threshold."""
+
+    _attr_translation_key = "billig_laden"
+    _attr_icon = "mdi:cash-clock"
+
+    def __init__(self, co, info):
+        super().__init__(co, "billig_laden", info)
+
+    @property
+    def is_on(self):
+        return self.coordinator.store.data["cheap_enabled"]
+
+    async def _set(self, v: bool):
+        self.coordinator.store.data["cheap_enabled"] = v
         self.coordinator.store.save()
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()

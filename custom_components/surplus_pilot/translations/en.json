@@ -15,6 +15,7 @@
           "stale_minutes": "Sensor timeout",
           "price_source": "Electricity prices",
           "tibber_home": "Tibber home name (optional)",
+          "price_history_sensor": "Current price sensor for history (optional)",
           "price_sensor": "Price sensor with forecast"
         },
         "data_description": {
@@ -26,6 +27,7 @@
           "pv_end_before_sunset_h": "The battery should be full this long before sunset.",
           "stale_minutes": "A sensor silent for longer is treated as frozen.",
           "price_source": "Only used for grid charging when PV can't make a departure.",
+          "price_history_sensor": "Seeds the price history from its statistics, so the cheap threshold works from day one.",
           "price_sensor": "E.g. Nordpool or EPEX Spot (attributes with future prices)."
         }
       }
@@ -60,6 +62,7 @@
           "stale_minutes": "Sensor timeout",
           "price_source": "Electricity prices",
           "tibber_home": "Tibber home name (optional)",
+          "price_history_sensor": "Current price sensor for history (optional)",
           "price_sensor": "Price sensor with forecast"
         },
         "data_description": {
@@ -71,6 +74,7 @@
           "pv_end_before_sunset_h": "The battery should be full this long before sunset.",
           "stale_minutes": "A sensor silent for longer is treated as frozen.",
           "price_source": "Only used for grid charging when PV can't make a departure.",
+          "price_history_sensor": "Seeds the price history from its statistics, so the cheap threshold works from day one.",
           "price_sensor": "E.g. Nordpool or EPEX Spot (attributes with future prices)."
         }
       },
@@ -218,13 +222,20 @@
       "auto_leistung": {
         "name": "Charging power"
       },
+      "billig_schwelle": {
+        "name": "Cheap threshold"
+      },
+      "preis_jetzt": {
+        "name": "Price now"
+      },
       "auto_status": {
         "name": "Charging status",
         "state": {
           "kein_auto": "No car",
           "nicht_da": "Not home / not plugged in",
           "ladelimit_erreicht": "Charge limit reached",
-          "netz_pflicht": "Grid: departure target",
+          "netz_pflicht": "Grid: departure target (cheapest slots)",
+          "netz_billig": "Grid: cheap price, PV won't do it",
           "pflicht_minimum": "Departure target, minimum current",
           "zu_wenig_ueberschuss": "Not enough surplus",
           "pflicht": "Departure target (PV)",
@@ -257,6 +268,9 @@
       "auto_steuerung": {
         "name": "Charging control"
       },
+      "billig_laden": {
+        "name": "Cheap charging"
+      },
       "geraet_automatik": {
         "name": "Automatic"
       },
@@ -268,6 +282,12 @@
       }
     },
     "number": {
+      "billig_perzentil": {
+        "name": "Cheap threshold percentile"
+      },
+      "billig_bis": {
+        "name": "Cheap charging up to"
+      },
       "slot_ziel_soc": {
         "name": "Departure {n} target"
       },

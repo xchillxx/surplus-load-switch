@@ -86,3 +86,41 @@ def test_departure_battery_mode_only_while_car_can_charge():
     half = P.CarInput(**{**full.__dict__, "soc": 60.0})
     plan = P.make_plan(base_inputs(now, pv_kw=6.0, battery_soc=80.0, car=half, departures=[dep], forecast=fc))
     assert plan.battery_mode == "abfahrt"
+
+
+def _dark_day_inputs(now, night_estimate, price_now=0.20, threshold=None, cheap_target=None, sunny=False):
+    dep = P.Departure(start=(now + timedelta(days=1)).replace(hour=4, minute=30), target_soc=50.0, name="Tagschicht")
+    car = P.CarInput(present=True, soc=30.0, limit_soc=80.0, capacity_kwh=72.9, efficiency=0.9, min_kw=3.45,
+                     max_kw=11.04)
+    # today's prices are published (cheap midday 11-14 h), tomorrow's not yet (before 13:00)
+    day0 = now.replace(hour=0, minute=0)
+    prices = [P.PriceSlot(day0 + timedelta(hours=h), day0 + timedelta(hours=h + 1),
+                          0.20 if 11 <= h < 14 else 0.32) for h in range(24)]
+    profile = {h: (night_estimate if h < 6 else 0.32) for h in range(24)}
+    kwh = 9.0 if sunny else 0.3
+    fc = [P.ForecastHour(end=day0 + timedelta(hours=h), kwh=kwh if 10 <= h % 24 <= 16 else 0.0) for h in range(48)]
+    return base_inputs(now, pv_kw=0.3, car=car, departures=[dep], prices=prices, price_profile=profile,
+                       forecast=fc, price_now=price_now, cheap_threshold=threshold, cheap_target_soc=cheap_target)
+
+
+def test_day_before_early_shift_charges_at_cheap_midday():
+    early = datetime(2026, 11, 3, 11, 0, tzinfo=TZ)
+    # 16 kWh need 1.5 h: of the equally cheap 11-14 h slots the LATEST ones are taken
+    assert not P.make_plan(_dark_day_inputs(early, night_estimate=0.28)).car_grid
+    now = datetime(2026, 11, 3, 12, 45, tzinfo=TZ)
+    plan = P.make_plan(_dark_day_inputs(now, night_estimate=0.28))   # night usually dearer -> now
+    assert plan.car_grid and plan.car_reason == "netz_pflicht"
+    plan = P.make_plan(_dark_day_inputs(now, night_estimate=0.15))   # night usually cheaper -> wait
+    assert not plan.car_grid
+
+
+def test_cheap_topup_only_when_pv_wont_do_it():
+    now = datetime(2026, 11, 3, 11, 0, tzinfo=TZ)
+    inp = _dark_day_inputs(now, night_estimate=0.15, price_now=0.20, threshold=0.22, cheap_target=80.0)
+    inp.car.soc = 55.0  # obligation already met
+    plan = P.make_plan(inp)
+    assert plan.car_grid and plan.car_reason == "netz_billig"
+    inp = _dark_day_inputs(now, night_estimate=0.15, price_now=0.20, threshold=0.22, cheap_target=80.0, sunny=True)
+    inp.car.soc = 55.0
+    plan = P.make_plan(inp)
+    assert not plan.car_grid

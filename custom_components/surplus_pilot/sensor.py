@@ -14,7 +14,7 @@ from .entity import PilotEntity, car_info, device_info, hub_info
 DEVICE_REASONS = ["deaktiviert", "ausserhalb_zeitfenster", "wartet_auf_abhaengigkeit", "mindestlaufzeit",
                   "ueberschuss", "akku_reicht", "akku_reserve", "kein_ueberschuss", "akku_reicht_nicht",
                   "manuell", "unbekannt"]
-CAR_REASONS = ["kein_auto", "nicht_da", "ladelimit_erreicht", "netz_pflicht", "pflicht_minimum",
+CAR_REASONS = ["kein_auto", "nicht_da", "ladelimit_erreicht", "netz_pflicht", "netz_billig", "pflicht_minimum",
                "zu_wenig_ueberschuss", "pflicht", "pflicht_und_rest", "vorrang_rest", "rest", "haelt_minimum",
                "pausiert", "unbekannt"]
 
@@ -39,6 +39,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEnt
         info = car_info(entry.entry_id, car.get(CONF_CAR_NAME) or "Auto")
         ents.append(CarSensor(co, info))
         ents.append(KwSensor(co, info, "auto_leistung", "auto_kw"))
+        ents.append(PriceSensor(co, info, "billig_schwelle", "billig_schwelle"))
+        ents.append(PriceSensor(co, info, "preis_jetzt", "preis_jetzt"))
     for dev in entry.data.get(CONF_DEVICES) or []:
         ents.append(DeviceSensor(co, device_info(entry.entry_id, dev), dev))
     add(ents)
@@ -214,3 +216,30 @@ class DeviceSensor(PilotEntity, SensorEntity):
             "leistung_kw": co._decision_kw(self._dev),
             "name": self._dev.get(CONF_DEV_NAME),
         }
+
+
+class PriceSensor(PilotEntity, SensorEntity):
+    """Price in ct/kWh (the archive keeps the source unit, Tibber: EUR/kWh)."""
+
+    _attr_native_unit_of_measurement = "ct/kWh"
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:currency-eur"
+
+    def __init__(self, co, info, key, field):
+        super().__init__(co, key, info)
+        self._attr_translation_key = key
+        self._field = field
+
+    @property
+    def native_value(self):
+        v = (self.coordinator.data or {}).get(self._field)
+        return None if v is None else round(v * 100, 2)
+
+    @property
+    def extra_state_attributes(self):
+        if self._field != "billig_schwelle":
+            return None
+        st = self.coordinator.store.data
+        return {"perzentil": st["cheap_percentile"], "billig_laden_bis": st["cheap_target"],
+                "aktiv": st["cheap_enabled"],
+                "historie_stunden": (self.coordinator.data or {}).get("preis_historie_h")}

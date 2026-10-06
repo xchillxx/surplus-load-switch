@@ -56,6 +56,7 @@ from .const import (
     CONF_DEVICES,
     CONF_GRID_EXPORT_SENSOR,
     CONF_LOAD_SENSOR,
+    CONF_PRICE_HISTORY_SENSOR,
     CONF_PRICE_SENSOR,
     CONF_PRICE_SOURCE,
     CONF_PV_END_BEFORE_SUNSET_H,
@@ -120,6 +121,7 @@ def energy_schema(d: dict) -> vol.Schema:
                                      mode=sel.SelectSelectorMode.DROPDOWN)),
         vol.Optional(CONF_TIBBER_HOME, **_d(d, CONF_TIBBER_HOME)): str,
         vol.Optional(CONF_PRICE_SENSOR, **_d(d, CONF_PRICE_SENSOR)): _ent("sensor"),
+        vol.Optional(CONF_PRICE_HISTORY_SENSOR, **_d(d, CONF_PRICE_HISTORY_SENSOR)): _ent("sensor"),
     })
 
 
@@ -219,7 +221,8 @@ class PilotOptionsFlow(OptionsFlow):
     async def async_step_energy(self, user_input=None):
         if user_input is not None:
             data = self._data
-            for k in (CONF_GRID_EXPORT_SENSOR, CONF_BATTERY_SOC_SENSOR, CONF_TIBBER_HOME, CONF_PRICE_SENSOR):
+            for k in (CONF_GRID_EXPORT_SENSOR, CONF_BATTERY_SOC_SENSOR, CONF_TIBBER_HOME, CONF_PRICE_SENSOR,
+                      CONF_PRICE_HISTORY_SENSOR):
                 data.pop(k, None)
             data.update(user_input)
             return self._save(data)

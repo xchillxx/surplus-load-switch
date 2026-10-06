@@ -58,6 +58,7 @@ from .const import (
     CONF_DEVICES,
     CONF_GRID_EXPORT_SENSOR,
     CONF_LOAD_SENSOR,
+    CONF_PRICE_HISTORY_SENSOR,
     CONF_PRICE_SENSOR,
     CONF_PRICE_SOURCE,
     CONF_PV_END_BEFORE_SUNSET_H,
@@ -70,6 +71,8 @@ from .const import (
     DEFAULT_CAR_EFFICIENCY,
     DEFAULT_CAR_LIMIT,
     DEFAULT_PV_END_BEFORE_SUNSET_H,
+    PRICE_ARCHIVE_DAYS,
+    PRICE_MIN_SAMPLES_H,
     DEFAULT_SOLAR_OFFSETS,
     DEFAULT_STALE_MINUTES,
     DEVICE_FORCED_ON_DELAY_S,
@@ -107,7 +110,8 @@ REASON_TEXT = {
     "ueberschuss": "PV-Überschuss reicht", "akku_reicht": "Hausakku reicht bis Sonnenaufgang",
     "akku_reserve": "Hausakku unter Geräte-Reserve", "kein_ueberschuss": "kein Überschuss übrig",
     "akku_reicht_nicht": "Hausakku würde nicht bis Sonnenaufgang reichen",
-    "netz_pflicht": "Abfahrtsziel, aus dem Netz", "pflicht_minimum": "Abfahrtsziel, Mindeststrom",
+    "netz_pflicht": "Abfahrtsziel, aus dem Netz (günstigste Slots)",
+    "netz_billig": "Strom gerade billig, PV reicht nicht", "pflicht_minimum": "Abfahrtsziel, Mindeststrom",
     "zu_wenig_ueberschuss": "zu wenig Überschuss", "pflicht": "Abfahrtsziel aus PV",
     "pflicht_und_rest": "Abfahrtsziel + Rest", "vorrang_rest": "Vorrang, morgen keine PV-Chance",
     "rest": "Rest nach den Geräten", "haelt_minimum": "hält Minimum", "ladelimit_erreicht": "Ladelimit erreicht",
@@ -155,6 +159,7 @@ class PilotCoordinator(DataUpdateCoordinator):
         self._prices_at: datetime | None = None
         self._car_slot = None
         self._calib_try: datetime | None = None
+        self._price_stats: dict = {}
         self._last_plugged: bool | None = None
         self._last_pause: str | None = None
         self.device_plan: P.Plan | None = None
@@ -165,6 +170,60 @@ class PilotCoordinator(DataUpdateCoordinator):
         await self.store.async_load()
         await self.calibrator.async_load()
         await self._backfill_runtime()
+        await self._seed_price_archive()
+
+    async def _seed_price_archive(self) -> None:
+        """Fill the price archive from the recorder's hourly statistics of a
+        current-price sensor, so the cheap threshold works from day one."""
+        ent = self.cfg.get(CONF_PRICE_HISTORY_SENSOR)
+        if not ent or "recorder" not in self.hass.config.components or len(self.store.data["price_archive"]) > 96:
+            return
+        try:
+            from homeassistant.components.recorder import get_instance
+            from homeassistant.components.recorder.statistics import statistics_during_period
+        except ImportError:
+            return
+        now = dt_util.now()
+        start = now - timedelta(days=PRICE_ARCHIVE_DAYS)
+
+        def _q():
+            return statistics_during_period(self.hass, start, now, {ent}, "hour", None, {"mean"})
+
+        try:
+            rows = (await get_instance(self.hass).async_add_executor_job(_q)).get(ent, [])
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Price archive seeding failed", exc_info=True)
+            return
+        arch = self.store.data["price_archive"]
+        for r in rows:
+            st, mean = r.get("start"), r.get("mean")
+            if st is None or mean is None:
+                continue
+            ts = dt_util.utc_from_timestamp(st) if isinstance(st, (int, float)) else st
+            arch.setdefault(dt_util.as_local(ts).isoformat(), float(mean))
+        self.store.save()
+
+    def price_stats(self, now: datetime) -> dict:
+        """Hour-of-day estimate, cheap threshold and the current price."""
+        arch = self.store.data["price_archive"]
+        vals, by_hour = [], {}
+        for k, v in arch.items():
+            t = dt_util.parse_datetime(k)
+            if t is None:
+                continue
+            vals.append(v)
+            by_hour.setdefault(dt_util.as_local(t).hour, []).append(v)
+        profile = {h: statistics.median(v) for h, v in by_hour.items()}
+        thr = None
+        enough = len({k[:13] for k in arch}) >= PRICE_MIN_SAMPLES_H
+        if enough and vals:
+            vals.sort()
+            pct = float(self.store.data["cheap_percentile"])
+            idx = (len(vals) - 1) * pct / 100.0
+            lo, hi = int(idx), min(int(idx) + 1, len(vals) - 1)
+            thr = vals[lo] + (vals[hi] - vals[lo]) * (idx - lo)
+        now_price = next((p.price for p in self._prices if p.start <= now < p.end), None)
+        return {"profile": profile, "threshold": thr, "now": now_price, "samples_h": len({k[:13] for k in arch})}
 
     async def _backfill_runtime(self) -> None:
         """Today's runtime per device from the recorder when the store has
@@ -271,6 +330,7 @@ class PilotCoordinator(DataUpdateCoordinator):
         src = self.cfg.get(CONF_PRICE_SOURCE)
         if src == PRICE_SENSOR:
             self._prices = sensor_prices(self.hass, self.cfg.get(CONF_PRICE_SENSOR)) or []
+            self.store.archive_prices(self._prices, now, PRICE_ARCHIVE_DAYS)
             return
         if src != PRICE_TIBBER:
             self._prices = []
@@ -282,6 +342,7 @@ class PilotCoordinator(DataUpdateCoordinator):
                                          now - timedelta(hours=1), now + timedelta(hours=40))
         if rows:
             self._prices = rows
+            self.store.archive_prices(rows, now, PRICE_ARCHIVE_DAYS)
         elif not self._prices:
             self._prices_at = now - timedelta(seconds=1700)  # retry in ~2 min
 
@@ -435,6 +496,10 @@ class PilotCoordinator(DataUpdateCoordinator):
                 depends_on=d.get(CONF_DEV_DEPENDS_ON) or None, forced=self._forced(d, now, in_win, w_end),
                 soc_reserve=float(d.get(CONF_DEV_SOC_RESERVE) or 0.0)))
 
+        ps = self.price_stats(now)
+        self._price_stats = ps
+        cheap_target = float(self.store.data["cheap_target"]) if self.store.data["cheap_enabled"] else None
+
         def inputs(pv_kw: float, base_kw: float, car_fixed: float | None) -> P.Inputs:
             return P.Inputs(
                 now=now, pv_kw=pv_kw, base_kw=base_kw, battery_soc=soc,
@@ -444,7 +509,8 @@ class PilotCoordinator(DataUpdateCoordinator):
                 sunset=sun["sunset"], pv_end=sun["pv_end"], night_base_kw=self.store.data["night_base_kw"],
                 forecast=self._forecast, prices=self._prices, departures=deps, car=car_in, devices=dev_inputs,
                 allow_grid_for_car=bool(self.car_cfg.get(CONF_CAR_ALLOW_GRID, True)) if self.car_cfg else False,
-                car_fixed_kw=car_fixed)
+                car_fixed_kw=car_fixed, price_profile=ps["profile"], price_now=ps["now"],
+                cheap_threshold=ps["threshold"], cheap_target_soc=cheap_target)
 
         # ---- car decision (quarter hours / plug-in / pause change)
         paused = False
@@ -572,6 +638,9 @@ class PilotCoordinator(DataUpdateCoordinator):
             "prognose_rest_heute_kwh": round(fc_today, 1) if fc_today is not None else None,
             "prognose_morgen_kwh": round(fc_tomorrow, 1) if fc_tomorrow is not None else None,
             "preise_bekannt": len(self._prices),
+            "preis_jetzt": self._price_stats.get("now"),
+            "billig_schwelle": self._price_stats.get("threshold"),
+            "preis_historie_h": self._price_stats.get("samples_h"),
             "nacht_grundlast_kw": round(self.store.data["night_base_kw"], 2),
         }
 
@@ -628,8 +697,11 @@ class PilotCoordinator(DataUpdateCoordinator):
                     txt += " — lädt VOR den Geräten (morgen keine PV-Chance)"
                 elif cp.car_reason in ("rest", "pflicht_und_rest"):
                     txt += " — bekommt den Rest nach den Geräten"
-                if cp.car_grid:
-                    txt += " — lädt aus dem Netz (günstigster Zeitraum vor Abfahrt)"
+                if cp.car_grid and cp.car_reason == "netz_billig":
+                    txt += (f" — lädt aus dem Netz: Preis unter der Billig-Schwelle und die PV-Prognose "
+                            f"bringt bis zur Abfahrt nicht genug (bis {self.store.data['cheap_target']:.0f} %)")
+                elif cp.car_grid:
+                    txt += " — lädt aus dem Netz: günstigster Zeitraum bis zur Abfahrt"
                 lines.append(txt)
         if d.get("akku_soc") is not None:
             mode = {"abfahrt": "Abfahrt eingerechnet: nach der Abfahrt lädt PV den Akku allein",

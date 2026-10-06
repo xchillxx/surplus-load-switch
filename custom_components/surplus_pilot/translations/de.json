@@ -15,6 +15,7 @@
           "stale_minutes": "Sensor-Zeitlimit",
           "price_source": "Strompreise",
           "tibber_home": "Tibber-Zuhause (optional)",
+          "price_history_sensor": "Aktueller Strompreis für die Historie (optional)",
           "price_sensor": "Preissensor mit Prognose"
         },
         "data_description": {
@@ -26,6 +27,7 @@
           "pv_end_before_sunset_h": "So lange vor Sonnenuntergang soll der Akku voll sein.",
           "stale_minutes": "Ein Sensor, der länger nichts meldet, gilt als eingefroren.",
           "price_source": "Nur fürs Netzladen, wenn die PV eine Abfahrt nicht schafft.",
+          "price_history_sensor": "Füllt die Preis-Historie aus seiner Statistik, damit die Billig-Schwelle ab Tag 1 funktioniert.",
           "price_sensor": "Z. B. Nordpool oder EPEX Spot (Attribute mit künftigen Preisen)."
         }
       }
@@ -60,6 +62,7 @@
           "stale_minutes": "Sensor-Zeitlimit",
           "price_source": "Strompreise",
           "tibber_home": "Tibber-Zuhause (optional)",
+          "price_history_sensor": "Aktueller Strompreis für die Historie (optional)",
           "price_sensor": "Preissensor mit Prognose"
         },
         "data_description": {
@@ -71,6 +74,7 @@
           "pv_end_before_sunset_h": "So lange vor Sonnenuntergang soll der Akku voll sein.",
           "stale_minutes": "Ein Sensor, der länger nichts meldet, gilt als eingefroren.",
           "price_source": "Nur fürs Netzladen, wenn die PV eine Abfahrt nicht schafft.",
+          "price_history_sensor": "Füllt die Preis-Historie aus seiner Statistik, damit die Billig-Schwelle ab Tag 1 funktioniert.",
           "price_sensor": "Z. B. Nordpool oder EPEX Spot (Attribute mit künftigen Preisen)."
         }
       },
@@ -218,13 +222,20 @@
       "auto_leistung": {
         "name": "Ladeleistung"
       },
+      "billig_schwelle": {
+        "name": "Billig-Schwelle"
+      },
+      "preis_jetzt": {
+        "name": "Strompreis jetzt"
+      },
       "auto_status": {
         "name": "Ladestatus",
         "state": {
           "kein_auto": "Kein Auto",
           "nicht_da": "Nicht da / nicht angesteckt",
           "ladelimit_erreicht": "Ladelimit erreicht",
-          "netz_pflicht": "Netz: Abfahrtsziel",
+          "netz_pflicht": "Netz: Abfahrtsziel (günstigste Slots)",
+          "netz_billig": "Netz: billig, PV reicht nicht",
           "pflicht_minimum": "Abfahrtsziel, Mindeststrom",
           "zu_wenig_ueberschuss": "Zu wenig Überschuss",
           "pflicht": "Abfahrtsziel (PV)",
@@ -257,6 +268,9 @@
       "auto_steuerung": {
         "name": "Ladesteuerung"
       },
+      "billig_laden": {
+        "name": "Billig-Laden"
+      },
       "geraet_automatik": {
         "name": "Automatik"
       },
@@ -268,6 +282,12 @@
       }
     },
     "number": {
+      "billig_perzentil": {
+        "name": "Billig-Schwelle Perzentil"
+      },
+      "billig_bis": {
+        "name": "Billig-Laden bis"
+      },
       "slot_ziel_soc": {
         "name": "Abfahrt {n} Ziel"
       },

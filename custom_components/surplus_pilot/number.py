@@ -7,7 +7,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_CAR, DOMAIN, NUM_SLOTS
-from .entity import PilotEntity, departures_info
+from .const import CONF_CAR_NAME
+from .entity import PilotEntity, car_info, departures_info
 from .switch import slot_key, slot_ref
 
 FIELDS = {
@@ -28,6 +29,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEnt
             if n == 0 and field == "rhythm_days":
                 continue
             ents.append(SlotNumber(co, info, n, field))
+    cinfo = car_info(entry.entry_id, entry.data[CONF_CAR].get(CONF_CAR_NAME) or "Auto")
+    ents.append(StoreNumber(co, cinfo, "billig_perzentil", "cheap_percentile", 1, 50, 1, "%", "mdi:percent"))
+    ents.append(StoreNumber(co, cinfo, "billig_bis", "cheap_target", 20, 100, 5, "%", "mdi:battery-arrow-up"))
     add(ents)
 
 
@@ -50,6 +54,28 @@ class SlotNumber(PilotEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         slot_ref(self.coordinator, self._n)[self._field] = int(value) if self._field == "rhythm_days" else value
+        self.coordinator.store.save()
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+
+class StoreNumber(PilotEntity, NumberEntity):
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, co, info, key, field, lo, hi, step, unit, icon):
+        super().__init__(co, key, info)
+        self._field = field
+        self._attr_translation_key = key
+        self._attr_native_min_value, self._attr_native_max_value, self._attr_native_step = lo, hi, step
+        self._attr_native_unit_of_measurement = unit
+        self._attr_icon = icon
+
+    @property
+    def native_value(self):
+        return self.coordinator.store.data[self._field]
+
+    async def async_set_native_value(self, value: float) -> None:
+        self.coordinator.store.data[self._field] = value
         self.coordinator.store.save()
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
