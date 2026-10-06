@@ -160,6 +160,52 @@ class PilotCoordinator(DataUpdateCoordinator):
     async def async_setup(self) -> None:
         await self.store.async_load()
         await self.calibrator.async_load()
+        await self._backfill_runtime()
+
+    async def _backfill_runtime(self) -> None:
+        """Today's runtime per device from the recorder when the store has
+        none (fresh install, or a store lost on restart) — otherwise a
+        device that already ran for hours would look like it needs its
+        whole minimum runtime forced again."""
+        if "recorder" not in self.hass.config.components:
+            return
+        self.store.roll_day()
+        missing = list(self.devices)  # max(stored, recorded): a lost or late-started counter is repaired
+        if not missing:
+            return
+        try:
+            from homeassistant.components.recorder import get_instance, history
+        except ImportError:
+            return
+        now = dt_util.now()
+        start = dt_util.start_of_local_day()
+
+        def _query():
+            ids = [d[CONF_DEV_ENTITY] for d in missing]
+            return {i: history.state_changes_during_period(self.hass, start, now, entity_id=i).get(i, [])
+                    for i in ids}
+
+        try:
+            result = await get_instance(self.hass).async_add_executor_job(_query)
+        except Exception:  # noqa: BLE001 - a missing backfill only means counting from zero
+            _LOGGER.debug("Runtime backfill failed", exc_info=True)
+            return
+        for d in missing:
+            states = result.get(d[CONF_DEV_ENTITY], [])
+            first = self.hass.states.get(d[CONF_DEV_ENTITY])
+            secs = 0.0
+            for i, st in enumerate(states):
+                end = states[i + 1].last_changed if i + 1 < len(states) else now
+                on = st.state not in ("off", "unavailable", "unknown") if d.get(CONF_DEV_KIND) == KIND_CLIMATE \
+                    else st.state == "on"
+                if on:
+                    secs += (end - max(st.last_changed, start)).total_seconds()
+            if not states and first is not None and device_is_on(self.hass, d):
+                secs = (now - max(first.last_changed, start)).total_seconds()
+            sec = self.store.data["runtime"]["seconds"]
+            sec[d[CONF_DEV_ID]] = max(sec.get(d[CONF_DEV_ID], 0.0), secs)
+            _LOGGER.debug("Backfilled %s runtime today: %.2f h", d.get(CONF_DEV_NAME), secs / 3600)
+        self.store.save()
 
     def _log(self, text: str) -> None:
         self.log.appendleft({"zeit": dt_util.now().strftime("%d.%m. %H:%M"), "text": text})
