@@ -1,0 +1,10 @@
+name: Feature request
+description: An idea for Surplus Pilot
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should Surplus Pilot do, and in which situation?
+    validations:
+      required: true

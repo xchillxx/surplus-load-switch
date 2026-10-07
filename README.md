@@ -56,15 +56,18 @@ At night devices run on the home battery only if it lasts until the next
 solar start (+1 h) with all planned loads, and only above each device's
 battery reserve.
 
-The car is re-planned every 15 minutes on a 30-minute average (its top-up above
-the obligation must also fit the median of the last 15 minutes, so a falling
-afternoon curve isn't bridged by the home battery) (or immediately
-on plug-in, which is acted on within seconds — a car that starts charging by
-itself is stopped right away); devices are re-planned every minute on a 5-minute median and
-switch only after the decision held for 10 minutes (20 for thermostats).
-The action log, the readings of the last 30 minutes and running switch
-countdowns survive a Home Assistant restart, so decisions continue right
-away instead of starting from scratch.
+**Timing**
+- The car is re-planned every 15 minutes on a 30-minute average. Its top-up
+  above the obligation must also fit the median of the last 15 minutes, so a
+  falling afternoon curve isn't bridged by the home battery.
+- Plugging in, a changed departure or a wallbox mode change trigger a new car
+  decision right away — a car that starts charging by itself after plug-in is
+  stopped within seconds.
+- Devices are re-planned every minute on a 5-minute median and switch only
+  after the decision held for 10 minutes (20 for thermostats). A device that
+  depends on another one goes off together with it.
+- The action log, the readings of the last 30 minutes and running switch
+  countdowns survive a Home Assistant restart.
 
 ### Validated on recorded data
 
@@ -76,9 +79,9 @@ previous two-controller setup:
 | 30 days | two controllers | Surplus Pilot |
 |---|---|---|
 | Grid feed-in | 458 kWh | 360 kWh (−21 %) |
-| Device runtime (miner / pool pump / pool heat pump / boiler) | 525 / 194 / 157 / 116 h | 626 / 217 / 177 / 176 h |
-| Car energy from PV | same need | same need, departures ≥ target |
-| Grid energy for the car | 0 kWh | 0.3 kWh |
+| Device runtime (miner / pool pump / pool heat pump / boiler) | 525 / 194 / 157 / 116 h | 623 / 219 / 181 / 177 h |
+| Departures below target | 0 | 0 |
+| Grid energy for the car | 0 kWh | 6 kWh (cheap charging on, ≈ 1.40 €) |
 
 ## Requirements
 
@@ -122,21 +125,30 @@ Only Home Assistant. Everything else is chosen from your own entities:
 
 ## Entities
 
+Entity IDs are created in the language Home Assistant runs in at setup
+(German or English); the names below are the English ones.
+
 | Entity | Purpose |
 |---|---|
-| `select.surplus_pilot_betriebsart` | Automatic / Observe only / Off |
-| `sensor.surplus_pilot_status` | One-line summary; attribute `erklaerung` explains every decision in plain words |
-| `sensor.surplus_pilot_*` | PV, base load, surplus, battery reservation, device budget, forecast today/tomorrow, next departure, last action (with a log of the last 60) |
-| `sensor.<car>_ladestatus` | Why the car charges (or not), target current, commands today |
-| `sensor.<device>_status` | Why a device is on/off, countdown to the next switch, runtime today, learned power |
-| `switch.<device>_automatik` | Off = Surplus Pilot leaves this device alone |
-| `switch.<car>_ladesteuerung` | Car control on/off |
-| `switch.<car>_billig_laden`, `number.<car>_billig_schwelle_perzentil`, `number.<car>_billig_laden_bis` | Cheap charging on/off, threshold percentile, target |
-| `sensor.<car>_billig_schwelle`, `sensor.<car>_strompreis_jetzt` | Threshold and current price in ct/kWh |
-| Departure slots | 4 repeating departures (time, target SoC, away duration, every N days, from date) + one one-off departure |
+| *Operating mode* (`select`) | Automatic / Observe only / Off |
+| *Status* (`sensor`) | One-line summary; attribute `erklaerung` explains every decision in plain words |
+| PV power, Base load, Surplus, Battery reservation, Device budget, Forecast rest of today, Forecast tomorrow, Next departure, Last action (`sensor`) | What the plan sees and does; *Last action* keeps a log of the last 60 actions |
+| Car: *Charging status*, *Charging power* (`sensor`) | Why the car charges (or not), target current, commands today |
+| Car: *Charging control* (`switch`) | Car control on/off |
+| Car: *Cheap charging* (`switch`), *Cheap threshold percentile*, *Cheap charging up to* (`number`) | Cheap charging on/off, threshold percentile, target |
+| Car: *Cheap threshold*, *Price now* (`sensor`) | Threshold and current price in ct/kWh |
+| Device: *Status* (`sensor`) | Why a device is on/off, countdown to the next switch, runtime today, learned power |
+| Device: *Automatic* (`switch`) | Off = Surplus Pilot leaves this device alone |
+| Departures (`switch`, `time`, `number`, `text`, `date`) | 4 repeating departures (time, target SoC, away duration, every N days, from date) + one one-off departure |
 
 *Observe only* computes and shows everything but switches nothing — useful to
 compare with an existing setup before switching over.
+
+## Feedback
+
+Bugs and ideas: [GitHub issues](https://github.com/xchillxx/surplus-pilot/issues).
+Please attach the *Status* sensor's `erklaerung` attribute and the *Last action* log —
+they usually show why a decision was made.
 
 ## License
 

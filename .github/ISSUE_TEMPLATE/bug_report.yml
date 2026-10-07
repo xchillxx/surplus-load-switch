@@ -1,0 +1,36 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Surplus Pilot version / Home Assistant version
+      placeholder: "3.1.5 / 2026.10.1"
+    validations:
+      required: true
+  - type: textarea
+    id: explanation
+    attributes:
+      label: Status explanation and action log
+      description: >
+        Developer tools → States → the Surplus Pilot *Status* sensor → attribute `erklaerung`,
+        and the *Last action* sensor → attribute `eintraege`, taken around the time it happened.
+      render: yaml
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup
+      description: Car / wallbox integration, battery, price source, devices — whatever is relevant.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: Settings → System → Logs, filtered for `surplus_pilot`.
+      render: text
