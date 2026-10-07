@@ -252,3 +252,50 @@ async def test_log_readings_and_countdowns_survive_a_restart(hass: HomeAssistant
     assert co.car.decision is not None        # decided on the first cycle, no 10 min wait
     for did, (want, since) in pending_before.items():
         assert co._pending.get(did, (None, None))[1] in (since, None)
+
+
+async def test_dependent_device_follows_pump_not_its_plan(hass: HomeAssistant, freezer):
+    """07.10. 13:51 live: pump planned off (countdown 8 min, still running),
+    the pool heat pump was switched off at once 'waiting for dependency'."""
+    freezer.move_to("2026-10-07 09:01:00+00:00")
+    set_world(hass, pv=9.0, load=0.6, soc=96, car_soc=80, export=2.0)
+    hass.states.async_set("switch.car_charge", "off")
+    hass.states.async_set("switch.miner", "on")
+    hass.states.async_set("switch.pump", "on")
+    hass.states.async_set("climate.pool", "heat")
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    calls = []
+
+    async def fake(call):
+        calls.append((call.domain, call.service, dict(call.data)))
+        ent = call.data.get("entity_id")
+        if call.domain == "switch":
+            hass.states.async_set(ent, "on" if call.service == "turn_on" else "off")
+        elif call.domain == "climate":
+            hass.states.async_set(ent, call.data["hvac_mode"])
+
+    for dom, srv in (("switch", "turn_on"), ("switch", "turn_off"), ("number", "set_value"),
+                     ("climate", "set_hvac_mode")):
+        hass.services.async_register(dom, srv, fake)
+
+    def tick(pv):
+        freezer.tick(timedelta(minutes=1))
+        set_world(hass, pv=pv, load=0.6 + 0.15 + 1.3 + 0.86, soc=80, car_soc=80, export=0.0)
+        async_fire_time_changed(hass, dt_util.utcnow())
+
+    for _ in range(8):   # surplus gone: pump counts down, stays on for now
+        tick(1.0)
+        await hass.async_block_till_done()
+    assert hass.states.get("switch.pump").state == "on"
+    assert hass.states.get("climate.pool").state == "heat"
+    for _ in range(6):
+        tick(1.0)
+        await hass.async_block_till_done()
+    assert hass.states.get("switch.pump").state == "off"
+    assert hass.states.get("climate.pool").state == "off"   # same cycle as the pump, not 20 min later
+    i_pump = calls.index(("switch", "turn_off", {"entity_id": "switch.pump"}))
+    i_wp = next(i for i, c in enumerate(calls) if c[0] == "climate")
+    assert i_wp > i_pump

@@ -654,7 +654,12 @@ class PilotCoordinator(DataUpdateCoordinator):
             if want == actual:
                 self._pending.pop(did, None)
                 continue
-            immediate = not want and dec.reason in ("ausserhalb_zeitfenster", "wartet_auf_abhaengigkeit")
+            # off at once only when it can't run any more: outside its window,
+            # or the device it depends on is really off (not merely planned
+            # off and still counting down - then it follows with its own delay)
+            dep_id = d.get(CONF_DEV_DEPENDS_ON)
+            immediate = not want and (dec.reason == "ausserhalb_zeitfenster" or (
+                dec.reason == "wartet_auf_abhaengigkeit" and not (dep_id and dev_on.get(dep_id))))
             if want:
                 delay = DEVICE_FORCED_ON_DELAY_S if dec.path == "pflicht" else DEVICE_ON_DELAY_S
             else:
@@ -668,6 +673,7 @@ class PilotCoordinator(DataUpdateCoordinator):
             if immediate or (now - pend[1]).total_seconds() >= delay:
                 if self.active:
                     await device_switch(self.hass, d, want)
+                    dev_on[did] = want   # a dependent device further down sees it this cycle
                     self._log(f"{d.get(CONF_DEV_NAME)} {'an' if want else 'aus'} "
                               f"({REASON_TEXT.get(dec.reason, dec.reason)})")
                 self._pending.pop(did, None)
