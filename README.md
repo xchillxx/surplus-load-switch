@@ -144,6 +144,14 @@ Entity IDs are created in the language Home Assistant runs in at setup
 *Observe only* computes and shows everything but switches nothing — useful to
 compare with an existing setup before switching over.
 
+## Support
+
+Surplus Pilot is free. If it saves you money and you're about to sign up anyway,
+these **referral links** give you and me a bonus at no extra cost:
+
+- **Tibber** (dynamic electricity tariff): https://invite.tibber.com/cw4ufzqw
+- **Tesla** (car or solar purchase): https://ts.la/daniel513094
+
 ## Feedback
 
 Bugs and ideas: [GitHub issues](https://github.com/xchillxx/surplus-pilot/issues).
