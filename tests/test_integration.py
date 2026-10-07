@@ -208,3 +208,47 @@ async def test_new_departure_is_planned_at_once(hass: HomeAssistant, freezer):
     await co.async_refresh()
     assert co.car_plan.need_kwh > 5
     assert co.car.decision.time == dt_util.now()
+
+
+async def test_log_readings_and_countdowns_survive_a_restart(hass: HomeAssistant, freezer):
+    """07.10. live: after each HA restart the action log was empty and the
+    car stayed 'unknown' for 10 min while readings were collected again."""
+    freezer.move_to("2026-10-07 09:01:00+00:00")
+    set_world(hass, pv=9.0, load=0.6, soc=96, car_soc=50, export=2.0)
+    for e in ("switch.car_charge", "switch.miner", "switch.pump", "climate.pool"):
+        hass.states.async_set(e, "off")
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    async def fake(call):
+        ent = call.data.get("entity_id")
+        if call.domain == "switch":
+            hass.states.async_set(ent, "on" if call.service == "turn_on" else "off")
+        elif call.domain == "climate":
+            hass.states.async_set(ent, call.data["hvac_mode"])
+        elif call.domain == "number":
+            hass.states.async_set(ent, call.data["value"], {"min": 5, "max": 16})
+
+    for dom, srv in (("switch", "turn_on"), ("switch", "turn_off"), ("number", "set_value"),
+                     ("climate", "set_hvac_mode")):
+        hass.services.async_register(dom, srv, fake)
+    for _ in range(14):
+        freezer.tick(timedelta(minutes=1))
+        set_world(hass, pv=9.0, load=0.6, soc=96, car_soc=50, export=2.0)
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+    co = hass.data[DOMAIN][entry.entry_id]
+    log_before = list(co.log)
+    assert log_before and co.car.decision is not None
+    pending_before = dict(co._pending)
+
+    assert await hass.config_entries.async_reload(entry.entry_id)   # unload saves, setup loads
+    await hass.async_block_till_done()
+    co = hass.data[DOMAIN][entry.entry_id]
+    assert list(co.log)[: len(log_before)] == log_before
+    assert len(co.samples) >= 14
+    assert co.car.decision is not None        # decided on the first cycle, no 10 min wait
+    for did, (want, since) in pending_before.items():
+        assert co._pending.get(did, (None, None))[1] in (since, None)

@@ -60,6 +60,9 @@ The car is re-planned every 15 minutes on a 30-minute average (or immediately
 on plug-in, which is acted on within seconds — a car that starts charging by
 itself is stopped right away); devices are re-planned every minute on a 5-minute median and
 switch only after the decision held for 10 minutes (20 for thermostats).
+The action log, the readings of the last 30 minutes and running switch
+countdowns survive a Home Assistant restart, so decisions continue right
+away instead of starting from scratch.
 
 ### Validated on recorded data
 

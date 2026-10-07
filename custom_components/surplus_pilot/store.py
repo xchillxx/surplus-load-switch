@@ -52,6 +52,11 @@ class PilotStore:
         data.setdefault("cheap_percentile", 10)
         data.setdefault("cheap_target", 80)
         data.setdefault("commands", {"date": dt_util.now().date().isoformat(), "count": 0})
+        # survive a restart: action log, the last 30 min of readings (car
+        # decision needs 10 min of them) and running switch countdowns
+        data.setdefault("log", [])
+        data.setdefault("samples", [])
+        data.setdefault("pending", {})
         self.data = data
 
     def save(self) -> None:

@@ -140,6 +140,7 @@ async def device_switch(hass: HomeAssistant, dev: dict, on: bool) -> None:
 
 
 _UNSET = object()
+URGENT_DEPARTURE_H = 2
 
 
 class PilotCoordinator(DataUpdateCoordinator):
@@ -191,9 +192,38 @@ class PilotCoordinator(DataUpdateCoordinator):
 
     async def async_setup(self) -> None:
         await self.store.async_load()
+        self._restore_runtime_state()
         await self.calibrator.async_load()
         await self._backfill_runtime()
         await self._seed_price_archive()
+
+    def _restore_runtime_state(self) -> None:
+        """Log, recent readings and switch countdowns from before a restart.
+        Readings older than the car's averaging window are dropped, so a long
+        outage still starts fresh."""
+        st = self.store.data
+        self.log.extend(e for e in st["log"][:LOG_LENGTH] if isinstance(e, dict))
+        now = dt_util.now()
+        keep = timedelta(minutes=CAR_AVERAGE_MINUTES + 2)
+        for row in st["samples"]:
+            try:
+                ts = dt_util.parse_datetime(row[0])
+                vals = tuple(float(x) for x in row[1:4])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if ts is not None and timedelta(0) <= now - ts <= keep:
+                self.samples.append((ts, *vals))
+        ids = {d[CONF_DEV_ID] for d in self.devices}
+        for did, (want, since) in st["pending"].items():
+            ts = dt_util.parse_datetime(since) if isinstance(since, str) else None
+            if did in ids and ts is not None and now - ts <= timedelta(hours=1):
+                self._pending[did] = (bool(want), ts)
+
+    def _persist_runtime_state(self) -> None:
+        st = self.store.data
+        st["samples"] = [[s[0].isoformat(), round(s[1], 3), round(s[2], 3), round(s[3], 3)] for s in self.samples]
+        st["pending"] = {did: [want, ts.isoformat()] for did, (want, ts) in self._pending.items()}
+        st["log"] = list(self.log)
 
     async def _seed_price_archive(self) -> None:
         """Fill the price archive from the recorder's hourly statistics of a
@@ -295,6 +325,8 @@ class PilotCoordinator(DataUpdateCoordinator):
 
     def _log(self, text: str) -> None:
         self.log.appendleft({"zeit": dt_util.now().strftime("%d.%m. %H:%M"), "text": text})
+        self.store.data["log"] = list(self.log)
+        self.store.save()
 
     @property
     def mode(self) -> str:
@@ -452,10 +484,14 @@ class PilotCoordinator(DataUpdateCoordinator):
         plugged = None
         if self.car_cfg:
             c = self.car_cfg
-            car_kw = power_kw(self.hass, c.get(CONF_CAR_POWER_SENSOR)) or 0.0
+            meas = power_kw(self.hass, c.get(CONF_CAR_POWER_SENSOR))
             ch = is_on(self.hass, c.get(CONF_CAR_CHARGING_SENSOR))
-            charging = bool(ch) if ch is not None else (car_kw > 0.3 or self.car.switch_on())
-            if c.get(CONF_CAR_POWER_SENSOR) is None and charging and c.get(CONF_CAR_CURRENT_ENTITY):
+            charging = bool(ch) if ch is not None else ((meas or 0.0) > 0.3 or self.car.switch_on())
+            car_kw = meas if meas is not None else 0.0
+            # no power reading (none configured, or e.g. an MQTT sensor still
+            # empty after a restart): estimate it from the set current, so the
+            # car's draw doesn't end up in the base load
+            if meas is None and charging and c.get(CONF_CAR_CURRENT_ENTITY):
                 car_kw = (number(self.hass, c[CONF_CAR_CURRENT_ENTITY]) or 0) * self.car.kw_per_a
             plugged = plugged_state(self.hass, c.get(CONF_CAR_PLUGGED_SENSOR))
             if plugged is None:
@@ -558,7 +594,9 @@ class PilotCoordinator(DataUpdateCoordinator):
             if forced or replan or slot != self._car_slot:
                 win = [s for s in self.samples if (now - s[0]).total_seconds() <= CAR_AVERAGE_MINUTES * 60]
                 covered = (win[-1][0] - win[0][0]).total_seconds() / 60 if len(win) > 1 else 0
-                if covered >= CAR_MIN_COVERAGE_MINUTES or forced or (replan and win):
+                # a departure within 2 h doesn't wait for 10 min of readings
+                urgent = nd is not None and nd.start - now <= timedelta(hours=URGENT_DEPARTURE_H)
+                if covered >= CAR_MIN_COVERAGE_MINUTES or forced or ((replan or urgent) and win):
                     pv_m = sum(s[1] for s in win) / len(win)
                     base_m = statistics.median(s[2] for s in win)
                     self.car_plan = P.make_plan(inputs(pv_m, base_m, None))
@@ -591,6 +629,8 @@ class PilotCoordinator(DataUpdateCoordinator):
             car_fixed = min(car5, cp.car_must_kw)
         self.device_plan = P.make_plan(inputs(pv5, base5, car_fixed))
         await self._apply_devices(now, dev_on)
+        self._persist_runtime_state()
+        self.store.save()
 
         self.status = self._build_status(now, pv, load, base, soc, export, car_in, car_kw, charging, sun,
                                          load_stale, paused)
