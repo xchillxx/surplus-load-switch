@@ -15,6 +15,8 @@ Pilot replaces both with a single plan.
 > Load Switch installations are not migrated automatically — set up Surplus
 > Pilot fresh and remove the old integration.
 
+![Surplus Pilot dashboard](docs/dashboard-overview.png)
+
 ## How the plan works
 
 Every minute Surplus Pilot reads PV production, house load and battery state
@@ -122,6 +124,19 @@ Only Home Assistant. Everything else is chosen from your own entities:
 2. Install **Surplus Pilot**, restart Home Assistant
 3. *Settings → Devices & services → Add integration → Surplus Pilot* (energy sensors)
 4. *Configure* → add the car and your devices
+
+## Dashboard
+
+An example dashboard is in [`dashboards/surplus-pilot.yaml`](dashboards/surplus-pilot.yaml):
+create a new dashboard, open the raw configuration editor and paste it. The
+text cards (status, car, prices, device table, action log) find the Surplus
+Pilot entities by themselves; for the tiles and graphs replace `my_car` and the
+example device IDs with yours. No custom cards needed.
+
+The screenshots show a German setup with a dark glass theme (card-mod); the UI
+is available in English and German.
+
+![Departures](docs/dashboard-departures.png)
 
 ## Entities
 

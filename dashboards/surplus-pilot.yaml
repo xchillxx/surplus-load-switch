@@ -1,0 +1,292 @@
+# Surplus Pilot — example dashboard
+#
+# How to use:
+#   Settings → Dashboards → Add dashboard → "New dashboard from scratch",
+#   open it → ⋮ → Edit dashboard → ⋮ → Raw configuration editor → paste this file.
+#
+# The text cards (status, car, devices, log) find the Surplus Pilot entities by
+# themselves, so they work with any car name, any devices and in English or
+# German. The tiles and graphs use the entity IDs Home Assistant creates in
+# English — adapt them where needed:
+#   - my_car          → your car's name as entity ID (e.g. "Model Y" → model_y)
+#   - pool_pump / ... → your device names (Device: "<name> Automatic" switches)
+#   - German setup: IDs are German, e.g. select.surplus_pilot_betriebsart,
+#     see Settings → Devices & services → Surplus Pilot → entities.
+# No custom cards needed.
+
+title: Surplus Pilot
+views:
+  - title: Overview
+    path: overview
+    icon: mdi:solar-power-variant
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: What happens now
+            icon: mdi:lightbulb-on-outline
+          - type: markdown
+            content: |
+              {% set ns = namespace(s=none) %}
+              {% for e in integration_entities('surplus_pilot') if e.startswith('sensor.') and state_attr(e, 'erklaerung') is not none %}{% set ns.s = e %}{% endfor %}
+              {% set s = ns.s %}
+              {% if s %}
+              ## {{ states(s) }}
+
+              {% if state_attr(s, 'betriebsart') != 'auto' %}> ⚠️ **Mode: {{ state_attr(s, 'betriebsart') }}** — nothing is switched.
+              {% endif %}
+              {% for l in state_attr(s, 'erklaerung') or [] %}
+              - {{ l }}{% endfor %}
+
+              <small>Solar start {{ as_timestamp(state_attr(s, 'solar_start')) | timestamp_custom('%H:%M') }} ·
+              PV end {{ as_timestamp(state_attr(s, 'pv_ende')) | timestamp_custom('%H:%M') }} ·
+              forecast rest of today {{ state_attr(s, 'prognose_rest_heute_kwh') | round(0) }} kWh,
+              tomorrow {{ state_attr(s, 'prognose_morgen_kwh') | round(0) }} kWh</small>
+              {% else %}Surplus Pilot not found.{% endif %}
+          - type: tile
+            entity: select.surplus_pilot_operating_mode
+            features:
+              - type: select-options
+            grid_options:
+              columns: full
+          - type: tile
+            entity: sensor.surplus_pilot_pv_power
+          - type: tile
+            entity: sensor.surplus_pilot_base_load
+          - type: tile
+            entity: sensor.surplus_pilot_surplus
+          - type: tile
+            entity: sensor.surplus_pilot_battery_reservation
+          - type: tile
+            entity: sensor.surplus_pilot_device_budget
+          - type: tile
+            entity: sensor.surplus_pilot_forecast_tomorrow
+      - type: grid
+        cards:
+          - type: heading
+            heading: Car
+            icon: mdi:car-electric
+          - type: markdown
+            content: |
+              {% set ns = namespace(c=none) %}
+              {% for e in integration_entities('surplus_pilot') if e.startswith('sensor.') and state_attr(e, 'befehle_heute') is not none %}{% set ns.c = e %}{% endfor %}
+              {% set c = ns.c %}
+              {% set d = 'sensor.surplus_pilot_next_departure' %}
+              {% if c %}
+              ### 🚗 {{ state_translated(c) }}
+
+              {% if state_attr(c, 'da') %}Car **{{ state_attr(c, 'soc') | int(0) }} %** (limit {{ state_attr(c, 'limit') | int(0) }} %) ·
+              target **{{ state_attr(c, 'soll_ampere') or 0 }} A** ({{ (state_attr(c, 'soll_kw') or 0) | round(1) }} kW)
+              {% else %}Car not home or not plugged in{% endif %}
+
+              {% if states(d) not in ['unknown', 'unavailable'] %}**Next departure:** {{ state_attr(d, 'name') }} ·
+              {{ as_timestamp(states(d)) | timestamp_custom('%a %d.%m. %H:%M') }} · target {{ state_attr(d, 'ziel_soc') | int }} %
+              {% if (state_attr(d, 'bedarf_kwh') or 0) > 0 %} · {{ state_attr(d, 'bedarf_kwh') }} kWh missing
+              {%- if (state_attr(d, 'aus_pv_nicht_gedeckt_kwh') or 0) > 0 %}, {{ state_attr(d, 'aus_pv_nicht_gedeckt_kwh') }} kWh of it from the grid in the cheapest slots{% endif %}
+              {%- else %} · ✅ reached{% endif %}
+              {% else %}No departure planned{% endif %}
+
+              {% if state_attr(c, 'vorrang_vor_geraeten') %}⚡ Charges **before** the devices: no PV chance for the car tomorrow.{% endif %}
+
+              <small>Last action: {{ state_attr(c, 'aktion') }} · commands today: {{ state_attr(c, 'befehle_heute') }}</small>
+              {% else %}No car configured.{% endif %}
+          - type: tile
+            entity: switch.my_car_charging_control
+          - type: tile
+            entity: sensor.my_car_charging_power
+          - type: markdown
+            content: |
+              {% set ns = namespace(t=none, p=none) %}
+              {% for e in integration_entities('surplus_pilot') if e.startswith('sensor.') and state_attr(e, 'unit_of_measurement') == 'ct/kWh' %}
+              {% if state_attr(e, 'perzentil') is not none %}{% set ns.t = e %}{% else %}{% set ns.p = e %}{% endif %}{% endfor %}
+              {% if ns.t and ns.p %}
+              {% set thr = states(ns.t) | float(0) %}{% set now_p = states(ns.p) | float(0) %}
+              **💶 Price now {{ now_p | round(1) }} ct** · cheap threshold {{ thr | round(1) }} ct
+              (cheapest {{ state_attr(ns.t, 'perzentil') }} % of the last 8 days) ·
+              {% if not state_attr(ns.t, 'aktiv') %}cheap charging off{% elif now_p <= thr %}**cheap now** → tops up to {{ state_attr(ns.t, 'billig_laden_bis') }} % if PV won't get there before the departure{% else %}not cheap{% endif %}
+              {% else %}No price source configured.{% endif %}
+          - type: tile
+            entity: switch.my_car_cheap_charging
+          - type: tile
+            entity: number.my_car_cheap_charging_up_to
+            features:
+              - type: numeric-input
+                style: buttons
+          - type: tile
+            entity: number.my_car_cheap_threshold_percentile
+            features:
+              - type: numeric-input
+                style: buttons
+          - type: heading
+            heading: Devices
+            icon: mdi:power-plug
+          - type: markdown
+            content: |
+              | Device | | Reason | Runtime today | Power |
+              |---|---|---|---|---|
+              {% for e in integration_entities('surplus_pilot') | sort if e.startswith('sensor.') and state_attr(e, 'laufzeit_heute_h') is not none %}{% set a = states[e].attributes %}| **{{ a.name }}** | {{ '🟢 on' if a.an else '⚪ off' }}{% if a.schaltet_in_s %} → {{ 'on' if a.soll_an else 'off' }} in {{ (a.schaltet_in_s / 60) | round(0) | int }} min{% endif %} | {{ state_translated(e) }} | {{ a.laufzeit_heute_h | round(1) }} h | {{ a.leistung_kw | round(2) }} kW |
+              {% endfor %}
+          # one tile per device: Off = Surplus Pilot leaves the device alone
+          - type: tile
+            entity: switch.pool_pump_automatic
+          - type: tile
+            entity: switch.boiler_automatic
+      - type: grid
+        cards:
+          - type: heading
+            heading: Today
+            icon: mdi:chart-line
+          - type: history-graph
+            hours_to_show: 18
+            grid_options:
+              columns: full
+              rows: 8
+            entities:
+              - entity: sensor.surplus_pilot_pv_power
+                name: PV
+              - entity: sensor.surplus_pilot_base_load
+                name: Base load
+              - entity: sensor.my_car_charging_power
+                name: Car
+              - entity: sensor.surplus_pilot_battery_reservation
+                name: Battery reservation
+          - type: history-graph
+            hours_to_show: 18
+            grid_options:
+              columns: full
+              rows: 4
+            entities:
+              # the switches/climates Surplus Pilot controls
+              - entity: switch.pool_pump
+                name: Pool pump
+              - entity: switch.boiler
+                name: Boiler
+              - entity: sensor.my_car_charging_status
+                name: Car
+          - type: heading
+            heading: Last actions
+            icon: mdi:history
+          - type: markdown
+            content: |
+              {% for e in (state_attr('sensor.surplus_pilot_last_action', 'eintraege') or [])[:15] %}
+              - `{{ e.zeit }}` {{ e.text }}
+              {% else %}
+              No actions yet.
+              {% endfor %}
+  - title: Departures
+    path: departures
+    icon: mdi:car-clock
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Repeating departures
+          - type: markdown
+            content: |
+              The car gets at least the **target** by the departure — from PV first;
+              if the forecast isn't enough, the rest comes from the grid in the cheapest
+              15-minute slots between now and the departure. **Away for** = roughly how
+              long the car is gone (so Surplus Pilot knows whether it gets PV tomorrow).
+              **Every** = rhythm in days starting at **from**.
+          - type: entities
+            title: Departure 1
+            state_color: true
+            entities:
+              - entity: switch.surplus_pilot_departures_departure_1_active
+                name: Active
+              - entity: text.surplus_pilot_departures_departure_1_name
+                name: Name
+              - entity: time.surplus_pilot_departures_departure_1_time
+                name: Time
+              - entity: number.surplus_pilot_departures_departure_1_target
+                name: Target
+              - entity: number.surplus_pilot_departures_departure_1_away_for
+                name: Away for (hours)
+              - entity: number.surplus_pilot_departures_departure_1_every
+                name: Every (days)
+              - entity: date.surplus_pilot_departures_departure_1_from
+                name: From
+          - type: entities
+            title: Departure 2
+            state_color: true
+            entities:
+              - entity: switch.surplus_pilot_departures_departure_2_active
+                name: Active
+              - entity: text.surplus_pilot_departures_departure_2_name
+                name: Name
+              - entity: time.surplus_pilot_departures_departure_2_time
+                name: Time
+              - entity: number.surplus_pilot_departures_departure_2_target
+                name: Target
+              - entity: number.surplus_pilot_departures_departure_2_away_for
+                name: Away for (hours)
+              - entity: number.surplus_pilot_departures_departure_2_every
+                name: Every (days)
+              - entity: date.surplus_pilot_departures_departure_2_from
+                name: From
+      - type: grid
+        cards:
+          - type: heading
+            heading: More
+          - type: entities
+            title: Departure 3
+            state_color: true
+            entities:
+              - entity: switch.surplus_pilot_departures_departure_3_active
+                name: Active
+              - entity: text.surplus_pilot_departures_departure_3_name
+                name: Name
+              - entity: time.surplus_pilot_departures_departure_3_time
+                name: Time
+              - entity: number.surplus_pilot_departures_departure_3_target
+                name: Target
+              - entity: number.surplus_pilot_departures_departure_3_away_for
+                name: Away for (hours)
+              - entity: number.surplus_pilot_departures_departure_3_every
+                name: Every (days)
+              - entity: date.surplus_pilot_departures_departure_3_from
+                name: From
+          - type: entities
+            title: Departure 4
+            state_color: true
+            entities:
+              - entity: switch.surplus_pilot_departures_departure_4_active
+                name: Active
+              - entity: text.surplus_pilot_departures_departure_4_name
+                name: Name
+              - entity: time.surplus_pilot_departures_departure_4_time
+                name: Time
+              - entity: number.surplus_pilot_departures_departure_4_target
+                name: Target
+              - entity: number.surplus_pilot_departures_departure_4_away_for
+                name: Away for (hours)
+              - entity: number.surplus_pilot_departures_departure_4_every
+                name: Every (days)
+              - entity: date.surplus_pilot_departures_departure_4_from
+                name: From
+      - type: grid
+        cards:
+          - type: heading
+            heading: One-off
+          - type: entities
+            title: One-off departure
+            state_color: true
+            entities:
+              - entity: switch.surplus_pilot_departures_one_off_departure_active
+                name: Active
+              - entity: date.surplus_pilot_departures_one_off_date
+                name: Date
+              - entity: time.surplus_pilot_departures_one_off_time
+                name: Time
+              - entity: number.surplus_pilot_departures_one_off_target
+                name: Target
+              - entity: number.surplus_pilot_departures_one_off_away_for
+                name: Away for (hours)
+          - type: markdown
+            content: |
+              For exceptions (a trip, a holiday drive): set date, time and target and
+              switch it on. It stays on after the departure — just switch it off again.
