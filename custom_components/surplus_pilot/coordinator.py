@@ -139,6 +139,9 @@ async def device_switch(hass: HomeAssistant, dev: dict, on: bool) -> None:
                                        blocking=False)
 
 
+_UNSET = object()
+
+
 class PilotCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=timedelta(seconds=UPDATE_INTERVAL_SECONDS))
@@ -163,6 +166,7 @@ class PilotCoordinator(DataUpdateCoordinator):
         self._price_stats: dict = {}
         self._last_plugged: bool | None = None
         self._last_pause: str | None = None
+        self._dep_sig: object = _UNSET
         self.device_plan: P.Plan | None = None
         self.car_plan: P.Plan | None = None
         self.status: dict = {}
@@ -545,16 +549,22 @@ class PilotCoordinator(DataUpdateCoordinator):
             if pstate is not None:
                 self._last_pause = pstate
             forced = just_plugged or pause_changed
+            # a departure set or changed on the dashboard is planned at once,
+            # not at the next quarter hour (it may be only minutes away)
+            nd = P.next_departure(deps, now)
+            dep_sig = (nd.start, nd.target_soc) if nd else None
+            replan = self._dep_sig is not _UNSET and dep_sig != self._dep_sig
             slot = (now.date(), now.hour, now.minute // CAR_DECISION_MINUTES)
-            if forced or slot != self._car_slot:
+            if forced or replan or slot != self._car_slot:
                 win = [s for s in self.samples if (now - s[0]).total_seconds() <= CAR_AVERAGE_MINUTES * 60]
                 covered = (win[-1][0] - win[0][0]).total_seconds() / 60 if len(win) > 1 else 0
-                if covered >= CAR_MIN_COVERAGE_MINUTES or forced:
+                if covered >= CAR_MIN_COVERAGE_MINUTES or forced or (replan and win):
                     pv_m = sum(s[1] for s in win) / len(win)
                     base_m = statistics.median(s[2] for s in win)
                     self.car_plan = P.make_plan(inputs(pv_m, base_m, None))
                     self.car.decide(now, self.car_plan, charging, forced)
                     self._car_slot = slot
+                    self._dep_sig = dep_sig
             car_active = self.active and self.store.data["car_control"] and not paused and (
                 car_in is not None and car_in.present and (car_in.soc is None or car_in.soc < car_in.limit_soc
                                                            or charging))

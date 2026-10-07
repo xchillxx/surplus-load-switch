@@ -178,3 +178,33 @@ async def test_plug_in_autostart_stopped_without_waiting_for_the_minute(hass: Ho
     async_fire_time_changed(hass, dt_util.utcnow())
     await hass.async_block_till_done()
     assert ("switch", "turn_off", {"entity_id": "switch.car_charge"}) in calls
+
+
+async def test_new_departure_is_planned_at_once(hass: HomeAssistant, freezer):
+    """07.10. live: a one-off departure set at 13:30:51 showed 'already
+    reached' until the next quarter hour - the car plan was 30 s older."""
+    freezer.move_to("2026-10-07 09:01:00+00:00")   # all within one quarter hour after the first decision
+    set_world(hass, pv=9.0, load=0.6, soc=96, car_soc=72, export=2.0)
+    for e in ("switch.car_charge", "switch.miner", "switch.pump", "climate.pool"):
+        hass.states.async_set(e, "off")
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    for dom, srv in (("switch", "turn_on"), ("switch", "turn_off"), ("number", "set_value"),
+                     ("climate", "set_hvac_mode")):
+        hass.services.async_register(dom, srv, lambda call: None)
+    co = hass.data[DOMAIN][entry.entry_id]
+    for _ in range(12):
+        freezer.tick(timedelta(minutes=1))
+        set_world(hass, pv=9.0, load=0.6, soc=96, car_soc=72, export=2.0)
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+    assert co.car_plan is not None and co.car_plan.need_kwh == 0
+    soon = dt_util.now() + timedelta(minutes=30)
+    co.store.data["oneoff"] = {"enabled": True, "name": "Einmalig", "target_soc": 80, "time": soon.strftime("%H:%M"),
+                               "away_h": 0.0, "start_date": soon.date().isoformat()}
+    freezer.tick(timedelta(seconds=20))
+    await co.async_refresh()
+    assert co.car_plan.need_kwh > 5
+    assert co.car.decision.time == dt_util.now()
