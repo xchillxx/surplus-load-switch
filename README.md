@@ -68,6 +68,12 @@ battery reserve.
 - Devices are re-planned every minute on a 5-minute median and switch only
   after the decision held for 10 minutes (20 for thermostats). A device that
   depends on another one goes off together with it.
+- A device only **starts** when it can run for at least an hour: not in the
+  last hour before its window closes, not on PV surplus in the last hour
+  before the PV end, and on the battery path only if the battery stays above
+  the device's reserve for an hour with the current load. A running device is
+  not affected. Replayed over 30 days this cut the pool pump's runs under an
+  hour from 25 to 2.
 - The action log, the readings of the last 30 minutes and running switch
   countdowns survive a Home Assistant restart.
 

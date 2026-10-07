@@ -44,6 +44,7 @@ PV_HOUR_MARGIN_KW = 1.0        # an hour counts as "PV hour" when forecast > bas
 CHEAP_FORECAST_TRUST = 1.0     # optional cheap top-up: trust the forecast fully (no guarantee needed)
 TOMORROW_SHARE = 0.5           # tomorrow must cover this share of the car's missing energy
 TOMORROW_FORECAST_TRUST = 1.0  # the top-up is optional: no extra safety factor (x0.7 put it before the devices too often)
+DEVICE_MIN_RUN_H = 1.0         # a device only starts when it can run at least this long
 
 
 @dataclass
@@ -271,6 +272,30 @@ def battery_lasts(inp: Inputs, planned_on: dict[str, bool], extra: DeviceInput |
     return avail >= load
 
 
+def _hours(inp: Inputs, t: datetime) -> float:
+    return (t - inp.now).total_seconds() / 3600.0
+
+
+def pv_hours_left(inp: Inputs) -> float:
+    """Hours of usable PV left today (0 after the PV end; after sunset
+    pv_end already points to tomorrow)."""
+    if inp.pv_end.date() != inp.now.date():
+        return 0.0
+    return max(0.0, _hours(inp, inp.pv_end))
+
+
+def battery_run_ok(inp: Inputs, planned_on: dict[str, bool], d: DeviceInput) -> bool:
+    """Battery path start: after DEVICE_MIN_RUN_H with the current house
+    load, the planned devices and this one, the battery must still be above
+    the device's reserve - otherwise it's off again after a few minutes."""
+    if inp.battery_soc is None:
+        return False
+    draw = inp.base_kw + d.decision_kw + sum(x.decision_kw for x in inp.devices if planned_on.get(x.id))
+    drain = max(0.0, draw - inp.pv_kw) * DEVICE_MIN_RUN_H
+    after = inp.battery_soc - drain / max(inp.battery_capacity_kwh, 0.1) * 100.0
+    return after >= max(d.soc_reserve, inp.battery_min_soc)
+
+
 def _price_at(inp: Inputs, t: datetime) -> tuple[float | None, bool]:
     """(price, published) for the slot starting at t; unpublished slots use
     the hour-of-day estimate."""
@@ -450,20 +475,37 @@ def _devices(inp: Inputs, remaining: float) -> dict[str, DeviceDecision]:
             planned[d.id] = True
             remaining -= d.decision_kw
             continue
+        # starting is only worth it for a real run: not shortly before the
+        # window closes, the PV day ends or the battery hits the reserve
+        # (07.10. live: pump on 30 min before PV end, and at 86 % with an
+        # 85 % reserve - off again after 1 h and 17 min)
+        starting = not d.is_on
+        if starting and d.window_end is not None and _hours(inp, d.window_end) < DEVICE_MIN_RUN_H:
+            out[d.id] = DeviceDecision(False, "zu_kurz")
+            continue
+        short = False
         need = d.decision_kw + (-DEVICE_HYSTERESIS_KW if d.is_on else DEVICE_HYSTERESIS_KW)
         if remaining >= need:
-            out[d.id] = DeviceDecision(True, "ueberschuss", "ueberschuss")
-            planned[d.id] = True
-            remaining -= d.decision_kw
-            continue
+            if starting and pv_hours_left(inp) < DEVICE_MIN_RUN_H:
+                short = True
+            else:
+                out[d.id] = DeviceDecision(True, "ueberschuss", "ueberschuss")
+                planned[d.id] = True
+                remaining -= d.decision_kw
+                continue
         gate = (not day) or exporting or battery_full
         if gate and battery_lasts(inp, planned, d):
-            out[d.id] = DeviceDecision(True, "akku_reicht", "akku")
-            planned[d.id] = True
-            continue
+            if starting and not battery_run_ok(inp, planned, d):
+                short = True
+            else:
+                out[d.id] = DeviceDecision(True, "akku_reicht", "akku")
+                planned[d.id] = True
+                continue
         # name the rule that actually blocked it: in daylight without export
         # the battery path is closed anyway, the reserve is not the reason
-        if gate and inp.battery_soc is not None and inp.battery_soc < d.soc_reserve:
+        if short:
+            reason = "zu_kurz"
+        elif gate and inp.battery_soc is not None and inp.battery_soc < d.soc_reserve:
             reason = "akku_reserve"
         elif day:
             reason = "kein_ueberschuss"

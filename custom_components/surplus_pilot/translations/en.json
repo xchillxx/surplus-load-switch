@@ -259,6 +259,7 @@
           "akku_reserve": "Below battery reserve",
           "kein_ueberschuss": "No surplus",
           "akku_reicht_nicht": "Battery would not last",
+          "zu_kurz": "Run would be too short",
           "manuell": "Manual (automation off)",
           "unbekannt": "Unknown"
         }

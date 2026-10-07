@@ -111,6 +111,7 @@ REASON_TEXT = {
     "ueberschuss": "PV-Überschuss reicht", "akku_reicht": "Hausakku reicht bis Sonnenaufgang",
     "akku_reserve": "Hausakku unter Geräte-Reserve", "kein_ueberschuss": "kein Überschuss übrig",
     "akku_reicht_nicht": "Hausakku würde nicht bis Sonnenaufgang reichen",
+    "zu_kurz": "würde nur kurz laufen (PV-Ende, Zeitfenster oder Reserve zu nah)",
     "netz_pflicht": "Abfahrtsziel, aus dem Netz (günstigste Slots)",
     "netz_billig": "Strom gerade billig, PV reicht nicht", "pflicht_minimum": "Abfahrtsziel, Mindeststrom",
     "zu_wenig_ueberschuss": "zu wenig Überschuss", "pflicht": "Abfahrtsziel aus PV",

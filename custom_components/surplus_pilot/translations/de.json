@@ -259,6 +259,7 @@
           "akku_reserve": "Unter Akku-Reserve",
           "kein_ueberschuss": "Kein Überschuss",
           "akku_reicht_nicht": "Akku reicht nicht",
+          "zu_kurz": "Lohnt nicht (zu kurz)",
           "manuell": "Manuell (Automatik aus)",
           "unbekannt": "Unbekannt"
         }

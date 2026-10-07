@@ -12,7 +12,7 @@ from .coordinator import PilotCoordinator
 from .entity import PilotEntity, car_info, device_info, hub_info
 
 DEVICE_REASONS = ["deaktiviert", "ausserhalb_zeitfenster", "wartet_auf_abhaengigkeit", "mindestlaufzeit",
-                  "ueberschuss", "akku_reicht", "akku_reserve", "kein_ueberschuss", "akku_reicht_nicht",
+                  "ueberschuss", "akku_reicht", "akku_reserve", "kein_ueberschuss", "akku_reicht_nicht", "zu_kurz",
                   "manuell", "unbekannt"]
 CAR_REASONS = ["kein_auto", "nicht_da", "ladelimit_erreicht", "netz_pflicht", "netz_billig", "pflicht_minimum",
                "zu_wenig_ueberschuss", "pflicht", "pflicht_und_rest", "vorrang_rest", "rest", "haelt_minimum",

@@ -175,3 +175,38 @@ def test_topup_capped_by_recent_window_on_falling_pv():
     # never below the obligation; grid charging untouched
     low = P.cap_car_topup(avg, 0.0, car.min_kw)
     assert low.car_kw == max(avg.car_must_kw, car.min_kw)
+
+
+def test_device_does_not_start_for_a_short_run():
+    """07.10. live: pump on at 16:51 with PV end at 17:22 (off 17:49), and on
+    again at 20:23 on the battery path at 86 % with an 85 % reserve (off 20:40)."""
+    pump = lambda on=False: P.DeviceInput(id="pump", name="Poolpumpe", priority=3, decision_kw=1.34, is_on=on,
+                                          soc_reserve=85.0, window_end=datetime(2026, 10, 7, 22, 0, tzinfo=TZ))
+    kw = dict(battery_capacity_kwh=13.8)
+    # afternoon: plenty of surplus right now, but the PV day ends in 40 min
+    late = datetime(2026, 10, 7, 16, 41, tzinfo=TZ)
+    plan = P.make_plan(base_inputs(late, pv_kw=4.3, base_kw=0.3, battery_soc=100.0, devices=[miner(True), pump()],
+                                   pv_end=late.replace(hour=17, minute=22), **kw))
+    assert not plan.devices["pump"].on and plan.devices["pump"].reason == "zu_kurz"
+    # already running: keeps running on the surplus
+    plan = P.make_plan(base_inputs(late, pv_kw=4.3, base_kw=0.3, battery_soc=100.0,
+                                   devices=[miner(True), pump(True)], pv_end=late.replace(hour=17, minute=22), **kw))
+    assert plan.devices["pump"].on
+    # earlier the same surplus starts it
+    noon = late.replace(hour=13)
+    plan = P.make_plan(base_inputs(noon, pv_kw=4.3, base_kw=0.3, battery_soc=100.0, devices=[miner(True), pump()],
+                                   pv_end=late.replace(hour=17, minute=22), **kw))
+    assert plan.devices["pump"].on
+    # evening battery path: 86 % would be under the 85 % reserve within minutes
+    eve = datetime(2026, 10, 7, 20, 12, tzinfo=TZ)
+    plan = P.make_plan(base_inputs(eve, base_kw=0.6, battery_soc=86.0, night_base_kw=0.2,
+                                   devices=[miner(True), pump()], **kw))
+    assert not plan.devices["pump"].on and plan.devices["pump"].reason == "zu_kurz"
+    # a running pump keeps going until the reserve itself is reached
+    plan = P.make_plan(base_inputs(eve, base_kw=0.6, battery_soc=86.0, night_base_kw=0.2,
+                                   devices=[miner(True), pump(True)], **kw))
+    assert plan.devices["pump"].on
+    # window closes in 30 min: not worth starting
+    plan = P.make_plan(base_inputs(eve.replace(hour=21, minute=30), base_kw=0.6, battery_soc=100.0,
+                                   night_base_kw=0.2, devices=[pump()], **kw))
+    assert plan.devices["pump"].reason == "zu_kurz"
