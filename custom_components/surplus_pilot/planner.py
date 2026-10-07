@@ -27,7 +27,7 @@ wins).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 # --- tuning (all validated in tools/simulate.py) ---
@@ -471,3 +471,23 @@ def _devices(inp: Inputs, remaining: float) -> dict[str, DeviceDecision]:
             reason = "akku_reicht_nicht"
         out[d.id] = DeviceDecision(False, reason)
     return out
+
+
+def cap_car_topup(plan: Plan, cap_kw: float, car_min_kw: float) -> Plan:
+    """Limit the car's top-up (everything above its obligation) to what a
+    more recent window allows. The 30-min average lags behind a falling PV
+    curve and the gap would come from the home battery; on a rising curve
+    the battery takes the extra, so only the downside is capped."""
+    if plan.car_grid or plan.car_reason not in ("rest", "vorrang_rest", "pflicht_und_rest"):
+        return plan
+    must = plan.car_must_kw
+    kw = max(must, min(plan.car_kw, cap_kw))
+    if kw >= plan.car_kw - 1e-9:
+        return plan
+    reason = plan.car_reason
+    if kw < car_min_kw:
+        kw, reason = (car_min_kw, "pflicht_minimum") if must > 0 else (0.0, "zu_wenig_ueberschuss")
+    elif reason == "pflicht_und_rest" and kw - must < 0.05:
+        reason = "pflicht"
+    budget = {**plan.budget, "auto_rest_kw": max(0.0, kw - must), "auto_begrenzt_auf_kw": round(cap_kw, 2)}
+    return replace(plan, car_kw=kw, car_reason=reason, budget=budget)

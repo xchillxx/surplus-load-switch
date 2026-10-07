@@ -140,6 +140,7 @@ async def device_switch(hass: HomeAssistant, dev: dict, on: bool) -> None:
 
 
 _UNSET = object()
+CAR_CAP_MINUTES = 15         # the top-up must fit this recent window too
 URGENT_DEPARTURE_H = 2
 
 
@@ -599,7 +600,14 @@ class PilotCoordinator(DataUpdateCoordinator):
                 if covered >= CAR_MIN_COVERAGE_MINUTES or forced or ((replan or urgent) and win):
                     pv_m = sum(s[1] for s in win) / len(win)
                     base_m = statistics.median(s[2] for s in win)
-                    self.car_plan = P.make_plan(inputs(pv_m, base_m, None))
+                    plan = P.make_plan(inputs(pv_m, base_m, None))
+                    # the top-up must also fit the last 15 min (falling PV)
+                    win_cap = [s for s in win if (now - s[0]).total_seconds() <= CAR_CAP_MINUTES * 60]
+                    if win_cap:
+                        recent = P.make_plan(inputs(statistics.median(s[1] for s in win_cap),
+                                                    statistics.median(s[2] for s in win_cap), None))
+                        plan = P.cap_car_topup(plan, recent.car_kw, self.car.min_kw)
+                    self.car_plan = plan
                     self.car.decide(now, self.car_plan, charging, forced)
                     self._car_slot = slot
                     self._dep_sig = dep_sig
@@ -778,6 +786,9 @@ class PilotCoordinator(DataUpdateCoordinator):
                     txt += " — lädt VOR den Geräten (morgen keine PV-Chance)"
                 elif cp.car_reason in ("rest", "pflicht_und_rest"):
                     txt += " — bekommt den Rest nach den Geräten"
+                if "auto_begrenzt_auf_kw" in cp.budget:
+                    txt += (f" — begrenzt auf den Überschuss der letzten {CAR_CAP_MINUTES} min "
+                            f"({self._kw(cp.budget['auto_begrenzt_auf_kw'])}), damit der Hausakku nicht zuschießt")
                 if cp.car_grid and cp.car_reason == "netz_billig":
                     txt += (f" — lädt aus dem Netz: Preis unter der Billig-Schwelle und die PV-Prognose "
                             f"bringt bis zur Abfahrt nicht genug (bis {self.store.data['cheap_target']:.0f} %)")

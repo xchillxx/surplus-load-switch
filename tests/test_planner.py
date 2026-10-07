@@ -151,3 +151,27 @@ def test_daytime_off_reason_is_missing_surplus_not_reserve():
     night = now.replace(hour=22)
     plan = P.make_plan(base_inputs(night, battery_soc=83.0, devices=[boiler]))
     assert plan.devices["boiler"].reason == "akku_reserve"
+
+
+def test_topup_capped_by_recent_window_on_falling_pv():
+    """07.10. 15:09 live: 30-min average PV ~9 kW -> 12 A, real PV 7 kW and
+    falling; the home battery paid ~2 kWh into the car."""
+    now = datetime(2026, 10, 7, 15, 9, tzinfo=TZ)
+    car = P.CarInput(present=True, soc=71.0, limit_soc=80.0, capacity_kwh=72.89, efficiency=0.9, min_kw=3.45,
+                     max_kw=11.04)
+    dep = P.Departure(start=(now + timedelta(days=1)).replace(hour=7, minute=0), target_soc=80.0, name="Einmalig",
+                      returns=(now + timedelta(days=1)).replace(hour=18, minute=0))
+    fc = [P.ForecastHour(end=now.replace(hour=0, minute=0) + timedelta(hours=h), kwh=6.0 if 10 <= h % 24 <= 17 else 0.0)
+          for h in range(48)]
+    kw = dict(battery_soc=100.0, car=car, departures=[dep], forecast=fc)
+    avg = P.make_plan(base_inputs(now, pv_kw=9.0, base_kw=0.5, **kw))
+    recent = P.make_plan(base_inputs(now, pv_kw=7.0, base_kw=0.5, **kw))
+    assert avg.car_kw > 8.0 and avg.car_must_kw > 0
+    capped = P.cap_car_topup(avg, recent.car_kw, car.min_kw)
+    assert capped.car_kw == recent.car_kw < avg.car_kw
+    assert capped.car_kw >= capped.car_must_kw
+    # rising PV: the recent window is higher -> nothing changes
+    assert P.cap_car_topup(recent, avg.car_kw, car.min_kw) is recent
+    # never below the obligation; grid charging untouched
+    low = P.cap_car_topup(avg, 0.0, car.min_kw)
+    assert low.car_kw == max(avg.car_must_kw, car.min_kw)

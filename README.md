@@ -56,7 +56,9 @@ At night devices run on the home battery only if it lasts until the next
 solar start (+1 h) with all planned loads, and only above each device's
 battery reserve.
 
-The car is re-planned every 15 minutes on a 30-minute average (or immediately
+The car is re-planned every 15 minutes on a 30-minute average (its top-up above
+the obligation must also fit the median of the last 15 minutes, so a falling
+afternoon curve isn't bridged by the home battery) (or immediately
 on plug-in, which is acted on within seconds — a car that starts charging by
 itself is stopped right away); devices are re-planned every minute on a 5-minute median and
 switch only after the decision held for 10 minutes (20 for thermostats).
