@@ -142,3 +142,39 @@ async def test_unknown_plug_state_means_not_present(hass: HomeAssistant, freezer
     hass.states.async_set("sensor.car_cable", "disconnected")
     await co.async_refresh()
     assert co.status["auto_da"] is False
+
+
+async def test_plug_in_autostart_stopped_without_waiting_for_the_minute(hass: HomeAssistant, freezer):
+    """06:07 live: plugged in at night, the car started by itself and ran a
+    full minute until the next cycle. A plug/charging change runs a cycle now."""
+    set_world(hass, pv=0.0, load=0.6, soc=60, car_soc=52, plugged="off")
+    hass.states.async_set("switch.car_charge", "off")
+    for e in ("switch.miner", "switch.pump", "climate.pool"):
+        hass.states.async_set(e, "off")
+    data = {**DATA, "car": {**DATA["car"], "charging_sensor": "binary_sensor.car_charging"}}
+    hass.states.async_set("binary_sensor.car_charging", "off")
+    entry = MockConfigEntry(domain=DOMAIN, data=data)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    calls = []
+
+    async def fake(call):
+        calls.append((call.domain, call.service, dict(call.data)))
+        if call.domain == "switch":
+            hass.states.async_set(call.data["entity_id"], "on" if call.service == "turn_on" else "off")
+
+    for dom, srv in (("switch", "turn_on"), ("switch", "turn_off"), ("number", "set_value")):
+        hass.services.async_register(dom, srv, fake)
+    freezer.tick(timedelta(seconds=15))
+    hass.states.async_set("binary_sensor.car_plugged", "on")
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(seconds=15))
+    hass.states.async_set("switch.car_charge", "on")
+    hass.states.async_set("sensor.car_power", 4.0, {"unit_of_measurement": "kW"})
+    hass.states.async_set("binary_sensor.car_charging", "on")
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(seconds=11))   # request_refresh cooldown, still far below the 60 s cycle
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert ("switch", "turn_off", {"entity_id": "switch.car_charge"}) in calls

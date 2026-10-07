@@ -43,6 +43,7 @@ SLOT = timedelta(minutes=15)
 PV_HOUR_MARGIN_KW = 1.0        # an hour counts as "PV hour" when forecast > base + 1 kW
 CHEAP_FORECAST_TRUST = 1.0     # optional cheap top-up: trust the forecast fully (no guarantee needed)
 TOMORROW_SHARE = 0.5           # tomorrow must cover this share of the car's missing energy
+TOMORROW_FORECAST_TRUST = 1.0  # the top-up is optional: no extra safety factor (x0.7 put it before the devices too often)
 
 
 @dataclass
@@ -240,7 +241,7 @@ def car_pv_chance_tomorrow(inp: Inputs, car_missing_kwh: float) -> bool:
         return False
     if not inp.forecast:
         return True
-    surplus, _ = forecast_surplus_kwh(inp.forecast, start, end, inp.night_base_kw)
+    surplus, _ = forecast_surplus_kwh(inp.forecast, start, end, inp.night_base_kw, TOMORROW_FORECAST_TRUST)
     if surplus <= 0 and forecast_kwh(inp.forecast, start, end) == 0:
         return True  # no forecast published for tomorrow yet -> don't panic
     battery_missing = 0.0  # battery is usually refilled first tomorrow
@@ -460,7 +461,9 @@ def _devices(inp: Inputs, remaining: float) -> dict[str, DeviceDecision]:
             out[d.id] = DeviceDecision(True, "akku_reicht", "akku")
             planned[d.id] = True
             continue
-        if inp.battery_soc is not None and inp.battery_soc < d.soc_reserve:
+        # name the rule that actually blocked it: in daylight without export
+        # the battery path is closed anyway, the reserve is not the reason
+        if gate and inp.battery_soc is not None and inp.battery_soc < d.soc_reserve:
             reason = "akku_reserve"
         elif day:
             reason = "kein_ueberschuss"

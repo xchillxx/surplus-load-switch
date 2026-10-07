@@ -28,10 +28,13 @@ and splits the surplus in this order:
 3. **Devices** — by priority, each with its own time window, minimum daily
    runtime, battery reserve and dependency (e.g. a pool heat pump that needs
    the pump).
-4. **Car top-up** — whatever is left, up to the car's charge limit.
+4. **Car top-up** — whatever is left, up to the car's charge limit. Between
+   two car decisions a device may claim power the top-up is using; the car
+   follows at its next decision.
    *Exception:* when the car won't get a PV chance tomorrow (it is away during
-   tomorrow's PV window, or the forecast is too weak), it charges **before**
-   the devices today.
+   most of tomorrow's PV window, or tomorrow's forecast — after the base load
+   and half a battery — covers less than half of what the car is missing), it
+   charges **before** the devices today.
 5. The rest is exported.
 
 If the forecast says PV can't reach a departure target, the car charges the
@@ -54,7 +57,8 @@ solar start (+1 h) with all planned loads, and only above each device's
 battery reserve.
 
 The car is re-planned every 15 minutes on a 30-minute average (or immediately
-on plug-in); devices are re-planned every minute on a 5-minute median and
+on plug-in, which is acted on within seconds — a car that starts charging by
+itself is stopped right away); devices are re-planned every minute on a 5-minute median and
 switch only after the decision held for 10 minutes (20 for thermostats).
 
 ### Validated on recorded data

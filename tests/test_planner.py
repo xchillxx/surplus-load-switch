@@ -124,3 +124,30 @@ def test_cheap_topup_only_when_pv_wont_do_it():
     inp.car.soc = 55.0
     plan = P.make_plan(inp)
     assert not plan.car_grid
+
+
+def test_ordinary_autumn_tomorrow_keeps_devices_before_car_topup():
+    """07.10.2026 live: car 52 % (limit 80), tomorrow ~25 kWh forecast, car
+    home all day. The x0.7 forecast made it 'no PV chance tomorrow' and the
+    optional top-up pushed the pool pump off."""
+    now = datetime(2026, 10, 7, 10, 30, tzinfo=TZ)
+    car = P.CarInput(present=True, soc=52.0, limit_soc=80.0, capacity_kwh=72.89, efficiency=0.9, min_kw=4.14,
+                     max_kw=11.04)
+    tomorrow = now.replace(hour=0, minute=0) + timedelta(days=1)
+    kwh = {10: 1.5, 11: 2.8, 12: 3.8, 13: 4.3, 14: 4.3, 15: 3.8, 16: 2.9, 17: 1.6, 18: 0.6}
+    fc = [P.ForecastHour(end=tomorrow + timedelta(hours=h), kwh=v) for h, v in kwh.items()]
+    pump = P.DeviceInput(id="pump", name="Poolpumpe", priority=3, decision_kw=1.34, is_on=True, soc_reserve=85.0)
+    plan = P.make_plan(base_inputs(now, pv_kw=6.0, base_kw=1.0, battery_soc=70.0, battery_capacity_kwh=13.8,
+                                   car=car, forecast=fc, devices=[miner(True), pump]))
+    assert not plan.car_first
+    assert plan.devices["pump"].on
+
+
+def test_daytime_off_reason_is_missing_surplus_not_reserve():
+    now = datetime(2026, 10, 7, 13, 0, tzinfo=TZ)
+    boiler = P.DeviceInput(id="boiler", name="Boiler", priority=5, decision_kw=2.0, is_on=True, soc_reserve=95.0)
+    plan = P.make_plan(base_inputs(now, pv_kw=2.0, base_kw=1.0, battery_soc=83.0, export_kw=0.0, devices=[boiler]))
+    assert plan.devices["boiler"].reason == "kein_ueberschuss"
+    night = now.replace(hour=22)
+    plan = P.make_plan(base_inputs(night, battery_soc=83.0, devices=[boiler]))
+    assert plan.devices["boiler"].reason == "akku_reserve"

@@ -9,7 +9,8 @@ from collections import deque
 from datetime import datetime, time as dtime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -165,6 +166,24 @@ class PilotCoordinator(DataUpdateCoordinator):
         self.device_plan: P.Plan | None = None
         self.car_plan: P.Plan | None = None
         self.status: dict = {}
+
+    def async_watch_car(self):
+        """Plug-in and charge start run a cycle right away instead of at the
+        next full minute: a car that starts charging by itself is stopped
+        within seconds (the home battery pays for every minute)."""
+        c = self.car_cfg or {}
+        ents = [e for e in (c.get(CONF_CAR_PLUGGED_SENSOR), c.get(CONF_CAR_PLUGGED_FALLBACK),
+                            c.get(CONF_CAR_CHARGING_SENSOR)) if e]
+        if not ents:
+            return None
+
+        @callback
+        def _changed(event: Event) -> None:
+            old, new = event.data.get("old_state"), event.data.get("new_state")
+            if old is not None and new is not None and old.state != new.state:
+                self.hass.async_create_task(self.async_request_refresh())
+
+        return async_track_state_change_event(self.hass, ents, _changed)
 
     async def async_setup(self) -> None:
         await self.store.async_load()
@@ -554,7 +573,13 @@ class PilotCoordinator(DataUpdateCoordinator):
         pv5 = statistics.median(s[1] for s in win5)
         base5 = statistics.median(s[2] for s in win5)
         car5 = statistics.median(s[3] for s in win5)
-        self.device_plan = P.make_plan(inputs(pv5, base5, car5))
+        car_fixed = car5
+        cp = self.car_plan
+        if cp is not None and not cp.car_first and not cp.car_grid and cp.car_reason != "pflicht_minimum":
+            # the top-up ranks below the devices: they may claim it, the car
+            # follows at its next decision (only the obligation stays fixed)
+            car_fixed = min(car5, cp.car_must_kw)
+        self.device_plan = P.make_plan(inputs(pv5, base5, car_fixed))
         await self._apply_devices(now, dev_on)
 
         self.status = self._build_status(now, pv, load, base, soc, export, car_in, car_kw, charging, sun,
