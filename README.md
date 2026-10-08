@@ -29,7 +29,10 @@ and splits the surplus in this order:
    the battery can fill on its own once the car is gone.
 3. **Devices** — by priority, each with its own time window, minimum daily
    runtime, battery reserve and dependency (e.g. a pool heat pump that needs
-   the pump).
+   the pump). What PV doesn't cover of the minimum runtime runs as **one
+   block** in the cheapest part of the window — planned early when the
+   forecast surplus won't cover it, otherwise only in the last hours so a
+   sunny afternoon still wins. A started block runs through (at least 1 h).
 4. **Car top-up** — whatever is left, up to the car's charge limit. Between
    two car decisions a device may claim power the top-up is using; the car
    follows at its next decision.

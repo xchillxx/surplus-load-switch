@@ -57,6 +57,7 @@ class PilotStore:
         data.setdefault("log", [])
         data.setdefault("samples", [])
         data.setdefault("pending", {})
+        data.setdefault("forced_since", {})
         self.data = data
 
     def save(self) -> None:

@@ -170,6 +170,8 @@ class PilotCoordinator(DataUpdateCoordinator):
         self._last_plugged: bool | None = None
         self._last_pause: str | None = None
         self._dep_sig: object = _UNSET
+        self._forced_since: dict[str, datetime] = {}   # device -> start of its forced run
+        self._forced_plan: dict[str, dict] = {}        # device -> planned forced run (status)
         self.device_plan: P.Plan | None = None
         self.car_plan: P.Plan | None = None
         self.status: dict = {}
@@ -220,11 +222,16 @@ class PilotCoordinator(DataUpdateCoordinator):
             ts = dt_util.parse_datetime(since) if isinstance(since, str) else None
             if did in ids and ts is not None and now - ts <= timedelta(hours=1):
                 self._pending[did] = (bool(want), ts)
+        for did, since in st.get("forced_since", {}).items():
+            ts = dt_util.parse_datetime(since) if isinstance(since, str) else None
+            if did in ids and ts is not None and ts.date() == now.date():
+                self._forced_since[did] = ts
 
     def _persist_runtime_state(self) -> None:
         st = self.store.data
         st["samples"] = [[s[0].isoformat(), round(s[1], 3), round(s[2], 3), round(s[3], 3)] for s in self.samples]
         st["pending"] = {did: [want, ts.isoformat()] for did, (want, ts) in self._pending.items()}
+        st["forced_since"] = {did: ts.isoformat() for did, ts in self._forced_since.items()}
         st["log"] = list(self.log)
 
     async def _seed_price_archive(self) -> None:
@@ -426,33 +433,35 @@ class PilotCoordinator(DataUpdateCoordinator):
             end += timedelta(days=1)
         return inside, end if inside else None
 
-    def _forced(self, dev: dict, now: datetime, in_window: bool, window_end: datetime | None) -> bool:
-        """Minimum daily runtime: forced in the cheapest remaining slots of
-        today's window (or at the end of the window without prices)."""
-        need_h = float(dev.get(CONF_DEV_MIN_RUNTIME_H) or 0) - self.store.runtime_h(dev[CONF_DEV_ID])
-        if need_h <= 0 or not in_window:
+    def _forced(self, dev: dict, now: datetime, in_window: bool, window_end: datetime | None, base_kw: float,
+                soc: float | None, pv_end: datetime) -> bool:
+        """Minimum daily runtime: one contiguous forced run in the cheapest
+        part of today's window (planner.min_runtime_start). A started run is
+        finished in one go, at least DEVICE_MIN_RUN_H long."""
+        did = dev[CONF_DEV_ID]
+        need_h = float(dev.get(CONF_DEV_MIN_RUNTIME_H) or 0) - self.store.runtime_h(did)
+        since = self._forced_since.get(did)
+        if not in_window or need_h <= 0 and (since is None or now - since >= timedelta(hours=P.DEVICE_MIN_RUN_H)):
+            self._forced_since.pop(did, None)
+            self._forced_plan.pop(did, None)
             return False
+        if since is not None:
+            return True
         end = window_end or now.replace(hour=23, minute=59)
         if end.date() != now.date():
             end = now.replace(hour=23, minute=59)
-        left_h = (end - now).total_seconds() / 3600.0
-        if left_h <= need_h + 0.1:
+        other_kw = sum(self._decision_kw(x) for x in self.devices
+                       if int(x.get(CONF_DEV_PRIORITY, 50)) < int(dev.get(CONF_DEV_PRIORITY, 50))
+                       and self.store.data["device_enabled"].get(x[CONF_DEV_ID], True))
+        surplus_h = P.device_surplus_hours(
+            self._forecast, now, end, base_kw, self._decision_kw(dev), soc,
+            float(self.cfg.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)), pv_end, other_kw)
+        start = P.min_runtime_start(now, need_h, end, self._prices, surplus_h)
+        self._forced_plan[did] = {"start": start, "need_h": need_h, "surplus_h": surplus_h}
+        if start is not None and start <= now:
+            self._forced_since[did] = now
             return True
-        slots = [p for p in self._prices if p.end > now and p.start < end]
-        if not slots:
-            return False
-        # cheapest slots covering need_h, but leave room for PV: only from
-        # the latest 2x need window on, so a sunny afternoon still wins
-        if left_h > max(2 * need_h, need_h + 2):
-            return False
-        slots.sort(key=lambda p: p.price)
-        cov, chosen = 0.0, []
-        for p in slots:
-            if cov >= need_h:
-                break
-            cov += (p.end - max(p.start, now)).total_seconds() / 3600.0
-            chosen.append(p)
-        return any(p.start <= now < p.end for p in chosen)
+        return False
 
     # ------------------------------------------------------------ cycle
 
@@ -546,6 +555,7 @@ class PilotCoordinator(DataUpdateCoordinator):
         await self._refresh_prices(now)
         deps = all_departures(self.store.data["slots"], self.store.data["oneoff"], now)
 
+        base_now = statistics.median(x[2] for x in self.samples)
         dev_inputs = []
         for d in self.devices:
             did = d[CONF_DEV_ID]
@@ -554,7 +564,8 @@ class PilotCoordinator(DataUpdateCoordinator):
                 id=did, name=d.get(CONF_DEV_NAME, did), priority=int(d.get(CONF_DEV_PRIORITY, 50)),
                 decision_kw=self._decision_kw(d), is_on=dev_on[did],
                 enabled=self.store.data["device_enabled"].get(did, True), in_window=in_win, window_end=w_end,
-                depends_on=d.get(CONF_DEV_DEPENDS_ON) or None, forced=self._forced(d, now, in_win, w_end),
+                depends_on=d.get(CONF_DEV_DEPENDS_ON) or None,
+                forced=self._forced(d, now, in_win, w_end, base_now, soc, sun["pv_end"]),
                 soc_reserve=float(d.get(CONF_DEV_SOC_RESERVE) or 0.0)))
 
         ps = self.price_stats(now)
@@ -703,6 +714,13 @@ class PilotCoordinator(DataUpdateCoordinator):
             delay *= CLIMATE_DELAY_FACTOR
         return max(0, int(delay - (dt_util.now() - pend[1]).total_seconds()))
 
+    def forced_run_start(self, did: str) -> str | None:
+        """Start of the (planned or running) forced min-runtime run."""
+        if did in self._forced_since:
+            return self._forced_since[did].isoformat()
+        start = (self._forced_plan.get(did) or {}).get("start")
+        return start.isoformat() if start is not None else None
+
     def _build_status(self, now, pv, load, base, soc, export, car_in, car_kw, charging, sun, load_stale,
                       paused) -> dict:
         dp = self.device_plan
@@ -804,6 +822,10 @@ class PilotCoordinator(DataUpdateCoordinator):
         for did, dec in dp.devices.items():
             cd = self.countdown_s(did)
             extra = f" (schaltet in {cd // 60} min)" if cd else ""
+            fp = self._forced_plan.get(did) or {}
+            if not dec.on and fp.get("start") is not None and fp.get("need_h", 0) > 0:
+                extra += (f" — Mindestlaufzeit: fehlen {fp['need_h']:.1f} h, Pflichtlauf ab "
+                          f"{dt_util.as_local(fp['start']).strftime('%H:%M')}").replace(".", ",")
             lines.append(f"{names.get(did, did)}: {'an' if dec.on else 'aus'} — "
                          f"{REASON_TEXT.get(dec.reason, dec.reason)}{extra}")
         return lines

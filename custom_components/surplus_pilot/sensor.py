@@ -213,6 +213,7 @@ class DeviceSensor(PilotEntity, SensorEntity):
             "pfad": dec.path if dec else None,
             "schaltet_in_s": co.countdown_s(did),
             "laufzeit_heute_h": round(co.store.runtime_h(did), 2),
+            "mindestlauf_ab": co.forced_run_start(did),
             "leistung_kw": co._decision_kw(self._dev),
             "name": self._dev.get(CONF_DEV_NAME),
         }

@@ -210,3 +210,41 @@ def test_device_does_not_start_for_a_short_run():
     plan = P.make_plan(base_inputs(eve.replace(hour=21, minute=30), base_kw=0.6, battery_soc=100.0,
                                    night_base_kw=0.2, devices=[pump()], **kw))
     assert plan.devices["pump"].reason == "zu_kurz"
+
+
+def _prices_0810():
+    """Tibber 08.10.2026, 09:00-22:00 (ct/kWh, quarter hours)."""
+    ct = [39.8, 38.3, 36.6, 35.7, 36.3, 34.8, 33.7, 32.9, 33.5, 33.1, 32.4, 32.1, 31.4, 30.8, 30.5, 30.2,
+          30.9, 30.1, 29.5, 28.7, 29.5, 28.8, 28.9, 29.2, 28.5, 29.1, 30.8, 30.7, 29.6, 30.3, 31.7, 32.0,
+          30.7, 33.3, 35.4, 37.5, 35.4, 36.1, 36.6, 37.4, 37.6, 38.0, 37.8, 38.0, 36.5, 36.1, 36.5, 35.7,
+          35.3, 35.8, 34.8, 31.9]
+    t0 = datetime(2026, 10, 8, 9, 0, tzinfo=TZ)
+    return [P.PriceSlot(t0 + timedelta(minutes=15 * i), t0 + timedelta(minutes=15 * (i + 1)), c / 100)
+            for i, c in enumerate(ct)]
+
+
+def test_min_runtime_one_cheap_block_planned_early_when_pv_wont_cover_it():
+    """08.10. live: fog, battery 27 % at 09:00, forecast ~23 kWh -> the
+    surplus goes to the battery. Old logic: nothing before 14:00, then
+    14:00-17:15 plus a 30-min run at 21:30. Now: one 4 h block in the
+    cheapest part of the whole window."""
+    end = datetime(2026, 10, 8, 22, 0, tzinfo=TZ)
+    pv_end = datetime(2026, 10, 8, 17, 20, tzinfo=TZ)
+    fc = [P.ForecastHour(end=datetime(2026, 10, 8, h, 0, tzinfo=TZ), kwh=k)
+          for h, k in zip(range(8, 20), [0.0, 0.1, 0.9, 1.7, 2.4, 3.0, 3.3, 3.4, 3.3, 3.1, 2.9, 2.2])]
+    now = datetime(2026, 10, 8, 9, 0, tzinfo=TZ)
+    sh = P.device_surplus_hours(fc, now, end, 0.6, 1.34, 27.0, 13.8, pv_end, 0.145)
+    assert sh < 4
+    start = P.min_runtime_start(now, 4.0, end, _prices_0810(), sh)
+    assert start == datetime(2026, 10, 8, 12, 30, tzinfo=TZ)
+    # nothing forced before the block, forced from its start on
+    assert P.min_runtime_start(now.replace(hour=12, minute=15), 4.0, end, _prices_0810(), sh) > \
+        now.replace(hour=12, minute=15)
+    at = now.replace(hour=12, minute=30)
+    assert P.min_runtime_start(at, 4.0, end, _prices_0810(), sh) <= at
+    # a sunny forecast keeps the old "latest stretch only" rule: PV first
+    assert P.min_runtime_start(now, 4.0, end, _prices_0810(), 6.0) >= now.replace(hour=14)
+    # a short remainder is still run as one block of at least an hour
+    eve = now.replace(hour=19, minute=30)
+    s = P.min_runtime_start(eve, 0.5, end, _prices_0810(), 0.0)
+    assert s is not None and s <= now.replace(hour=21)

@@ -296,6 +296,73 @@ def battery_run_ok(inp: Inputs, planned_on: dict[str, bool], d: DeviceInput) -> 
     return after >= max(d.soc_reserve, inp.battery_min_soc)
 
 
+def device_surplus_hours(forecast: list[ForecastHour], now: datetime, end: datetime, base_kw: float, kw: float,
+                         battery_soc: float | None, battery_capacity_kwh: float, pv_end: datetime,
+                         other_kw: float = 0.0) -> float:
+    """Hours until `end` in which the forecast surplus (x safety, minus the
+    base load, the battery's charge rate to be full by the PV end and the
+    higher-priority devices) covers this device's draw."""
+    rate = 0.0
+    if battery_soc is not None and pv_end.date() == now.date() and pv_end > now:
+        missing = max(0.0, (100.0 - battery_soc) / 100.0 * battery_capacity_kwh)
+        rate = min(BATTERY_MAX_TARGET_KW, missing / max(_h(now, pv_end), MIN_HOURS_LEFT))
+    hours = 0.0
+    for r in forecast:
+        lo, hi = max(r.end - timedelta(hours=1), now), min(r.end, end)
+        if hi > lo and r.kwh * FORECAST_SAFETY - base_kw - rate - other_kw >= kw:
+            hours += (hi - lo).total_seconds() / 3600.0
+    return hours
+
+
+def min_runtime_start(now: datetime, need_h: float, end: datetime, prices: list[PriceSlot],
+                      surplus_h: float) -> datetime | None:
+    """Start of the forced run that completes a device's minimum daily
+    runtime, or None (not needed, or no prices and still time). It is one
+    contiguous block of at least DEVICE_MIN_RUN_H in the cheapest part of
+    the window - never a few scattered quarter hours. When the forecast
+    surplus covers the need, only the latest stretch of the window counts,
+    so a sunny afternoon still wins; when it doesn't, the whole rest of the
+    window counts (08.10. live: foggy morning, battery at 27 %, the cheap
+    midday was missed because the planner only looked at the last 8 h)."""
+    if need_h <= 0:
+        return None
+    left_h = _h(now, end)
+    if left_h <= need_h + 0.1:
+        return now
+    block = timedelta(hours=max(need_h, DEVICE_MIN_RUN_H))
+    earliest = now
+    if surplus_h >= need_h:
+        earliest = max(now, end - timedelta(hours=max(2 * need_h, need_h + 2)))
+    if earliest + block > end:
+        return max(now, end - block)
+    slots = sorted((p for p in prices if p.end > earliest and p.start < end), key=lambda p: p.start)
+
+    def cost(s: datetime) -> float | None:
+        e, t, total = s + block, s, 0.0
+        for p in slots:
+            if p.end <= t or p.start >= e:
+                continue
+            if p.start > t + timedelta(seconds=1):
+                return None   # gap in the known prices
+            hi = min(p.end, e)
+            total += p.price * (hi - t).total_seconds()
+            t = hi
+            if t >= e:
+                return total
+        return None
+
+    best, best_cost = None, None
+    for s in [earliest] + [p.start for p in slots if p.start > earliest and p.start + block <= end]:
+        c = cost(s)
+        if c is not None and (best_cost is None or c < best_cost - 1e-6):
+            best, best_cost = s, c
+    return best
+
+
+def _h(a: datetime, b: datetime) -> float:
+    return (b - a).total_seconds() / 3600.0
+
+
 def _price_at(inp: Inputs, t: datetime) -> tuple[float | None, bool]:
     """(price, published) for the slot starting at t; unpublished slots use
     the hour-of-day estimate."""
