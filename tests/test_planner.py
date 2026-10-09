@@ -248,3 +248,13 @@ def test_min_runtime_one_cheap_block_planned_early_when_pv_wont_cover_it():
     eve = now.replace(hour=19, minute=30)
     s = P.min_runtime_start(eve, 0.5, end, _prices_0810(), 0.0)
     assert s is not None and s <= now.replace(hour=21)
+
+
+def test_running_device_finishes_its_min_runtime():
+    """09.10. live: pump ran on PV 09:43-13:24 (3.7 h), off with 0.3 h
+    missing, forced on again 13:33 for a 1.1 h catch-up run."""
+    assert P.min_runtime_finish(True, 0.3)
+    assert P.min_runtime_finish(True, P.DEVICE_MIN_RUN_H)
+    assert not P.min_runtime_finish(True, 1.5)     # a real run left: cheapest block later
+    assert not P.min_runtime_finish(False, 0.3)    # off: no start just for minutes
+    assert not P.min_runtime_finish(True, 0.0)     # done: surplus decides again

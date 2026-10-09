@@ -434,10 +434,11 @@ class PilotCoordinator(DataUpdateCoordinator):
         return inside, end if inside else None
 
     def _forced(self, dev: dict, now: datetime, in_window: bool, window_end: datetime | None, base_kw: float,
-                soc: float | None, pv_end: datetime) -> bool:
+                soc: float | None, pv_end: datetime, is_on: bool) -> bool:
         """Minimum daily runtime: one contiguous forced run in the cheapest
         part of today's window (planner.min_runtime_start). A started run is
-        finished in one go, at least DEVICE_MIN_RUN_H long."""
+        finished in one go, at least DEVICE_MIN_RUN_H long; a running device
+        close to its minimum just keeps going (planner.min_runtime_finish)."""
         did = dev[CONF_DEV_ID]
         need_h = float(dev.get(CONF_DEV_MIN_RUNTIME_H) or 0) - self.store.runtime_h(did)
         since = self._forced_since.get(did)
@@ -446,6 +447,9 @@ class PilotCoordinator(DataUpdateCoordinator):
             self._forced_plan.pop(did, None)
             return False
         if since is not None:
+            return True
+        if P.min_runtime_finish(is_on, need_h):
+            self._forced_plan[did] = {"start": now, "need_h": need_h, "surplus_h": None}
             return True
         end = window_end or now.replace(hour=23, minute=59)
         if end.date() != now.date():
@@ -565,7 +569,7 @@ class PilotCoordinator(DataUpdateCoordinator):
                 decision_kw=self._decision_kw(d), is_on=dev_on[did],
                 enabled=self.store.data["device_enabled"].get(did, True), in_window=in_win, window_end=w_end,
                 depends_on=d.get(CONF_DEV_DEPENDS_ON) or None,
-                forced=self._forced(d, now, in_win, w_end, base_now, soc, sun["pv_end"]),
+                forced=self._forced(d, now, in_win, w_end, base_now, soc, sun["pv_end"], dev_on[did]),
                 soc_reserve=float(d.get(CONF_DEV_SOC_RESERVE) or 0.0)))
 
         ps = self.price_stats(now)

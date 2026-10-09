@@ -32,7 +32,8 @@ and splits the surplus in this order:
    the pump). What PV doesn't cover of the minimum runtime runs as **one
    block** in the cheapest part of the window — planned early when the
    forecast surplus won't cover it, otherwise only in the last hours so a
-   sunny afternoon still wins. A started block runs through (at least 1 h).
+   sunny afternoon still wins. A started block runs through (at least 1 h); a device already running with
+   at most an hour left just keeps going until its minimum is reached.
 4. **Car top-up** — whatever is left, up to the car's charge limit. Between
    two car decisions a device may claim power the top-up is using; the car
    follows at its next decision.

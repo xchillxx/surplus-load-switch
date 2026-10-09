@@ -359,6 +359,14 @@ def min_runtime_start(now: datetime, need_h: float, end: datetime, prices: list[
     return best
 
 
+def min_runtime_finish(is_on: bool, need_h: float) -> bool:
+    """A running device with at most DEVICE_MIN_RUN_H of its minimum runtime
+    left keeps running until it's done: stopping now would only mean a
+    separate catch-up run of at least that long later (09.10. live: pump off
+    at 13:24 with 0.3 h missing, forced on again at 13:33 for 1.1 h)."""
+    return is_on and 0 < need_h <= DEVICE_MIN_RUN_H
+
+
 def _h(a: datetime, b: datetime) -> float:
     return (b - a).total_seconds() / 3600.0
 
