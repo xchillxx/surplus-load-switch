@@ -244,6 +244,7 @@
           "netz_billig": "Grid: cheap price, PV won't do it",
           "pflicht_minimum": "Departure target, minimum current",
           "zu_wenig_ueberschuss": "Not enough surplus",
+          "billig_akku": "Cheap, but home battery first",
           "pflicht": "Departure target (PV)",
           "pflicht_und_rest": "Departure target + rest",
           "vorrang_rest": "Charging first (no PV chance tomorrow)",

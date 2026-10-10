@@ -523,29 +523,31 @@ def _grid_slot_now(inp: Inputs, dep: Departure, uncovered_kwh: float,
 
 
 def _cheap_topup_now(inp: Inputs, dep: Departure | None,
-                     surplus: float) -> tuple[bool, float, tuple[datetime, datetime] | None]:
+                     surplus: float) -> tuple[bool, float, tuple[datetime, datetime] | None, bool]:
     """Grid top-up while the price is below the cheap threshold — only for
     energy the PV forecast won't bring anyway before the next departure
     (24 h without one), and only in the cheapest published slots until then
     (10.10. live: charged at 05:00 for 18.9 ct, the midday before the
     departure was 17.2 ct). The block is planned even while the price is
-    still above the threshold, so the devices know it in advance."""
+    still above the threshold, so the devices know it in advance. Last value:
+    the price is cheap now but only the home-battery rule for PV hours holds
+    it back (status `billig_akku` instead of "too little surplus")."""
     car = inp.car
     if (inp.cheap_target_soc is None or inp.cheap_threshold is None
             or car is None or car.soc is None or not car.present):
-        return False, 0.0, None
+        return False, 0.0, None, False
     target = min(inp.cheap_target_soc, car.limit_soc)
     if car.soc >= target:
-        return False, 0.0, None
+        return False, 0.0, None, False
     if inp.battery_feeds_car:
         # the home battery covers any import first: with energy left it
         # would just empty itself into the car (10.10. live: 05:00, battery
         # 36 -> 12 % in 45 min, then the house bought at 22-24 ct all
         # morning); and with PV for the car there's no top-up at all
         if surplus >= car.min_kw:
-            return False, 0.0, None
+            return False, 0.0, None, False
         if inp.battery_soc is not None and inp.battery_soc > inp.battery_min_soc + CHEAP_BATTERY_MARGIN:
-            return False, 0.0, None
+            return False, 0.0, None, False
     need = (target - car.soc) / 100.0 * car.capacity_kwh / car.efficiency
     end = dep.start if dep is not None else inp.now + timedelta(hours=24)
     pv, _ = forecast_surplus_kwh(inp.forecast, inp.now, end, inp.base_kw + 0.3, CHEAP_FORECAST_TRUST)
@@ -554,10 +556,12 @@ def _cheap_topup_now(inp: Inputs, dep: Departure | None,
         battery_missing = max(0.0, (100.0 - inp.battery_soc) / 100.0 * inp.battery_capacity_kwh)
     from_grid = need - max(0.0, pv - battery_missing)
     if from_grid <= 0.5:
-        return False, 0.0, None
+        return False, 0.0, None, False
     in_block, block = _cheapest_free_slot_now(inp, end, from_grid, car.max_kw)
     now_ok = inp.price_now is not None and inp.price_now <= inp.cheap_threshold
-    return in_block and now_ok, from_grid, block
+    waits = (now_ok and not in_block and not inp.battery_feeds_car and inp.pv_kw > inp.base_kw + 0.3
+             and not cheap_pv_battery_ok(inp))
+    return in_block and now_ok, from_grid, block, waits
 
 
 def cheap_pv_battery_ok(inp: Inputs) -> bool:
@@ -668,8 +672,9 @@ def make_plan(inp: Inputs) -> Plan:
     budget = {"pv_kw": inp.pv_kw, "grundlast_kw": inp.base_kw, "akku_ziel_kw": target_b}
 
     grid_reason = "netz_pflicht"
+    cheap_waits = False
     if not grid and car_ok and inp.allow_grid_for_car:
-        cheap, cheap_kwh, cheap_block = _cheap_topup_now(inp, dep, surplus)
+        cheap, cheap_kwh, cheap_block, cheap_waits = _cheap_topup_now(inp, dep, surplus)
         block = block or cheap_block
         if cheap:
             grid, grid_reason = True, "netz_billig"
@@ -709,7 +714,7 @@ def make_plan(inp: Inputs) -> Plan:
             if must_kw > MUST_MIN_SURPLUS_KW and car_must > 0 and _lift_to_min(inp, dep, need_kwh, surplus):
                 car_kw, car_reason = car.min_kw, "pflicht_minimum"  # battery/grid fill the gap
             else:
-                car_kw, car_reason = 0.0, "zu_wenig_ueberschuss"
+                car_kw, car_reason = 0.0, "billig_akku" if cheap_waits else "zu_wenig_ueberschuss"
         else:
             car_reason = ("pflicht" if topup < 0.05 else "pflicht_und_rest") if car_must > 0 else (
                 "vorrang_rest" if car_first else "rest")

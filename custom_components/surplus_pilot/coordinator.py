@@ -120,6 +120,7 @@ REASON_TEXT = {
     "netz_pflicht": "Abfahrtsziel, aus dem Netz (günstigste Slots)",
     "netz_billig": "Strom gerade billig, PV reicht nicht", "pflicht_minimum": "Abfahrtsziel, Mindeststrom",
     "zu_wenig_ueberschuss": "zu wenig Überschuss", "pflicht": "Abfahrtsziel aus PV",
+    "billig_akku": "Strom billig, aber Hausakku zuerst",
     "pflicht_und_rest": "Abfahrtsziel + Rest", "vorrang_rest": "Vorrang, morgen keine PV-Chance",
     "rest": "Rest nach den Geräten", "haelt_minimum": "hält Minimum", "ladelimit_erreicht": "Ladelimit erreicht",
 }

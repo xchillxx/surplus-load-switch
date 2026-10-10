@@ -447,6 +447,9 @@ def test_cheap_topup_with_pv_needs_a_full_enough_home_battery():
         return inp
 
     assert not P.make_plan(inp_at(now, 4.5, 34.0)).car_grid            # today: battery too low
+    # 15:15 live: PV 2.4 kW, battery 21 %, 17.2 ct below the threshold -> the status names the battery
+    assert P.make_plan(inp_at(now.replace(hour=15, minute=15), 2.4, 21.0)).car_reason == "billig_akku"
+    assert P.make_plan(inp_at(now.replace(hour=15, minute=15), 2.4, 60.0)).car_reason == "netz_billig"
     assert P.make_plan(inp_at(now, 4.5, 55.0)).car_grid                # full enough: PV + grid
     assert P.make_plan(inp_at(now, 4.5, 47.0, running=True)).car_grid  # running: down to 45 %
     stop = inp_at(now, 4.5, 44.0, running=True)

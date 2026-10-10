@@ -15,7 +15,7 @@ DEVICE_REASONS = ["deaktiviert", "ausserhalb_zeitfenster", "wartet_auf_abhaengig
                   "ueberschuss", "akku_reicht", "akku_reserve", "kein_ueberschuss", "akku_reicht_nicht", "zu_kurz",
                   "manuell", "unbekannt"]
 CAR_REASONS = ["kein_auto", "nicht_da", "ladelimit_erreicht", "netz_pflicht", "netz_billig", "pflicht_minimum",
-               "zu_wenig_ueberschuss", "pflicht", "pflicht_und_rest", "vorrang_rest", "rest", "haelt_minimum",
+               "zu_wenig_ueberschuss", "billig_akku", "pflicht", "pflicht_und_rest", "vorrang_rest", "rest", "haelt_minimum",
                "pausiert", "unbekannt"]
 
 

@@ -244,6 +244,7 @@
           "netz_billig": "Netz: billig, PV reicht nicht",
           "pflicht_minimum": "Abfahrtsziel, Mindeststrom",
           "zu_wenig_ueberschuss": "Zu wenig Überschuss",
+          "billig_akku": "Billig, aber Hausakku zuerst",
           "pflicht": "Abfahrtsziel (PV)",
           "pflicht_und_rest": "Abfahrtsziel + Rest",
           "vorrang_rest": "Lädt vorrangig (morgen keine PV-Chance)",
