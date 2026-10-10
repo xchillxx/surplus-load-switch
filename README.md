@@ -24,6 +24,10 @@ and splits the surplus in this order:
 
 1. **Car obligation** — what the car still needs for its next departure
    target (e.g. 50 % by 16:30), spread over the PV hours left before it.
+   When the surplus is below the car's minimum current, the car is only
+   lifted to the minimum (gap from battery/grid) if the PV carries at least
+   half of it *and* the forecast hours that carry the minimum on their own
+   won't bring the target — otherwise it waits for those hours.
 2. **Home battery** — enough to be full by the end of the PV day. If the car
    leaves before that, the forecast PV *after* the departure is counted in:
    the battery can fill on its own once the car is gone.
@@ -55,7 +59,10 @@ help), and once there is just enough time left it charges regardless.
 (default: the cheapest 10 % of the last 8 days) the car is topped up from the
 grid up to a target (default 80 %) — but only by the energy the PV forecast
 won't bring before the next departure anyway, so a sunny tomorrow isn't
-wasted. Replayed on a sunny September this cost 6 kWh of grid energy a month;
+wasted. It charges in the cheapest *published* slots before the departure
+that have no PV (grid charging during PV hours would take the PV the home
+battery needs), and only while the home battery is at its minimum SoC —
+otherwise the battery would just empty itself into the car. Replayed on a sunny September this cost 6 kWh of grid energy a month;
 on dark days it is what buys the cheap hours.
 
 At night devices run on the home battery only if it lasts until the next

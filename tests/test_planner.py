@@ -118,10 +118,14 @@ def test_cheap_topup_only_when_pv_wont_do_it():
     now = datetime(2026, 11, 3, 11, 0, tzinfo=TZ)
     inp = _dark_day_inputs(now, night_estimate=0.15, price_now=0.20, threshold=0.22, cheap_target=80.0)
     inp.car.soc = 55.0  # obligation already met
+    inp.battery_soc = 15.0  # home battery empty, it can't feed the car
     plan = P.make_plan(inp)
     assert plan.car_grid and plan.car_reason == "netz_billig"
+    inp.battery_soc = 60.0  # it would empty itself into the car first
+    assert not P.make_plan(inp).car_grid
     inp = _dark_day_inputs(now, night_estimate=0.15, price_now=0.20, threshold=0.22, cheap_target=80.0, sunny=True)
     inp.car.soc = 55.0
+    inp.battery_soc = 15.0
     plan = P.make_plan(inp)
     assert not plan.car_grid
 
@@ -258,3 +262,64 @@ def test_running_device_finishes_its_min_runtime():
     assert not P.min_runtime_finish(True, 1.5)     # a real run left: cheapest block later
     assert not P.min_runtime_finish(False, 0.3)    # off: no start just for minutes
     assert not P.min_runtime_finish(True, 0.0)     # done: surplus decides again
+
+
+def _oct10(now, pv_kw, battery_soc, car_soc, prices=None, price_now=None, threshold=None, cheap_target=None,
+           current_kw=0.0, scale=1.0):
+    """10.10.2026 live: night shift 16:30 (target 50 %), Forecast.Solar for
+    the day, Tibber prices (midday 17.2 ct, evening 37 ct)."""
+    day0 = now.replace(hour=0, minute=0)
+    fc_kwh = {8: 0.08, 9: 0.89, 10: 1.75, 11: 2.9, 12: 4.35, 13: 5.79, 14: 6.77, 15: 6.85, 16: 6.02, 17: 4.71,
+              18: 2.9, 19: 0.72}  # hour ENDING at this local time
+    fc = [P.ForecastHour(end=day0 + timedelta(hours=h), kwh=fc_kwh.get(h, 0.0) * scale) for h in range(24)]
+    dep = P.Departure(start=now.replace(hour=16, minute=30), target_soc=50.0, name="Nachtschicht",
+                      returns=(now + timedelta(days=1)).replace(hour=6, minute=30))
+    car = P.CarInput(present=True, soc=car_soc, limit_soc=80.0, capacity_kwh=72.9, efficiency=0.9, min_kw=3.45,
+                     max_kw=11.04, current_kw=current_kw)
+    return base_inputs(now, pv_kw=pv_kw, base_kw=0.78, battery_soc=battery_soc, battery_capacity_kwh=13.8,
+                       car=car, departures=[dep], forecast=fc, prices=prices or [], price_now=price_now,
+                       cheap_threshold=threshold, cheap_target_soc=cheap_target,
+                       solar_start_today=now.replace(hour=9, minute=10), pv_end=now.replace(hour=17, minute=15))
+
+
+def test_obligation_waits_for_real_surplus_instead_of_minimum_from_battery_and_grid():
+    """10.10. live 09:15: 0.65 kW surplus, battery at 12 % -> car at the
+    3.45 kW minimum, the rest from battery and grid at 22.7 ct."""
+    now = datetime(2026, 10, 10, 9, 15, tzinfo=TZ)
+    plan = P.make_plan(_oct10(now, pv_kw=1.43, battery_soc=12.0, car_soc=39.0))
+    assert plan.car_kw == 0.0 and plan.car_reason == "zu_wenig_ueberschuss"
+    # midday with half the minimum from PV and a forecast too weak for PV-only hours -> minimum
+    noon = now.replace(hour=12, minute=0)
+    weak = _oct10(noon, pv_kw=2.7, battery_soc=30.0, car_soc=39.0, scale=0.6)
+    plan = P.make_plan(weak)
+    assert plan.car_reason == "pflicht_minimum" and plan.car_kw == 3.45
+    # the same moment, but the forecast still brings the target in PV-only hours -> wait for them
+    plan = P.make_plan(_oct10(noon, pv_kw=2.7, battery_soc=30.0, car_soc=45.0, scale=1.3))
+    assert plan.car_kw == 0.0
+    # already charging at the minimum: kept down to 40 % PV share
+    weak = _oct10(noon, pv_kw=2.35, battery_soc=30.0, car_soc=39.0, scale=0.6, current_kw=3.45)
+    assert P.make_plan(weak).car_reason == "pflicht_minimum"
+
+
+def test_cheap_topup_waits_for_a_cheaper_slot_without_pv():
+    """A cheap slot now, a cheaper PV-free one later before the departure:
+    wait. Cheaper slots at midday (PV for the home battery) don't count."""
+    now = datetime(2026, 10, 10, 1, 0, tzinfo=TZ)
+    day0 = now.replace(hour=0)
+    tariff = {1: 0.189, 2: 0.189, 3: 0.175, 4: 0.189, 5: 0.189, 13: 0.15, 14: 0.15}
+    prices = [P.PriceSlot(day0 + timedelta(minutes=15 * i), day0 + timedelta(minutes=15 * (i + 1)),
+                          tariff.get(i // 4, 0.23)) for i in range(96)]
+
+    def plan_at(t, price):
+        return P.make_plan(_oct10(t, pv_kw=0.0, battery_soc=15.0, car_soc=52.0, prices=prices, price_now=price,
+                                  threshold=0.19, cheap_target=80.0))
+
+    assert not plan_at(now, 0.189).car_grid                       # 03:00 is cheaper and dark -> wait
+    plan = plan_at(now.replace(hour=3), 0.175)
+    assert plan.car_grid and plan.car_reason == "netz_billig"
+    prices[12:16] = [replace_price(p, 0.23) for p in prices[12:16]]  # 03:00 gone: 01:00 is the best dark slot
+    assert plan_at(now, 0.189).car_grid                           # midday at 15 ct is PV time, doesn't count
+
+
+def replace_price(p, price):
+    return P.PriceSlot(p.start, p.end, price)

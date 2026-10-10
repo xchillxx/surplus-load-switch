@@ -45,6 +45,9 @@ CHEAP_FORECAST_TRUST = 1.0     # optional cheap top-up: trust the forecast fully
 TOMORROW_SHARE = 0.5           # tomorrow must cover this share of the car's missing energy
 TOMORROW_FORECAST_TRUST = 1.0  # the top-up is optional: no extra safety factor (x0.7 put it before the devices too often)
 DEVICE_MIN_RUN_H = 1.0         # a device only starts when it can run at least this long
+MIN_LIFT_PV_SHARE = 0.5        # obligation at minimum current only while PV carries half of it ...
+MIN_LIFT_PV_SHARE_KEEP = 0.4   # ... (0.4 to keep an already charging car going)
+CHEAP_BATTERY_MARGIN = 3.0     # cheap grid top-up only with the home battery at most this far above its min SoC
 
 
 @dataclass
@@ -181,6 +184,22 @@ def forecast_surplus_kwh(rows, start, end, base_kw, safety=FORECAST_SAFETY) -> t
         if kw > base_kw + PV_HOUR_MARGIN_KW:
             pv_hours += frac
     return total, pv_hours
+
+
+def car_pv_alone_kwh(inp: Inputs, end: datetime) -> float:
+    """Forecast kWh until `end` from the hours whose surplus (x safety) alone
+    carries the car's minimum current - charging then needs neither the
+    home battery nor the grid."""
+    car = inp.car
+    total = 0.0
+    for r in inp.forecast:
+        lo, hi = max(r.end - timedelta(hours=1), inp.now), min(r.end, end)
+        if hi <= lo:
+            continue
+        kw = r.kwh * FORECAST_SAFETY - inp.base_kw - 0.3
+        if kw >= car.min_kw:
+            total += min(kw, car.max_kw) * (hi - lo).total_seconds() / 3600.0
+    return total
 
 
 def next_departure(deps: list[Departure], now: datetime) -> Departure | None:
@@ -420,6 +439,11 @@ def _cheap_topup_now(inp: Inputs, dep: Departure | None, surplus: float) -> tupl
     target = min(inp.cheap_target_soc, car.limit_soc)
     if car.soc >= target or inp.price_now > inp.cheap_threshold or surplus >= car.min_kw:
         return False, 0.0
+    # the home battery covers any import first: with energy left it would
+    # just empty itself into the car (10.10. live: 05:00 at 18.9 ct, battery
+    # 36 -> 12 % in 45 min, then the house bought at 22-24 ct all morning)
+    if inp.battery_soc is not None and inp.battery_soc > inp.battery_min_soc + CHEAP_BATTERY_MARGIN:
+        return False, 0.0
     need = (target - car.soc) / 100.0 * car.capacity_kwh / car.efficiency
     end = inp.now + timedelta(hours=24)
     if dep is not None and dep.start < end:
@@ -429,7 +453,31 @@ def _cheap_topup_now(inp: Inputs, dep: Departure | None, surplus: float) -> tupl
     if inp.battery_soc is not None:
         battery_missing = max(0.0, (100.0 - inp.battery_soc) / 100.0 * inp.battery_capacity_kwh)
     from_grid = need - max(0.0, pv - battery_missing)
-    return from_grid > 0.5, max(0.0, from_grid)
+    if from_grid <= 0.5 or not _cheapest_free_slot_now(inp, end, from_grid, car.max_kw):
+        return False, max(0.0, from_grid)
+    return True, from_grid
+
+
+def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float, max_kw: float) -> bool:
+    """Is the current slot among the cheapest PUBLISHED slots until `end`
+    that are free for grid charging? Slots with forecast PV above the base
+    load don't count: grid charging there would take the PV the home
+    battery needs (it only charges from export). Equal prices go to the
+    earlier slot - no point waiting for the same price."""
+    need_slots = max(1, math.ceil(kwh / max(max_kw, 0.1) / 0.25))
+    now_slot = _floor_slot(inp.now)
+    free = []
+    for p in inp.prices:
+        if p.end <= now_slot or p.start >= end:
+            continue
+        if p.start > now_slot:
+            pv_kw = forecast_kwh(inp.forecast, p.start, p.end) / max(_h(p.start, p.end), 0.01)
+            if pv_kw * CHEAP_FORECAST_TRUST > inp.base_kw + 0.3:
+                continue
+        free.append((p.price, p.start))
+    free.sort()
+    chosen = {t for _, t in free[:need_slots]}
+    return any(p.start <= inp.now < p.end and p.start in chosen for p in inp.prices)
 
 
 # ---------------------------------------------------------------- the plan
@@ -507,8 +555,8 @@ def make_plan(inp: Inputs) -> Plan:
     car_kw = car_must + topup if car_ok else 0.0
     if car_ok:
         if car_kw < car.min_kw:
-            if must_kw > MUST_MIN_SURPLUS_KW and car_must > 0:
-                car_kw, car_reason = car.min_kw, "pflicht_minimum"  # battery helps briefly
+            if must_kw > MUST_MIN_SURPLUS_KW and car_must > 0 and _lift_to_min(inp, dep, need_kwh, surplus):
+                car_kw, car_reason = car.min_kw, "pflicht_minimum"  # battery/grid fill the gap
             else:
                 car_kw, car_reason = 0.0, "zu_wenig_ueberschuss"
         else:
@@ -518,6 +566,20 @@ def make_plan(inp: Inputs) -> Plan:
                   frei_kw=surplus - car_must - target_b - _used(inp, devices, surplus_only=True) - topup)
     return Plan(target_b, b_mode, car_kw, car_must, False, car_reason, car_first, need_kwh, uncovered,
                 dep, devices, budget)
+
+
+def _lift_to_min(inp: Inputs, dep: Departure, need_kwh: float, surplus: float) -> bool:
+    """Raise the car to its minimum current for the departure target, the
+    gap coming from the home battery or the grid? Only when the PV carries a
+    real share of it right now AND the hours whose surplus alone carries the
+    minimum won't bring the target anyway (10.10. live: 09:15, 0.65 kW
+    surplus, battery at 12 % -> car at 3.45 kW, 2.8 kW from the battery and
+    the grid at 22.7 ct while the midday was forecast at 3.5+ kW)."""
+    car = inp.car
+    share = MIN_LIFT_PV_SHARE_KEEP if car.current_kw >= 0.8 * car.min_kw else MIN_LIFT_PV_SHARE
+    if surplus < share * car.min_kw:
+        return False
+    return car_pv_alone_kwh(inp, dep.start) < need_kwh
 
 
 def _used(inp: Inputs, decisions: dict[str, DeviceDecision], surplus_only: bool = False) -> float:
