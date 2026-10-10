@@ -479,9 +479,10 @@ class PilotCoordinator(DataUpdateCoordinator):
 
     def battery_feeds_car(self, now: datetime) -> bool:
         """Does the home battery discharge into the car? The last detected
-        state (battery power sensor) while it is fresh, else the setting."""
+        state (battery power sensor) while it is fresh, else the setting.
+        Without the sensor (detection off) only the setting counts."""
         learned = self.store.data.get("battery_feeds")
-        if learned:
+        if learned and self.cfg.get(CONF_BATTERY_POWER_SENSOR):
             at = dt_util.parse_datetime(learned.get("at") or "")
             if at is not None and now - at <= timedelta(days=FEED_EXPIRY_DAYS):
                 return bool(learned.get("value"))

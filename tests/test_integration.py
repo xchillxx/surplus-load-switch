@@ -335,3 +335,11 @@ async def test_battery_feeding_the_car_is_detected_and_followed(hass: HomeAssist
     await reading(0.0)
     await reading(0.0)
     assert co.status["akku_speist_auto"] is False
+    # detection switched off (sensor removed): only the setting counts again
+    await reading(-2.5)
+    await reading(-2.5)
+    assert co.status["akku_speist_auto"] is True
+    hass.config_entries.async_update_entry(entry, data={**data, "battery_power_sensor": None})
+    await hass.async_block_till_done()
+    co = hass.data[DOMAIN][entry.entry_id]
+    assert co.battery_feeds_car(dt_util.now()) is False
