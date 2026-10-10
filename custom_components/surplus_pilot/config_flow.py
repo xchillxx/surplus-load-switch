@@ -14,6 +14,7 @@ from .const import (
     CLIMATE_MODES,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_MIN_SOC,
+    CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
     CONF_CAR,
     CONF_CAR_ALLOW_GRID,
@@ -109,6 +110,7 @@ def energy_schema(d: dict) -> vol.Schema:
         vol.Required(CONF_LOAD_SENSOR, **_d(d, CONF_LOAD_SENSOR)): _ent("sensor"),
         vol.Optional(CONF_GRID_EXPORT_SENSOR, **_d(d, CONF_GRID_EXPORT_SENSOR)): _ent("sensor"),
         vol.Optional(CONF_BATTERY_SOC_SENSOR, **_d(d, CONF_BATTERY_SOC_SENSOR)): _ent("sensor"),
+        vol.Optional(CONF_BATTERY_POWER_SENSOR, **_d(d, CONF_BATTERY_POWER_SENSOR)): _ent("sensor"),
         vol.Required(CONF_BATTERY_CAPACITY_KWH, default=d.get(CONF_BATTERY_CAPACITY_KWH,
                                                               DEFAULT_BATTERY_CAPACITY_KWH)): _num(0, 200, 0.1, "kWh"),
         vol.Required(CONF_BATTERY_MIN_SOC, default=d.get(CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC)):
@@ -223,8 +225,8 @@ class PilotOptionsFlow(OptionsFlow):
     async def async_step_energy(self, user_input=None):
         if user_input is not None:
             data = self._data
-            for k in (CONF_GRID_EXPORT_SENSOR, CONF_BATTERY_SOC_SENSOR, CONF_TIBBER_HOME, CONF_PRICE_SENSOR,
-                      CONF_PRICE_HISTORY_SENSOR):
+            for k in (CONF_GRID_EXPORT_SENSOR, CONF_BATTERY_SOC_SENSOR, CONF_BATTERY_POWER_SENSOR, CONF_TIBBER_HOME,
+                      CONF_PRICE_SENSOR, CONF_PRICE_HISTORY_SENSOR):
                 data.pop(k, None)
             data.update(user_input)
             return self._save(data)

@@ -352,3 +352,16 @@ def test_cheap_topup_without_battery_feed_takes_the_cheap_midday_with_pv():
     plan = at(now.replace(hour=13), 6.8, 40.0, car_soc=45.0)        # 17.16 ct with 6 kW surplus: PV + grid
     assert plan.car_grid and plan.car_reason == "netz_billig" and plan.car_kw == 11.04
     assert not at(now.replace(hour=13), 6.8, 40.0, car_soc=80.0).car_grid   # target reached
+
+
+def test_battery_feed_evidence():
+    """10.10. live: car 3.0 kW, PV 1.4, house 0.8, battery -2.5 kW -> feeds.
+    Battery idle (or only covering the house) while the car imports -> doesn't."""
+    ev = P.battery_feed_evidence
+    assert ev(3.0, 1.4, 3.8, -2.5, 40.0, 15.0) is True
+    assert ev(3.0, 1.4, 3.8, 0.0, 40.0, 15.0) is False
+    assert ev(11.0, 0.0, 11.8, -0.8, 40.0, 15.0) is False       # battery covers the house only
+    assert ev(11.0, 6.0, 11.8, 1.5, 40.0, 15.0) is False        # even charges from PV while the car imports
+    assert ev(3.0, 1.4, 3.8, -2.5, 18.0, 15.0) is None          # battery at its reserve: says nothing
+    assert ev(0.0, 0.0, 0.8, -0.8, 40.0, 15.0) is None          # car not charging
+    assert ev(3.0, 4.0, 3.8, -0.0, 40.0, 15.0) is None          # PV covers it all

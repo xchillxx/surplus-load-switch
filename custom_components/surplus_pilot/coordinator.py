@@ -24,6 +24,7 @@ from .const import (
     CLIMATE_DELAY_FACTOR,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_MIN_SOC,
+    CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
     CONF_CAR,
     CONF_CAR_ALLOW_GRID,
@@ -87,6 +88,8 @@ from .const import (
     MODE_AUTO,
     PRICE_SENSOR,
     PRICE_TIBBER,
+    FEED_CONFIRM_READINGS,
+    FEED_EXPIRY_DAYS,
     UPDATE_INTERVAL_SECONDS,
 )
 from .departures import all_departures, parse_hhmm
@@ -170,6 +173,7 @@ class PilotCoordinator(DataUpdateCoordinator):
         self._price_stats: dict = {}
         self._last_plugged: bool | None = None
         self._last_pause: str | None = None
+        self._feed_votes = 0
         self._dep_sig: object = _UNSET
         self._forced_since: dict[str, datetime] = {}   # device -> start of its forced run
         self._forced_plan: dict[str, dict] = {}        # device -> planned forced run (status)
@@ -470,6 +474,43 @@ class PilotCoordinator(DataUpdateCoordinator):
 
     # ------------------------------------------------------------ cycle
 
+    def battery_feeds_car(self, now: datetime) -> bool:
+        """Does the home battery discharge into the car? The last detected
+        state (battery power sensor) while it is fresh, else the setting."""
+        learned = self.store.data.get("battery_feeds")
+        if learned:
+            at = dt_util.parse_datetime(learned.get("at") or "")
+            if at is not None and now - at <= timedelta(days=FEED_EXPIRY_DAYS):
+                return bool(learned.get("value"))
+        return bool(self.car_cfg.get(CONF_CAR_BATTERY_FEEDS, True)) if self.car_cfg else True
+
+    def _observe_battery_feed(self, now: datetime, pv: float, load: float, car_kw: float,
+                              soc: float | None) -> None:
+        """Re-read the battery's behaviour while the car charges: the
+        inverter may change it on its own (e.g. a price-driven winter mode).
+        A different state needs FEED_CONFIRM_READINGS consistent readings;
+        then the car is re-planned at once."""
+        ent = self.cfg.get(CONF_BATTERY_POWER_SENSOR)
+        if not ent or not self.car_cfg:
+            return
+        ev = P.battery_feed_evidence(car_kw, pv, load, power_kw(self.hass, ent), soc,
+                                     float(self.cfg.get(CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC)))
+        if ev is None:
+            return
+        current = self.battery_feeds_car(now)
+        if ev == current:
+            self._feed_votes = 0
+            self.store.data["battery_feeds"] = {"value": ev, "at": now.isoformat()}
+            return
+        self._feed_votes += 1
+        if self._feed_votes < FEED_CONFIRM_READINGS:
+            return
+        self._feed_votes = 0
+        self.store.data["battery_feeds"] = {"value": ev, "at": now.isoformat()}
+        self._log("Hausakku entlädt jetzt ins Auto — erkannt" if ev
+                  else "Hausakku entlädt nicht mehr ins Auto — erkannt")
+        self._car_slot = None  # re-plan the car now
+
     async def _async_update_data(self) -> dict:
         now = dt_util.now()
         self.store.roll_day()
@@ -573,6 +614,9 @@ class PilotCoordinator(DataUpdateCoordinator):
                 forced=self._forced(d, now, in_win, w_end, base_now, soc, sun["pv_end"], dev_on[did]),
                 soc_reserve=float(d.get(CONF_DEV_SOC_RESERVE) or 0.0)))
 
+        self._observe_battery_feed(now, pv, load, car_kw, soc)
+        feeds_car = self.battery_feeds_car(now)
+
         ps = self.price_stats(now)
         self._price_stats = ps
         cheap_target = float(self.store.data["cheap_target"]) if self.store.data["cheap_enabled"] else None
@@ -586,7 +630,7 @@ class PilotCoordinator(DataUpdateCoordinator):
                 sunset=sun["sunset"], pv_end=sun["pv_end"], night_base_kw=self.store.data["night_base_kw"],
                 forecast=self._forecast, prices=self._prices, departures=deps, car=car_in, devices=dev_inputs,
                 allow_grid_for_car=bool(self.car_cfg.get(CONF_CAR_ALLOW_GRID, True)) if self.car_cfg else False,
-                battery_feeds_car=bool(self.car_cfg.get(CONF_CAR_BATTERY_FEEDS, True)) if self.car_cfg else True,
+                battery_feeds_car=feeds_car,
                 car_fixed_kw=car_fixed, price_profile=ps["profile"], price_now=ps["now"],
                 cheap_threshold=ps["threshold"], cheap_target_soc=cheap_target)
 
@@ -739,6 +783,8 @@ class PilotCoordinator(DataUpdateCoordinator):
             "daten_ok": True, "zeit": now.isoformat(), "last_veraltet": load_stale,
             "pv_kw": round(pv, 2), "verbrauch_kw": round(load, 2), "grundlast_kw": round(base, 2),
             "ueberschuss_kw": round(pv - base, 2), "akku_soc": soc, "einspeisung_kw": export,
+            "akku_speist_auto": self.battery_feeds_car(now),
+            "akku_speist_auto_erkannt": (self.store.data.get("battery_feeds") or {}).get("at"),
             "akku_ziel_kw": round(dp.battery_target_kw, 2) if dp else None,
             "akku_ziel_modus": dp.battery_mode if dp else None,
             "geraete_budget_kw": round(dp.budget.get("frei_kw", 0.0) + dp.budget.get("geraete_kw", 0.0), 2)
@@ -824,7 +870,11 @@ class PilotCoordinator(DataUpdateCoordinator):
         if d.get("akku_soc") is not None:
             mode = {"abfahrt": "Abfahrt eingerechnet: nach der Abfahrt lädt PV den Akku allein",
                     "frist": "voll bis PV-Ende", "voll": "Akku voll", "kein_akku": ""}.get(d.get("akku_ziel_modus"), "")
-            lines.append(f"Hausakku {d['akku_soc']:.0f} %: reserviert {self._kw(d['akku_ziel_kw'])} ({mode})")
+            feed = "entlädt ins Auto" if d.get("akku_speist_auto") else "entlädt nicht ins Auto"
+            seen = d.get("akku_speist_auto_erkannt")
+            if seen and self.cfg.get(CONF_BATTERY_POWER_SENSOR):
+                feed += f", zuletzt gesehen {dt_util.as_local(dt_util.parse_datetime(seen)).strftime('%d.%m. %H:%M')}"
+            lines.append(f"Hausakku {d['akku_soc']:.0f} %: reserviert {self._kw(d['akku_ziel_kw'])} ({mode}) — {feed}")
         names = {x[CONF_DEV_ID]: x.get(CONF_DEV_NAME) for x in self.devices}
         for did, dec in dp.devices.items():
             cd = self.countdown_s(did)

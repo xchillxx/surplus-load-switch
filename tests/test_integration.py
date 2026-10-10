@@ -299,3 +299,29 @@ async def test_dependent_device_follows_pump_not_its_plan(hass: HomeAssistant, f
     i_pump = calls.index(("switch", "turn_off", {"entity_id": "switch.pump"}))
     i_wp = next(i for i, c in enumerate(calls) if c[0] == "climate")
     assert i_wp > i_pump
+
+
+async def test_battery_feeding_the_car_is_detected_and_followed(hass: HomeAssistant, freezer):
+    """Start value off; the battery discharging into the charging car for 3
+    readings flips it on (logged), an idle battery while the car imports
+    flips it back."""
+    set_world(hass, pv=1.4, load=3.8, soc=40, car_soc=50, car_kw=3.0)
+    hass.states.async_set("sensor.bat_power", -2.5, {"unit_of_measurement": "kW"})
+    for e in ("switch.miner", "switch.pump", "climate.pool"):
+        hass.states.async_set(e, "off")
+    hass.states.async_set("switch.car_charge", "on")
+    data = {**DATA, "battery_power_sensor": "sensor.bat_power", "car": {**DATA["car"], "battery_feeds_car": False}}
+    entry = MockConfigEntry(domain=DOMAIN, data=data)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    co = hass.data[DOMAIN][entry.entry_id]
+    assert co.status["akku_speist_auto"] is False          # one reading is not enough
+    for _ in range(3):
+        await co.async_refresh()
+    assert co.status["akku_speist_auto"] is True
+    assert any("entlädt jetzt ins Auto" in e["text"] for e in co.log)
+    hass.states.async_set("sensor.bat_power", 0.0, {"unit_of_measurement": "kW"})
+    for _ in range(3):
+        await co.async_refresh()
+    assert co.status["akku_speist_auto"] is False

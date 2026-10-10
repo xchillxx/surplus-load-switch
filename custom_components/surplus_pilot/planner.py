@@ -48,6 +48,9 @@ DEVICE_MIN_RUN_H = 1.0         # a device only starts when it can run at least t
 MIN_LIFT_PV_SHARE = 0.5        # obligation at minimum current only while PV carries half of it ...
 MIN_LIFT_PV_SHARE_KEEP = 0.4   # ... (0.4 to keep an already charging car going)
 CHEAP_BATTERY_MARGIN = 3.0     # cheap grid top-up only with the home battery at most this far above its min SoC
+FEED_CAR_MIN_KW = 1.0          # battery-feeds-car detection: car must draw at least this ...
+FEED_DEFICIT_KW = 0.5          # ... with at least this much missing beyond the PV ...
+FEED_SOC_MARGIN = 5.0          # ... and the battery this far above its min SoC (it could discharge)
 
 
 @dataclass
@@ -203,6 +206,30 @@ def car_pv_alone_kwh(inp: Inputs, end: datetime) -> float:
         if kw >= car.min_kw:
             total += min(kw, car.max_kw) * (hi - lo).total_seconds() / 3600.0
     return total
+
+
+def battery_feed_evidence(car_kw: float, pv_kw: float, load_kw: float, battery_kw: float | None,
+                          battery_soc: float | None, battery_min_soc: float) -> bool | None:
+    """One reading of whether the home battery discharges into the car
+    (battery_kw: + charging, - discharging; load_kw includes the car). Only
+    a reading with the car charging, power missing beyond the PV and energy
+    left in the battery says anything: a discharge clearly beyond the
+    house's own gap -> True; the battery covering at most the house while
+    the car draws from the grid -> False. The inverter may change this on
+    its own (e.g. a price-driven winter mode), so it is re-read all the time."""
+    if (car_kw < FEED_CAR_MIN_KW or battery_kw is None or battery_soc is None
+            or battery_soc < battery_min_soc + FEED_SOC_MARGIN):
+        return None
+    deficit = load_kw - pv_kw
+    if deficit < FEED_DEFICIT_KW:
+        return None
+    house_gap = max(0.0, load_kw - car_kw - pv_kw)
+    discharge = max(0.0, -battery_kw)
+    if discharge > house_gap + 0.5:
+        return True
+    if discharge < house_gap + 0.2 and deficit - discharge > FEED_DEFICIT_KW:
+        return False
+    return None
 
 
 def next_departure(deps: list[Departure], now: datetime) -> Departure | None:

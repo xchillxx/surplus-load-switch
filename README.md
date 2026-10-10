@@ -66,7 +66,12 @@ while the battery is at its minimum SoC — otherwise the battery would just
 empty itself into the car, and grid charging in PV hours would take the PV
 it needs. With the option off (battery set not to discharge into the
 wallbox in the inverter app) every slot up to the departure counts, midday
-included, and the car charges PV plus grid there. Replayed on a sunny September this cost 6 kWh of grid energy a month;
+included, and the car charges PV plus grid there. With a *home battery
+power* sensor this is detected while the car charges (battery discharging
+beyond the house's own need = it feeds the car) and followed when the
+inverter changes it on its own, e.g. a price-driven winter mode; the
+setting is only the start value and applies again after 3 days without a
+reading. Replayed on a sunny September this cost 6 kWh of grid energy a month;
 on dark days it is what buys the cheap hours.
 
 At night devices run on the home battery only if it lasts until the next

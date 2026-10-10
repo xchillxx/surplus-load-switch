@@ -7,6 +7,8 @@ DOMAIN = "surplus_pilot"
 PLATFORMS = ["sensor", "switch", "number", "select", "time", "text", "date"]
 
 UPDATE_INTERVAL_SECONDS = 60
+FEED_CONFIRM_READINGS = 3     # consistent minutes before the battery-feeds-car state flips
+FEED_EXPIRY_DAYS = 3          # without a new reading the configured value applies again
 STORAGE_VERSION = 1
 
 # ---------------------------------------------------------------- energy (entry.data)
@@ -17,6 +19,7 @@ CONF_GRID_EXPORT_SENSOR = "grid_export_sensor"
 CONF_BATTERY_SOC_SENSOR = "battery_soc_sensor"
 CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 CONF_BATTERY_MIN_SOC = "battery_min_soc"
+CONF_BATTERY_POWER_SENSOR = "battery_power_sensor"
 CONF_STALE_MINUTES = "stale_minutes"
 CONF_PRICE_SOURCE = "price_source"
 CONF_TIBBER_HOME = "tibber_home"
