@@ -649,6 +649,8 @@ class PilotCoordinator(DataUpdateCoordinator):
                 forecast=self._forecast, prices=self._prices, departures=deps, car=car_in, devices=dev_inputs,
                 allow_grid_for_car=bool(self.car_cfg.get(CONF_CAR_ALLOW_GRID, True)) if self.car_cfg else False,
                 battery_feeds_car=feeds_car,
+                grid_running=bool(self.car and ((self.car.decision is not None and self.car.decision.grid)
+                                                 or car_kw >= 0.9 * self.car.max_kw)),
                 car_fixed_kw=car_fixed, price_profile=ps["profile"], price_now=ps["now"],
                 cheap_threshold=ps["threshold"], cheap_target_soc=cheap_target)
 

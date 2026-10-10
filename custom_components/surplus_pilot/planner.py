@@ -48,6 +48,7 @@ DEVICE_MIN_RUN_H = 1.0         # a device only starts when it can run at least t
 MIN_LIFT_PV_SHARE = 0.5        # obligation at minimum current only while PV carries half of it ...
 MIN_LIFT_PV_SHARE_KEEP = 0.4   # ... (0.4 to keep an already charging car going)
 CHEAP_BATTERY_MARGIN = 3.0     # cheap grid top-up only with the home battery at most this far above its min SoC
+GRID_BLOCK_TOLERANCE = 0.005   # a running grid block continues while the price is within 0.5 ct of the block's mean
 FEED_CAR_MIN_KW = 1.0          # battery-feeds-car detection: car must draw at least this ...
 FEED_DEFICIT_KW = 0.5          # ... with at least this much missing beyond the PV ...
 FEED_SOC_MARGIN = 5.0          # ... and the battery this far above its min SoC (it could discharge)
@@ -124,6 +125,9 @@ class Inputs:
     # False: the home battery is set not to discharge into the car (e.g. in
     # the inverter app) - grid charging then leaves it alone, also at midday
     battery_feeds_car: bool = True
+    # the car is grid charging right now (last decision, or drawing near its
+    # maximum): a started grid block runs through instead of stop-and-go
+    grid_running: bool = False
     # Price knowledge for grid charging: published prices (`prices`), an
     # estimate per hour of day for the not yet published ones (median of the
     # last days), the current price and the "cheap" threshold (percentile of
@@ -433,13 +437,47 @@ def _floor_slot(t: datetime) -> datetime:
     return t.replace(minute=t.minute - t.minute % 15, second=0, microsecond=0)
 
 
+def _best_block(slots: list[tuple[datetime, float | None]], n: int, prefer_late: bool) -> tuple[datetime, int, float] | None:
+    """Cheapest run of n consecutive 15-min slots (None = not usable, it
+    breaks a run): (start, length, mean price). Charging is one block, not
+    scattered quarter hours - every stop and start costs a (possibly
+    billed) car command and stresses the charging hardware. When no run is
+    n long, the longest possible one counts."""
+    n = max(1, min(n, len(slots)))
+    while n >= 1:
+        best = None
+        for i in range(len(slots) - n + 1):
+            win = slots[i:i + n]
+            if any(p is None for _, p in win) or any(win[k + 1][0] - win[k][0] != SLOT for k in range(n - 1)):
+                continue
+            cost = sum(p for _, p in win)
+            if (best is None or cost < best[2] * n - 1e-9
+                    or (prefer_late and abs(cost - best[2] * n) <= 1e-9)):
+                best = (win[0][0], n, cost / n)
+        if best is not None:
+            return best
+        n -= 1
+    return None
+
+
+def _in_block(inp: Inputs, block: tuple[datetime, int, float] | None) -> bool:
+    if block is None:
+        return False
+    start, n, mean = block
+    if start <= inp.now < start + n * SLOT:
+        return True
+    # a running block goes on while the price stays close to the best block
+    price = inp.price_now if inp.price_now is not None else _price_at(inp, _floor_slot(inp.now))[0]
+    return inp.grid_running and price is not None and price <= mean + GRID_BLOCK_TOLERANCE
+
+
 def _grid_slot_now(inp: Inputs, dep: Departure, uncovered_kwh: float, max_kw: float) -> bool:
     """Grid fallback for a departure target the PV forecast can't reach:
-    charge in the cheapest 15-min slots between now and the departure
-    (unpublished prices estimated per hour of day — so a cheap midday today
-    can win over a night whose prices aren't out yet). Ties go to the later
-    slot (a sunnier hour than forecast may still help). Once there is just
-    enough time left, charge regardless of price."""
+    charge in the cheapest block of consecutive 15-min slots between now and
+    the departure (unpublished prices estimated per hour of day — so a cheap
+    midday today can win over a night whose prices aren't out yet). Ties go
+    to the later block (a sunnier hour than forecast may still help). Once
+    there is just enough time left, charge regardless of price."""
     need_slots = max(1, math.ceil(uncovered_kwh / max(max_kw, 0.1) / 0.25))
     now_slot = _floor_slot(inp.now)
     slots: list[tuple[datetime, float | None]] = []
@@ -450,12 +488,10 @@ def _grid_slot_now(inp: Inputs, dep: Departure, uncovered_kwh: float, max_kw: fl
     left_h = (dep.start - inp.now).total_seconds() / 3600.0
     if len(slots) <= need_slots or left_h <= need_slots * 0.25 + GRID_SAFETY_H:
         return True
-    priced = [x for x in slots if x[1] is not None]
-    if not priced:
+    if not any(x[1] is not None for x in slots):
         return False  # no price idea at all: wait for the safety start above
-    priced.sort(key=lambda x: (x[1], -x[0].timestamp()))
-    chosen = {x[0] for x in priced[:need_slots]}
-    return now_slot in chosen
+    # one block, equally cheap -> the later one (a sunnier hour may still help)
+    return _in_block(inp, _best_block(slots, need_slots, prefer_late=True))
 
 
 def _cheap_topup_now(inp: Inputs, dep: Departure | None, surplus: float) -> tuple[bool, float]:
@@ -493,10 +529,10 @@ def _cheap_topup_now(inp: Inputs, dep: Departure | None, surplus: float) -> tupl
 
 
 def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float, max_kw: float) -> bool:
-    """Is the current slot among the cheapest PUBLISHED slots until `end`
-    that are free for grid charging? Equal prices go to the earlier slot -
-    no point waiting for the same price. When the home battery feeds the
-    car, slots with PV above the base load don't count (now: measured,
+    """Is now inside the cheapest block of consecutive PUBLISHED slots until
+    `end` that are free for grid charging? Equal blocks go to the earlier
+    one - no point waiting for the same price. When the home battery feeds
+    the car, slots with PV above the base load don't count (now: measured,
     later: forecast): grid charging there would take the PV the battery
     needs, it only charges from export."""
     need_slots = max(1, math.ceil(kwh / max(max_kw, 0.1) / 0.25))
@@ -504,18 +540,18 @@ def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float, max_kw: floa
     pv_limit = inp.base_kw + 0.3
     if inp.battery_feeds_car and inp.pv_kw > pv_limit:
         return False
-    free = []
-    for p in inp.prices:
-        if p.end <= now_slot or p.start >= end:
-            continue
-        if inp.battery_feeds_car and p.start > now_slot:
-            pv_kw = forecast_kwh(inp.forecast, p.start, p.end) / max(_h(p.start, p.end), 0.01)
-            if pv_kw * CHEAP_FORECAST_TRUST > pv_limit:
-                continue
-        free.append((p.price, p.start))
-    free.sort()
-    chosen = {t for _, t in free[:need_slots]}
-    return any(p.start <= inp.now < p.end and p.start in chosen for p in inp.prices)
+    slots: list[tuple[datetime, float | None]] = []
+    for p in sorted(inp.prices, key=lambda x: x.start):   # hourly prices -> 15-min slots
+        t = max(_floor_slot(p.start), now_slot)
+        while t < p.end and t < end:
+            price: float | None = p.price
+            if inp.battery_feeds_car and t > now_slot:
+                pv_kw = forecast_kwh(inp.forecast, t, t + SLOT) / 0.25
+                if pv_kw * CHEAP_FORECAST_TRUST > pv_limit:
+                    price = None
+            slots.append((t, price))
+            t += SLOT
+    return _in_block(inp, _best_block(slots, need_slots, prefer_late=False))
 
 
 # ---------------------------------------------------------------- the plan

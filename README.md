@@ -59,7 +59,8 @@ help), and once there is just enough time left it charges regardless.
 (default: the cheapest 10 % of the last 8 days) the car is topped up from the
 grid up to a target (default 80 %) — but only by the energy the PV forecast
 won't bring before the next departure anyway, so a sunny tomorrow isn't
-wasted. It charges in the cheapest *published* slots before the departure.
+wasted. It charges in the cheapest *block* of consecutive published slots before
+the departure (one block, no stop-and-go).
 If your home battery discharges into the car (option *Home battery
 discharges into the car*, default on), only slots without PV count and only
 while the battery is at its minimum SoC — otherwise the battery would just

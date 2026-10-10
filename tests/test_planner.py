@@ -365,3 +365,36 @@ def test_battery_feed_evidence():
     assert ev(3.0, 1.4, 3.8, -2.5, 18.0, 15.0) is None          # battery at its reserve: says nothing
     assert ev(0.0, 0.0, 0.8, -0.8, 40.0, 15.0) is None          # car not charging
     assert ev(3.0, 4.0, 3.8, -0.0, 40.0, 15.0) is None          # PV covers it all
+
+
+def test_grid_charging_is_one_block_not_scattered_quarter_hours():
+    """10.10. live: 11:45 17.16 ct, 12:00 17.40, 12:15 17.19, from 12:30
+    17.16 - the cheapest single quarter hours would stop the car at 12:00
+    and start it again at 12:30. One block instead; a running one goes on."""
+    now = datetime(2026, 10, 10, 11, 45, tzinfo=TZ)
+    day0 = now.replace(hour=0)
+
+    def tariff(t):
+        if (t.hour, t.minute) == (12, 0):
+            return 0.174
+        if (t.hour, t.minute) == (12, 15):
+            return 0.1719
+        return 0.1716 if day0.replace(hour=11, minute=45) <= t < day0.replace(hour=16, minute=30) else 0.20
+
+    prices = [P.PriceSlot(day0 + timedelta(minutes=15 * i), day0 + timedelta(minutes=15 * (i + 1)),
+                          tariff(day0 + timedelta(minutes=15 * i))) for i in range(96)]
+
+    def at(t, running):
+        inp = _oct10(t, pv_kw=6.8, battery_soc=25.0, car_soc=44.0, prices=prices,
+                     price_now=next(p.price for p in prices if p.start <= t < p.end), threshold=0.189,
+                     cheap_target=80.0)
+        inp.battery_feeds_car = False
+        inp.grid_running = running
+        return P.make_plan(inp)
+
+    assert not at(now, False).car_grid                    # best block starts 12:30
+    assert at(now.replace(hour=12, minute=30), False).car_grid
+    assert at(now.replace(hour=12, minute=0), True).car_grid   # already running: no stop for 0.2 ct
+    # the two cheapest single slots (0.1) are apart: the block 0.1+0.12+0.12 wins
+    blk = P._best_block([(now + i * P.SLOT, p) for i, p in enumerate([0.1, 0.4, 0.1, 0.12, 0.12, 0.12])], 3, False)
+    assert blk[0] == now + 2 * P.SLOT and blk[1] == 3
