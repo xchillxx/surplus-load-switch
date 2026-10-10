@@ -302,9 +302,10 @@ async def test_dependent_device_follows_pump_not_its_plan(hass: HomeAssistant, f
 
 
 async def test_battery_feeding_the_car_is_detected_and_followed(hass: HomeAssistant, freezer):
-    """Start value off; the battery discharging into the charging car for 3
-    readings flips it on (logged), an idle battery while the car imports
-    flips it back."""
+    """Start value off. Battery data arrives every ~5 min: only new readings
+    taken well after the car started count; two of them with the battery
+    discharging into the car flip it on (logged), two with an idle battery
+    while the car imports flip it back."""
     set_world(hass, pv=1.4, load=3.8, soc=40, car_soc=50, car_kw=3.0)
     hass.states.async_set("sensor.bat_power", -2.5, {"unit_of_measurement": "kW"})
     for e in ("switch.miner", "switch.pump", "climate.pool"):
@@ -316,12 +317,21 @@ async def test_battery_feeding_the_car_is_detected_and_followed(hass: HomeAssist
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     co = hass.data[DOMAIN][entry.entry_id]
-    assert co.status["akku_speist_auto"] is False          # one reading is not enough
-    for _ in range(3):
-        await co.async_refresh()
+
+    async def reading(kw, refreshes=3):
+        freezer.tick(timedelta(minutes=5))
+        set_world(hass, pv=1.4, load=3.8, soc=40, car_soc=50, car_kw=3.0)
+        hass.states.async_set("sensor.bat_power", kw, {"unit_of_measurement": "kW"}, force_update=True)
+        for _ in range(refreshes):   # the same reading seen every minute counts once
+            await co.async_refresh()
+
+    await reading(-2.5)
+    assert co.status["akku_speist_auto"] is False          # car started < 6 min before this reading
+    await reading(-2.5)
+    assert co.status["akku_speist_auto"] is False          # first counted reading
+    await reading(-2.5)
     assert co.status["akku_speist_auto"] is True
     assert any("entlädt jetzt ins Auto" in e["text"] for e in co.log)
-    hass.states.async_set("sensor.bat_power", 0.0, {"unit_of_measurement": "kW"})
-    for _ in range(3):
-        await co.async_refresh()
+    await reading(0.0)
+    await reading(0.0)
     assert co.status["akku_speist_auto"] is False

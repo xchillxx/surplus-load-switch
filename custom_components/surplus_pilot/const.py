@@ -7,7 +7,8 @@ DOMAIN = "surplus_pilot"
 PLATFORMS = ["sensor", "switch", "number", "select", "time", "text", "date"]
 
 UPDATE_INTERVAL_SECONDS = 60
-FEED_CONFIRM_READINGS = 3     # consistent minutes before the battery-feeds-car state flips
+FEED_CONFIRM_READINGS = 2     # consistent NEW battery readings before the battery-feeds-car state flips
+FEED_CAR_STEADY_MIN = 6       # battery reading counts only when the car charged this long before it
 FEED_EXPIRY_DAYS = 3          # without a new reading the configured value applies again
 STORAGE_VERSION = 1
 

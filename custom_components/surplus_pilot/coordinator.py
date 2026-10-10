@@ -88,6 +88,7 @@ from .const import (
     MODE_AUTO,
     PRICE_SENSOR,
     PRICE_TIBBER,
+    FEED_CAR_STEADY_MIN,
     FEED_CONFIRM_READINGS,
     FEED_EXPIRY_DAYS,
     UPDATE_INTERVAL_SECONDS,
@@ -174,6 +175,8 @@ class PilotCoordinator(DataUpdateCoordinator):
         self._last_plugged: bool | None = None
         self._last_pause: str | None = None
         self._feed_votes = 0
+        self._feed_reading: datetime | None = None   # battery power reading last looked at
+        self._car_on_since: datetime | None = None
         self._dep_sig: object = _UNSET
         self._forced_since: dict[str, datetime] = {}   # device -> start of its forced run
         self._forced_plan: dict[str, dict] = {}        # device -> planned forced run (status)
@@ -488,10 +491,24 @@ class PilotCoordinator(DataUpdateCoordinator):
                               soc: float | None) -> None:
         """Re-read the battery's behaviour while the car charges: the
         inverter may change it on its own (e.g. a price-driven winter mode).
-        A different state needs FEED_CONFIRM_READINGS consistent readings;
-        then the car is re-planned at once."""
+        Cloud inverter data arrives only every ~5 min (FusionSolar), so
+        only a NEW battery reading counts, and only when the car was already
+        charging well before it. A different state needs
+        FEED_CONFIRM_READINGS consistent readings; then the car is
+        re-planned at once."""
+        if car_kw >= P.FEED_CAR_MIN_KW:
+            self._car_on_since = self._car_on_since or now
+        else:
+            self._car_on_since = None
         ent = self.cfg.get(CONF_BATTERY_POWER_SENSOR)
-        if not ent or not self.car_cfg:
+        st = self.hass.states.get(ent) if ent else None
+        if st is None or not self.car_cfg:
+            return
+        stamp = getattr(st, "last_reported", None) or st.last_updated
+        if stamp == self._feed_reading:
+            return
+        self._feed_reading = stamp
+        if self._car_on_since is None or stamp - self._car_on_since < timedelta(minutes=FEED_CAR_STEADY_MIN):
             return
         ev = P.battery_feed_evidence(car_kw, pv, load, power_kw(self.hass, ent), soc,
                                      float(self.cfg.get(CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC)))
