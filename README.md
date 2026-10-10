@@ -70,7 +70,12 @@ while the battery is at its minimum SoC — otherwise the battery would just
 empty itself into the car, and grid charging in PV hours would take the PV
 it needs. With the option off (battery set not to discharge into the
 wallbox in the inverter app) every slot up to the departure counts, midday
-included, and the car charges PV plus grid there. With a *home battery
+included, and the car charges PV plus grid there — slots with PV only while
+the home battery is at least *Cheap charging with PV from home battery* full
+(default 50 %, 0 = no limit). Many inverters (e.g. Huawei) give the PV to the
+wallbox first and let the battery carry the house, so a midday block still
+drains it; a running block goes on down to 5 % below that value, then stops
+and stays off in PV hours for the rest of the day. With a *home battery
 power* sensor this is detected while the car charges (battery discharging
 beyond the house's own need = it feeds the car) and followed when the
 inverter changes it on its own, e.g. a price-driven winter mode. Only new
@@ -183,7 +188,7 @@ Entity IDs are created in the language Home Assistant runs in at setup
 | PV power, Base load, Surplus, Battery reservation, Device budget, Forecast rest of today, Forecast tomorrow, Next departure, Last action (`sensor`) | What the plan sees and does; *Last action* keeps a log of the last 60 actions |
 | Car: *Charging status*, *Charging power* (`sensor`) | Why the car charges (or not), target current, commands today |
 | Car: *Charging control* (`switch`) | Car control on/off |
-| Car: *Cheap charging* (`switch`), *Cheap threshold percentile*, *Cheap charging up to* (`number`) | Cheap charging on/off, threshold percentile, target |
+| Car: *Cheap charging* (`switch`), *Cheap threshold percentile*, *Cheap charging up to*, *Cheap charging with PV from home battery* (`number`) | Cheap charging on/off, threshold percentile, target, home-battery minimum for cheap charging in PV hours |
 | Car: *Cheap threshold*, *Price now* (`sensor`) | Threshold and current price in ct/kWh |
 | Device: *Status* (`sensor`) | Why a device is on/off, countdown to the next switch, runtime today, learned power |
 | Device: *Automatic* (`switch`) | Off = Surplus Pilot leaves this device alone |

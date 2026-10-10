@@ -639,6 +639,7 @@ class PilotCoordinator(DataUpdateCoordinator):
         ps = self.price_stats(now)
         self._price_stats = ps
         cheap_target = float(self.store.data["cheap_target"]) if self.store.data["cheap_enabled"] else None
+        cheap_pv_soc = float(self.store.data["cheap_pv_battery_soc"] or 0) or None
 
         def inputs(pv_kw: float, base_kw: float, car_fixed: float | None) -> P.Inputs:
             return P.Inputs(
@@ -654,7 +655,9 @@ class PilotCoordinator(DataUpdateCoordinator):
                 grid_running=bool(self.car and ((self.car.decision is not None and self.car.decision.grid)
                                                  or car_kw >= 0.9 * self.car.max_kw)),
                 car_fixed_kw=car_fixed, price_profile=ps["profile"], price_now=ps["now"],
-                cheap_threshold=ps["threshold"], cheap_target_soc=cheap_target)
+                cheap_threshold=ps["threshold"], cheap_target_soc=cheap_target,
+                cheap_pv_battery_soc=cheap_pv_soc,
+                cheap_pv_locked=self.store.data.get("cheap_pv_lock") == now.date().isoformat())
 
         # ---- car decision (quarter hours / plug-in / pause change)
         paused = False
@@ -684,7 +687,19 @@ class PilotCoordinator(DataUpdateCoordinator):
                 if covered >= CAR_MIN_COVERAGE_MINUTES or forced or ((replan or urgent) and win):
                     pv_m = sum(s[1] for s in win) / len(win)
                     base_m = statistics.median(s[2] for s in win)
-                    plan = P.make_plan(inputs(pv_m, base_m, None))
+                    probe = inputs(pv_m, base_m, None)
+                    if (self.car.decision is not None and self.car.decision.reason == "netz_billig"
+                            and not probe.cheap_pv_locked and P.cheap_pv_battery_stop(probe)):
+                        # stopped for the battery: no restart in PV today (PV refills it -> stop-and-go)
+                        self.store.data["cheap_pv_lock"] = now.date().isoformat()
+                        self.store.save()
+                        self._log(f"Billig-Laden mit PV beendet: Hausakku {soc:.0f} % — heute mit PV nicht mehr")
+                        probe = inputs(pv_m, base_m, None)
+                    self._cheap_pv_waits = (cheap_target is not None and ps["now"] is not None
+                                            and ps["threshold"] is not None and ps["now"] <= ps["threshold"]
+                                            and probe.pv_kw > probe.base_kw + 0.3
+                                            and not P.cheap_pv_battery_ok(probe))
+                    plan = P.make_plan(probe)
                     # the top-up must also fit the last 15 min (falling PV)
                     win_cap = [s for s in win if (now - s[0]).total_seconds() <= CAR_CAP_MINUTES * 60]
                     if win_cap:
@@ -888,6 +903,11 @@ class PilotCoordinator(DataUpdateCoordinator):
                             f"(bis {self.store.data['cheap_target']:.0f} %)")
                 elif cp.car_grid:
                     txt += " — lädt aus dem Netz: günstigster Zeitraum bis zur Abfahrt"
+                if not cp.car_grid and getattr(self, "_cheap_pv_waits", False):
+                    txt += (f" — Strom billig, aber mit PV erst ab Hausakku "
+                            f"{float(self.store.data['cheap_pv_battery_soc']):.0f} %"
+                            + (" (heute schon einmal abgebrochen)"
+                               if self.store.data.get("cheap_pv_lock") == dt_util.now().date().isoformat() else ""))
                 if cp.car_block and not cp.car_grid and cp.car_block[1] > dt_util.now():
                     a, b = (dt_util.as_local(x).strftime("%H:%M") for x in cp.car_block)
                     txt += f" — Netz-Block geplant {a}–{b} (Geräte richten sich danach)"

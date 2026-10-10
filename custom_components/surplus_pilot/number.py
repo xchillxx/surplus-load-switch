@@ -32,6 +32,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEnt
     cinfo = car_info(entry.entry_id, entry.data[CONF_CAR].get(CONF_CAR_NAME) or "Auto")
     ents.append(StoreNumber(co, cinfo, "billig_perzentil", "cheap_percentile", 1, 50, 1, "%", "mdi:percent"))
     ents.append(StoreNumber(co, cinfo, "billig_bis", "cheap_target", 20, 100, 5, "%", "mdi:battery-arrow-up"))
+    ents.append(StoreNumber(co, cinfo, "billig_pv_ab_akku", "cheap_pv_battery_soc", 0, 100, 5, "%",
+                            "mdi:home-battery"))
     add(ents)
 
 

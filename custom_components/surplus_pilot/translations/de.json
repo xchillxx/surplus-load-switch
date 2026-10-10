@@ -295,6 +295,9 @@
       "billig_bis": {
         "name": "Billig-Laden bis"
       },
+      "billig_pv_ab_akku": {
+        "name": "Billig-Laden mit PV ab Hausakku"
+      },
       "slot_ziel_soc": {
         "name": "Abfahrt {n} Ziel"
       },

@@ -51,6 +51,8 @@ class PilotStore:
         data.setdefault("cheap_enabled", True)
         data.setdefault("cheap_percentile", 10)
         data.setdefault("cheap_target", 80)
+        data.setdefault("cheap_pv_battery_soc", 50)   # cheap top-up with PV only from this home-battery SoC
+        data.setdefault("cheap_pv_lock", None)        # date a PV block was stopped for the battery
         data.setdefault("commands", {"date": dt_util.now().date().isoformat(), "count": 0})
         # survive a restart: action log, the last 30 min of readings (car
         # decision needs 10 min of them) and running switch countdowns

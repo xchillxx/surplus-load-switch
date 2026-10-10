@@ -48,6 +48,7 @@ DEVICE_MIN_RUN_H = 1.0         # a device only starts when it can run at least t
 MIN_LIFT_PV_SHARE = 0.5        # obligation at minimum current only while PV carries half of it ...
 MIN_LIFT_PV_SHARE_KEEP = 0.4   # ... (0.4 to keep an already charging car going)
 CHEAP_BATTERY_MARGIN = 3.0     # cheap grid top-up only with the home battery at most this far above its min SoC
+CHEAP_PV_SOC_HYSTERESIS = 5.0  # a running cheap block with PV stops this far below the battery floor
 GRID_BLOCK_TOLERANCE = 0.005   # a running grid block continues while the price is within 0.5 ct of the block's mean
 FEED_CAR_MIN_KW = 1.0          # battery-feeds-car detection: car must draw at least this ...
 FEED_DEFICIT_KW = 0.5          # ... with at least this much missing beyond the PV ...
@@ -125,6 +126,12 @@ class Inputs:
     # False: the home battery is set not to discharge into the car (e.g. in
     # the inverter app) - grid charging then leaves it alone, also at midday
     battery_feeds_car: bool = True
+    # cheap top-up while there is PV only with the home battery at least this
+    # full (None = no limit): the inverter gives the PV to the wallbox first and
+    # the battery carries the house (10.10.: 34 -> 10 % during a midday block).
+    # cheap_pv_locked: such a block was stopped for the battery today.
+    cheap_pv_battery_soc: float | None = None
+    cheap_pv_locked: bool = False
     # the car is grid charging right now (last decision, or drawing near its
     # maximum): a started grid block runs through instead of stop-and-go
     grid_running: bool = False
@@ -553,6 +560,26 @@ def _cheap_topup_now(inp: Inputs, dep: Departure | None,
     return in_block and now_ok, from_grid, block
 
 
+def cheap_pv_battery_ok(inp: Inputs) -> bool:
+    """May cheap grid charging use slots with PV? Only with the home battery at
+    least `cheap_pv_battery_soc` full - a running block goes on down to
+    CHEAP_PV_SOC_HYSTERESIS below it, and once stopped for that it stays off
+    in PV for the day (no stop-and-go while PV refills the battery)."""
+    if inp.cheap_pv_battery_soc is None or inp.battery_soc is None:
+        return True
+    if inp.cheap_pv_locked:
+        return False
+    floor = inp.cheap_pv_battery_soc - (CHEAP_PV_SOC_HYSTERESIS if inp.grid_running else 0.0)
+    return inp.battery_soc >= floor
+
+
+def cheap_pv_battery_stop(inp: Inputs) -> bool:
+    """A running cheap block with PV must stop for the battery (-> lock for today)."""
+    return (inp.grid_running and inp.cheap_pv_battery_soc is not None and inp.battery_soc is not None
+            and not inp.battery_feeds_car and inp.pv_kw > inp.base_kw + 0.3
+            and inp.battery_soc < inp.cheap_pv_battery_soc - CHEAP_PV_SOC_HYSTERESIS)
+
+
 def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float,
                             max_kw: float) -> tuple[bool, tuple[datetime, datetime] | None]:
     """Is now inside the cheapest block of consecutive PUBLISHED slots until
@@ -564,14 +591,15 @@ def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float,
     need_slots = max(1, math.ceil(kwh / max(max_kw, 0.1) / 0.25))
     now_slot = _floor_slot(inp.now)
     pv_limit = inp.base_kw + 0.3
-    if inp.battery_feeds_car and inp.pv_kw > pv_limit:
+    no_pv_slots = inp.battery_feeds_car or not cheap_pv_battery_ok(inp)
+    if no_pv_slots and inp.pv_kw > pv_limit:
         return False, None
     slots: list[tuple[datetime, float | None]] = []
     for p in sorted(inp.prices, key=lambda x: x.start):   # hourly prices -> 15-min slots
         t = max(_floor_slot(p.start), now_slot)
         while t < p.end and t < end:
             price: float | None = p.price if p.price <= inp.cheap_threshold else None
-            if price is not None and inp.battery_feeds_car and t > now_slot:
+            if price is not None and no_pv_slots and t > now_slot:
                 pv_kw = forecast_kwh(inp.forecast, t, t + SLOT) / 0.25
                 if pv_kw * CHEAP_FORECAST_TRUST > pv_limit:
                     price = None

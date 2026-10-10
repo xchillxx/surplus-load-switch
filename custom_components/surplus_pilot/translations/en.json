@@ -295,6 +295,9 @@
       "billig_bis": {
         "name": "Cheap charging up to"
       },
+      "billig_pv_ab_akku": {
+        "name": "Cheap charging with PV from home battery"
+      },
       "slot_ziel_soc": {
         "name": "Departure {n} target"
       },

@@ -426,3 +426,37 @@ def test_devices_know_the_car_grid_block():
     blocked = P.device_surplus_hours(fc, now, now.replace(hour=17), 0.8, 1.3, 100.0, 13.8, now.replace(hour=17),
                                      car_block=(now.replace(minute=45), now.replace(hour=13, minute=45)), car_kw=11.04)
     assert abs((free - blocked) - 2.0) < 0.01
+
+
+def test_cheap_topup_with_pv_needs_a_full_enough_home_battery():
+    """10.10. live 13:03-14:10: cheap block at midday, the inverter gave the
+    PV to the wallbox and the battery carried the house (stove) 34 -> 10 %.
+    With PV, cheap charging now needs the battery at 50 % (setting); a running
+    block goes on to 45 %, below it stops (and stays off in PV for the day).
+    Slots without PV stay open - then the night block wins."""
+    now = datetime(2026, 10, 10, 13, 0, tzinfo=TZ)
+    prices = _oct10_prices(now.replace(hour=0))
+
+    def inp_at(t, pv, battery, running=False, locked=False):
+        inp = _oct10(t, pv_kw=pv, battery_soc=battery, car_soc=53.0, prices=prices,
+                     price_now=next(p.price for p in prices if p.start <= t < p.end), threshold=0.1904,
+                     cheap_target=80.0)
+        inp.battery_feeds_car = False
+        inp.cheap_pv_battery_soc = 50.0
+        inp.grid_running, inp.cheap_pv_locked = running, locked
+        return inp
+
+    assert not P.make_plan(inp_at(now, 4.5, 34.0)).car_grid            # today: battery too low
+    assert P.make_plan(inp_at(now, 4.5, 55.0)).car_grid                # full enough: PV + grid
+    assert P.make_plan(inp_at(now, 4.5, 47.0, running=True)).car_grid  # running: down to 45 %
+    stop = inp_at(now, 4.5, 44.0, running=True)
+    assert P.cheap_pv_battery_stop(stop) and not P.make_plan(stop).car_grid
+    assert not P.make_plan(inp_at(now, 4.5, 60.0, locked=True)).car_grid   # stopped once today
+    # night: no PV -> the battery rule doesn't apply, 05:00 at 18.9 ct is the cheapest free slot now
+    night = inp_at(now.replace(hour=5), 0.0, 30.0)
+    night.car.soc = 27.0
+    assert P.make_plan(night).car_grid
+    # without the setting midday with PV is open as before
+    free = inp_at(now, 4.5, 34.0)
+    free.cheap_pv_battery_soc = None
+    assert P.make_plan(free).car_grid
