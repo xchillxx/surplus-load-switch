@@ -86,9 +86,11 @@ from .const import (
 
 
 def _d(d: dict, key: str) -> dict:
-    """default= only for real values (an empty optional field must stay empty)."""
+    """Pre-fill an optional field as a suggestion, not a default: a field
+    the user clears is then left out and stays empty (with default= the old
+    value came back - 10.10.: the battery power sensor couldn't be removed)."""
     v = d.get(key)
-    return {"default": v} if v not in (None, "") else {}
+    return {"description": {"suggested_value": v}} if v not in (None, "") else {}
 
 
 def _ent(domain, device_class=None):
