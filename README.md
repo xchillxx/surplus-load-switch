@@ -59,10 +59,14 @@ help), and once there is just enough time left it charges regardless.
 (default: the cheapest 10 % of the last 8 days) the car is topped up from the
 grid up to a target (default 80 %) — but only by the energy the PV forecast
 won't bring before the next departure anyway, so a sunny tomorrow isn't
-wasted. It charges in the cheapest *published* slots before the departure
-that have no PV (grid charging during PV hours would take the PV the home
-battery needs), and only while the home battery is at its minimum SoC —
-otherwise the battery would just empty itself into the car. Replayed on a sunny September this cost 6 kWh of grid energy a month;
+wasted. It charges in the cheapest *published* slots before the departure.
+If your home battery discharges into the car (option *Home battery
+discharges into the car*, default on), only slots without PV count and only
+while the battery is at its minimum SoC — otherwise the battery would just
+empty itself into the car, and grid charging in PV hours would take the PV
+it needs. With the option off (battery set not to discharge into the
+wallbox in the inverter app) every slot up to the departure counts, midday
+included, and the car charges PV plus grid there. Replayed on a sunny September this cost 6 kWh of grid energy a month;
 on dark days it is what buys the cheap hours.
 
 At night devices run on the home battery only if it lasts until the next

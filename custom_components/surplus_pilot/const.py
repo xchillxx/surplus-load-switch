@@ -58,6 +58,7 @@ CONF_CAR_MAX_COMMANDS = "max_commands_per_day"
 CONF_CAR_PAUSE_ENTITY = "pause_entity"
 CONF_CAR_PAUSE_STATE = "pause_state"
 CONF_CAR_ALLOW_GRID = "allow_grid"
+CONF_CAR_BATTERY_FEEDS = "battery_feeds_car"
 
 DEFAULT_CAR_LIMIT = 80.0
 DEFAULT_CAR_CAPACITY_KWH = 60.0

@@ -118,6 +118,9 @@ class Inputs:
     car: CarInput | None = None
     devices: list[DeviceInput] = field(default_factory=list)
     allow_grid_for_car: bool = True
+    # False: the home battery is set not to discharge into the car (e.g. in
+    # the inverter app) - grid charging then leaves it alone, also at midday
+    battery_feeds_car: bool = True
     # Price knowledge for grid charging: published prices (`prices`), an
     # estimate per hour of day for the not yet published ones (median of the
     # last days), the current price and the "cheap" threshold (percentile of
@@ -431,23 +434,27 @@ def _grid_slot_now(inp: Inputs, dep: Departure, uncovered_kwh: float, max_kw: fl
 def _cheap_topup_now(inp: Inputs, dep: Departure | None, surplus: float) -> tuple[bool, float]:
     """Grid top-up while the price is below the cheap threshold — only for
     energy the PV forecast won't bring anyway before the next departure
-    (max. 24 h), so a sunny tomorrow isn't wasted."""
+    (24 h without one), and only in the cheapest published slots until then
+    (10.10. live: charged at 05:00 for 18.9 ct, the midday before the
+    departure was 17.2 ct)."""
     car = inp.car
     if (inp.cheap_target_soc is None or inp.cheap_threshold is None or inp.price_now is None
             or car is None or car.soc is None or not car.present):
         return False, 0.0
     target = min(inp.cheap_target_soc, car.limit_soc)
-    if car.soc >= target or inp.price_now > inp.cheap_threshold or surplus >= car.min_kw:
+    if car.soc >= target or inp.price_now > inp.cheap_threshold:
         return False, 0.0
-    # the home battery covers any import first: with energy left it would
-    # just empty itself into the car (10.10. live: 05:00 at 18.9 ct, battery
-    # 36 -> 12 % in 45 min, then the house bought at 22-24 ct all morning)
-    if inp.battery_soc is not None and inp.battery_soc > inp.battery_min_soc + CHEAP_BATTERY_MARGIN:
-        return False, 0.0
+    if inp.battery_feeds_car:
+        # the home battery covers any import first: with energy left it
+        # would just empty itself into the car (10.10. live: 05:00, battery
+        # 36 -> 12 % in 45 min, then the house bought at 22-24 ct all
+        # morning); and with PV for the car there's no top-up at all
+        if surplus >= car.min_kw:
+            return False, 0.0
+        if inp.battery_soc is not None and inp.battery_soc > inp.battery_min_soc + CHEAP_BATTERY_MARGIN:
+            return False, 0.0
     need = (target - car.soc) / 100.0 * car.capacity_kwh / car.efficiency
-    end = inp.now + timedelta(hours=24)
-    if dep is not None and dep.start < end:
-        end = dep.start
+    end = dep.start if dep is not None else inp.now + timedelta(hours=24)
     pv, _ = forecast_surplus_kwh(inp.forecast, inp.now, end, inp.base_kw + 0.3, CHEAP_FORECAST_TRUST)
     battery_missing = 0.0
     if inp.battery_soc is not None:
@@ -460,19 +467,23 @@ def _cheap_topup_now(inp: Inputs, dep: Departure | None, surplus: float) -> tupl
 
 def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float, max_kw: float) -> bool:
     """Is the current slot among the cheapest PUBLISHED slots until `end`
-    that are free for grid charging? Slots with forecast PV above the base
-    load don't count: grid charging there would take the PV the home
-    battery needs (it only charges from export). Equal prices go to the
-    earlier slot - no point waiting for the same price."""
+    that are free for grid charging? Equal prices go to the earlier slot -
+    no point waiting for the same price. When the home battery feeds the
+    car, slots with PV above the base load don't count (now: measured,
+    later: forecast): grid charging there would take the PV the battery
+    needs, it only charges from export."""
     need_slots = max(1, math.ceil(kwh / max(max_kw, 0.1) / 0.25))
     now_slot = _floor_slot(inp.now)
+    pv_limit = inp.base_kw + 0.3
+    if inp.battery_feeds_car and inp.pv_kw > pv_limit:
+        return False
     free = []
     for p in inp.prices:
         if p.end <= now_slot or p.start >= end:
             continue
-        if p.start > now_slot:
+        if inp.battery_feeds_car and p.start > now_slot:
             pv_kw = forecast_kwh(inp.forecast, p.start, p.end) / max(_h(p.start, p.end), 0.01)
-            if pv_kw * CHEAP_FORECAST_TRUST > inp.base_kw + 0.3:
+            if pv_kw * CHEAP_FORECAST_TRUST > pv_limit:
                 continue
         free.append((p.price, p.start))
     free.sort()

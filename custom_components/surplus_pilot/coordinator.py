@@ -27,6 +27,7 @@ from .const import (
     CONF_BATTERY_SOC_SENSOR,
     CONF_CAR,
     CONF_CAR_ALLOW_GRID,
+    CONF_CAR_BATTERY_FEEDS,
     CONF_CAR_CAPACITY_KWH,
     CONF_CAR_CHARGING_SENSOR,
     CONF_CAR_CURRENT_ENTITY,
@@ -585,6 +586,7 @@ class PilotCoordinator(DataUpdateCoordinator):
                 sunset=sun["sunset"], pv_end=sun["pv_end"], night_base_kw=self.store.data["night_base_kw"],
                 forecast=self._forecast, prices=self._prices, departures=deps, car=car_in, devices=dev_inputs,
                 allow_grid_for_car=bool(self.car_cfg.get(CONF_CAR_ALLOW_GRID, True)) if self.car_cfg else False,
+                battery_feeds_car=bool(self.car_cfg.get(CONF_CAR_BATTERY_FEEDS, True)) if self.car_cfg else True,
                 car_fixed_kw=car_fixed, price_profile=ps["profile"], price_now=ps["now"],
                 cheap_threshold=ps["threshold"], cheap_target_soc=cheap_target)
 
@@ -813,8 +815,9 @@ class PilotCoordinator(DataUpdateCoordinator):
                     txt += (f" — begrenzt auf den Überschuss der letzten {CAR_CAP_MINUTES} min "
                             f"({self._kw(cp.budget['auto_begrenzt_auf_kw'])}), damit der Hausakku nicht zuschießt")
                 if cp.car_grid and cp.car_reason == "netz_billig":
-                    txt += (f" — lädt aus dem Netz: Preis unter der Billig-Schwelle und die PV-Prognose "
-                            f"bringt bis zur Abfahrt nicht genug (bis {self.store.data['cheap_target']:.0f} %)")
+                    txt += (f" — lädt aus dem Netz: Preis unter der Billig-Schwelle, günstigste Zeit bis zur "
+                            f"Abfahrt, und die PV-Prognose bringt bis dahin nicht genug "
+                            f"(bis {self.store.data['cheap_target']:.0f} %)")
                 elif cp.car_grid:
                     txt += " — lädt aus dem Netz: günstigster Zeitraum bis zur Abfahrt"
                 lines.append(txt)

@@ -101,6 +101,7 @@
           "phases": "Phases",
           "voltage": "Voltage",
           "allow_grid": "Grid charging for departures",
+          "battery_feeds_car": "Home battery discharges into the car",
           "max_commands_per_day": "Max. commands per day (0 = unlimited)",
           "pause_entity": "Pause entity (optional)",
           "pause_state": "Pause state"
@@ -113,6 +114,7 @@
           "plugged_fallback_sensor": "Binary sensor or a charge-status text sensor (e.g. 'disconnected' / 'complete').",
           "tracker": "Car only counts as present when 'home'.",
           "allow_grid": "Charge from the grid (cheapest slots, late) when PV can't reach a departure target.",
+          "battery_feeds_car": "Off when the inverter is set not to discharge the battery into the wallbox: cheap charging then uses the cheapest slots up to the departure, midday included, and charges PV plus grid.",
           "max_commands_per_day": "For paid vehicle APIs.",
           "pause_entity": "While this entity has the state below, Surplus Pilot leaves the car alone."
         }

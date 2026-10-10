@@ -101,6 +101,7 @@
           "phases": "Phasen",
           "voltage": "Spannung",
           "allow_grid": "Netzladen für Abfahrten",
+          "battery_feeds_car": "Hausakku entlädt ins Auto",
           "max_commands_per_day": "Max. Befehle pro Tag (0 = unbegrenzt)",
           "pause_entity": "Pause-Entität (optional)",
           "pause_state": "Pause-Zustand"
@@ -113,6 +114,7 @@
           "plugged_fallback_sensor": "Binärsensor oder Ladestatus-Text (z. B. 'disconnected' / 'complete').",
           "tracker": "Auto zählt nur als da, wenn 'home'.",
           "allow_grid": "Aus dem Netz laden (günstigste Zeit, spät), wenn PV ein Abfahrtsziel nicht schafft.",
+          "battery_feeds_car": "Aus, wenn im Wechselrichter eingestellt ist, dass der Akku nicht in die Wallbox entlädt: Billig-Laden nimmt dann die günstigsten Zeiten bis zur Abfahrt, auch mittags, und lädt PV plus Netz.",
           "max_commands_per_day": "Für kostenpflichtige Fahrzeug-APIs.",
           "pause_entity": "Solange diese Entität den Zustand unten hat, lässt Surplus Pilot das Auto in Ruhe."
         }

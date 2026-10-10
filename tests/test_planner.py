@@ -323,3 +323,32 @@ def test_cheap_topup_waits_for_a_cheaper_slot_without_pv():
 
 def replace_price(p, price):
     return P.PriceSlot(p.start, p.end, price)
+
+
+def _oct10_prices(day0):
+    """Tibber 10.10.2026: night ~18.9-19.4 ct, midday 17.16 ct, evening 31-37 ct."""
+    q = {0: 19.16, 1: 19.0, 2: 19.0, 3: 19.07, 4: 19.3, 5: 18.89, 6: 20.0, 7: 22.4, 8: 23.8, 9: 22.6, 10: 20.1,
+         11: 17.9, 12: 17.2, 13: 17.16, 14: 17.16, 15: 17.16, 16: 18.9}
+    return [P.PriceSlot(day0 + timedelta(minutes=15 * i), day0 + timedelta(minutes=15 * (i + 1)),
+                        (17.16 if (i // 4 == 16 and i % 4 < 2) else q.get(i // 4, 33.0)) / 100) for i in range(96)]
+
+
+def test_cheap_topup_without_battery_feed_takes_the_cheap_midday_with_pv():
+    """Battery set not to discharge into the wallbox: cheap charging looks
+    at all published slots up to the departure, midday PV hours included,
+    and charges PV plus grid there (10.10.: 05:00 at 18.9 ct was dearer
+    than the midday before the 16:30 departure)."""
+    now = datetime(2026, 10, 10, 5, 0, tzinfo=TZ)
+    prices = _oct10_prices(now.replace(hour=0))
+
+    def at(t, pv, battery, car_soc=27.0):
+        inp = _oct10(t, pv_kw=pv, battery_soc=battery, car_soc=car_soc, prices=prices,
+                     price_now=next(p.price for p in prices if p.start <= t < p.end), threshold=0.1904,
+                     cheap_target=80.0)
+        inp.battery_feeds_car = False
+        return P.make_plan(inp)
+
+    assert not at(now, 0.0, 36.0).car_grid                         # night 18.9 ct: midday is cheaper
+    plan = at(now.replace(hour=13), 6.8, 40.0, car_soc=45.0)        # 17.16 ct with 6 kW surplus: PV + grid
+    assert plan.car_grid and plan.car_reason == "netz_billig" and plan.car_kw == 11.04
+    assert not at(now.replace(hour=13), 6.8, 40.0, car_soc=80.0).car_grid   # target reached
