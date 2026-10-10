@@ -128,6 +128,9 @@ class Inputs:
     # the car is grid charging right now (last decision, or drawing near its
     # maximum): a started grid block runs through instead of stop-and-go
     grid_running: bool = False
+    # the car's planned grid block (start, end) from the car plan: devices
+    # don't plan PV in it and don't start shortly before it
+    car_block: tuple[datetime, datetime] | None = None
     # Price knowledge for grid charging: published prices (`prices`), an
     # estimate per hour of day for the not yet published ones (median of the
     # last days), the current price and the "cheap" threshold (percentile of
@@ -163,6 +166,7 @@ class Plan:
     next_departure: Departure | None
     devices: dict[str, DeviceDecision]
     budget: dict
+    car_block: tuple[datetime, datetime] | None = None   # planned grid block (now or later)
 
 
 # ---------------------------------------------------------------- helpers
@@ -351,10 +355,12 @@ def battery_run_ok(inp: Inputs, planned_on: dict[str, bool], d: DeviceInput) -> 
 
 def device_surplus_hours(forecast: list[ForecastHour], now: datetime, end: datetime, base_kw: float, kw: float,
                          battery_soc: float | None, battery_capacity_kwh: float, pv_end: datetime,
-                         other_kw: float = 0.0) -> float:
+                         other_kw: float = 0.0, car_block: tuple[datetime, datetime] | None = None,
+                         car_kw: float = 0.0) -> float:
     """Hours until `end` in which the forecast surplus (x safety, minus the
-    base load, the battery's charge rate to be full by the PV end and the
-    higher-priority devices) covers this device's draw."""
+    base load, the battery's charge rate to be full by the PV end, the
+    higher-priority devices and the car during its planned grid block - it
+    takes the PV there) covers this device's draw."""
     rate = 0.0
     if battery_soc is not None and pv_end.date() == now.date() and pv_end > now:
         missing = max(0.0, (100.0 - battery_soc) / 100.0 * battery_capacity_kwh)
@@ -362,8 +368,17 @@ def device_surplus_hours(forecast: list[ForecastHour], now: datetime, end: datet
     hours = 0.0
     for r in forecast:
         lo, hi = max(r.end - timedelta(hours=1), now), min(r.end, end)
-        if hi > lo and r.kwh * FORECAST_SAFETY - base_kw - rate - other_kw >= kw:
-            hours += (hi - lo).total_seconds() / 3600.0
+        if hi <= lo:
+            continue
+        free = r.kwh * FORECAST_SAFETY - base_kw - rate - other_kw
+        h = _h(lo, hi)
+        ov = 0.0  # minutes of the car's grid block: it takes the PV there
+        if car_block is not None:
+            ov = max(0.0, _h(max(lo, car_block[0]), min(hi, car_block[1])))
+        if free >= kw:
+            hours += h - ov
+        if ov and free - car_kw >= kw:
+            hours += ov
     return hours
 
 
@@ -460,6 +475,10 @@ def _best_block(slots: list[tuple[datetime, float | None]], n: int, prefer_late:
     return None
 
 
+def _span(block: tuple[datetime, int, float] | None) -> tuple[datetime, datetime] | None:
+    return None if block is None else (block[0], block[0] + block[1] * SLOT)
+
+
 def _in_block(inp: Inputs, block: tuple[datetime, int, float] | None) -> bool:
     if block is None:
         return False
@@ -471,7 +490,8 @@ def _in_block(inp: Inputs, block: tuple[datetime, int, float] | None) -> bool:
     return inp.grid_running and price is not None and price <= mean + GRID_BLOCK_TOLERANCE
 
 
-def _grid_slot_now(inp: Inputs, dep: Departure, uncovered_kwh: float, max_kw: float) -> bool:
+def _grid_slot_now(inp: Inputs, dep: Departure, uncovered_kwh: float,
+                   max_kw: float) -> tuple[bool, tuple[datetime, datetime] | None]:
     """Grid fallback for a departure target the PV forecast can't reach:
     charge in the cheapest block of consecutive 15-min slots between now and
     the departure (unpublished prices estimated per hour of day — so a cheap
@@ -487,35 +507,38 @@ def _grid_slot_now(inp: Inputs, dep: Departure, uncovered_kwh: float, max_kw: fl
         t += SLOT
     left_h = (dep.start - inp.now).total_seconds() / 3600.0
     if len(slots) <= need_slots or left_h <= need_slots * 0.25 + GRID_SAFETY_H:
-        return True
+        return True, (now_slot, dep.start)
     if not any(x[1] is not None for x in slots):
-        return False  # no price idea at all: wait for the safety start above
+        return False, None  # no price idea at all: wait for the safety start above
     # one block, equally cheap -> the later one (a sunnier hour may still help)
-    return _in_block(inp, _best_block(slots, need_slots, prefer_late=True))
+    block = _best_block(slots, need_slots, prefer_late=True)
+    return _in_block(inp, block), _span(block)
 
 
-def _cheap_topup_now(inp: Inputs, dep: Departure | None, surplus: float) -> tuple[bool, float]:
+def _cheap_topup_now(inp: Inputs, dep: Departure | None,
+                     surplus: float) -> tuple[bool, float, tuple[datetime, datetime] | None]:
     """Grid top-up while the price is below the cheap threshold — only for
     energy the PV forecast won't bring anyway before the next departure
     (24 h without one), and only in the cheapest published slots until then
     (10.10. live: charged at 05:00 for 18.9 ct, the midday before the
-    departure was 17.2 ct)."""
+    departure was 17.2 ct). The block is planned even while the price is
+    still above the threshold, so the devices know it in advance."""
     car = inp.car
-    if (inp.cheap_target_soc is None or inp.cheap_threshold is None or inp.price_now is None
+    if (inp.cheap_target_soc is None or inp.cheap_threshold is None
             or car is None or car.soc is None or not car.present):
-        return False, 0.0
+        return False, 0.0, None
     target = min(inp.cheap_target_soc, car.limit_soc)
-    if car.soc >= target or inp.price_now > inp.cheap_threshold:
-        return False, 0.0
+    if car.soc >= target:
+        return False, 0.0, None
     if inp.battery_feeds_car:
         # the home battery covers any import first: with energy left it
         # would just empty itself into the car (10.10. live: 05:00, battery
         # 36 -> 12 % in 45 min, then the house bought at 22-24 ct all
         # morning); and with PV for the car there's no top-up at all
         if surplus >= car.min_kw:
-            return False, 0.0
+            return False, 0.0, None
         if inp.battery_soc is not None and inp.battery_soc > inp.battery_min_soc + CHEAP_BATTERY_MARGIN:
-            return False, 0.0
+            return False, 0.0, None
     need = (target - car.soc) / 100.0 * car.capacity_kwh / car.efficiency
     end = dep.start if dep is not None else inp.now + timedelta(hours=24)
     pv, _ = forecast_surplus_kwh(inp.forecast, inp.now, end, inp.base_kw + 0.3, CHEAP_FORECAST_TRUST)
@@ -523,14 +546,17 @@ def _cheap_topup_now(inp: Inputs, dep: Departure | None, surplus: float) -> tupl
     if inp.battery_soc is not None:
         battery_missing = max(0.0, (100.0 - inp.battery_soc) / 100.0 * inp.battery_capacity_kwh)
     from_grid = need - max(0.0, pv - battery_missing)
-    if from_grid <= 0.5 or not _cheapest_free_slot_now(inp, end, from_grid, car.max_kw):
-        return False, max(0.0, from_grid)
-    return True, from_grid
+    if from_grid <= 0.5:
+        return False, 0.0, None
+    in_block, block = _cheapest_free_slot_now(inp, end, from_grid, car.max_kw)
+    now_ok = inp.price_now is not None and inp.price_now <= inp.cheap_threshold
+    return in_block and now_ok, from_grid, block
 
 
-def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float, max_kw: float) -> bool:
+def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float,
+                            max_kw: float) -> tuple[bool, tuple[datetime, datetime] | None]:
     """Is now inside the cheapest block of consecutive PUBLISHED slots until
-    `end` that are free for grid charging? Equal blocks go to the earlier
+    `end` that are free for grid charging (and below the cheap threshold)? Equal blocks go to the earlier
     one - no point waiting for the same price. When the home battery feeds
     the car, slots with PV above the base load don't count (now: measured,
     later: forecast): grid charging there would take the PV the battery
@@ -539,19 +565,20 @@ def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float, max_kw: floa
     now_slot = _floor_slot(inp.now)
     pv_limit = inp.base_kw + 0.3
     if inp.battery_feeds_car and inp.pv_kw > pv_limit:
-        return False
+        return False, None
     slots: list[tuple[datetime, float | None]] = []
     for p in sorted(inp.prices, key=lambda x: x.start):   # hourly prices -> 15-min slots
         t = max(_floor_slot(p.start), now_slot)
         while t < p.end and t < end:
-            price: float | None = p.price
-            if inp.battery_feeds_car and t > now_slot:
+            price: float | None = p.price if p.price <= inp.cheap_threshold else None
+            if price is not None and inp.battery_feeds_car and t > now_slot:
                 pv_kw = forecast_kwh(inp.forecast, t, t + SLOT) / 0.25
                 if pv_kw * CHEAP_FORECAST_TRUST > pv_limit:
                     price = None
             slots.append((t, price))
             t += SLOT
-    return _in_block(inp, _best_block(slots, need_slots, prefer_late=False))
+    block = _best_block(slots, need_slots, prefer_late=False)
+    return _in_block(inp, block), _span(block)
 
 
 # ---------------------------------------------------------------- the plan
@@ -564,14 +591,15 @@ def make_plan(inp: Inputs) -> Plan:
 
     if inp.car_fixed_kw is not None:
         avail = surplus - inp.car_fixed_kw - target_b
-        devices = _devices(inp, avail)
+        devices = _devices(inp, avail, inp.car_block)
         budget = {"pv_kw": inp.pv_kw, "grundlast_kw": inp.base_kw, "akku_ziel_kw": target_b,
                   "auto_kw": inp.car_fixed_kw, "geraete_kw": _used(inp, devices),
                   "frei_kw": avail - _used(inp, devices, surplus_only=True)}
         return Plan(target_b, b_mode, inp.car_fixed_kw, 0.0, False, "fest", False, 0.0, 0.0, dep,
-                    devices, budget)
+                    devices, budget, inp.car_block)
 
     must_kw, need_kwh, uncovered, grid = 0.0, 0.0, 0.0, False
+    block: tuple[datetime, datetime] | None = None
     car_reason = "kein_auto"
     car_ok = car is not None and car.present and (car.soc is None or car.soc < car.limit_soc)
     if car is not None and not car.present:
@@ -586,14 +614,15 @@ def make_plan(inp: Inputs) -> Plan:
             must_kw = min(car.max_kw, need_kwh / max(pv_h, MIN_HOURS_LEFT))
         uncovered = max(0.0, need_kwh - pv_before)
         if uncovered > 0 and inp.allow_grid_for_car and surplus < car.min_kw:
-            grid = _grid_slot_now(inp, dep, uncovered, car.max_kw)
+            grid, block = _grid_slot_now(inp, dep, uncovered, car.max_kw)
 
     devices: dict[str, DeviceDecision] = {}
     budget = {"pv_kw": inp.pv_kw, "grundlast_kw": inp.base_kw, "akku_ziel_kw": target_b}
 
     grid_reason = "netz_pflicht"
     if not grid and car_ok and inp.allow_grid_for_car:
-        cheap, cheap_kwh = _cheap_topup_now(inp, dep, surplus)
+        cheap, cheap_kwh, cheap_block = _cheap_topup_now(inp, dep, surplus)
+        block = block or cheap_block
         if cheap:
             grid, grid_reason = True, "netz_billig"
             uncovered = max(uncovered, cheap_kwh)
@@ -601,10 +630,10 @@ def make_plan(inp: Inputs) -> Plan:
     if grid:
         car_kw = car.max_kw
         avail = surplus - car_kw - target_b
-        devices = _devices(inp, avail)
+        devices = _devices(inp, avail, block)
         budget.update(auto_pflicht_kw=car_kw, geraete_kw=_used(inp, devices), auto_rest_kw=0.0)
         return Plan(target_b, b_mode, car_kw, car_kw, True, grid_reason, False, need_kwh, uncovered,
-                    dep, devices, budget)
+                    dep, devices, budget, block)
 
     car_must = min(must_kw, max(surplus, 0.0)) if car_ok else 0.0
     avail = surplus - car_must - target_b
@@ -619,9 +648,9 @@ def make_plan(inp: Inputs) -> Plan:
     topup = 0.0
     if car_first:
         topup = max(0.0, min(avail, car.max_kw - car_must))
-        devices = _devices(inp, avail - topup)
+        devices = _devices(inp, avail - topup, block)
     else:
-        devices = _devices(inp, avail)
+        devices = _devices(inp, avail, block)
         rest = avail - _used(inp, devices, surplus_only=True)
         if car_ok:
             topup = max(0.0, min(rest, car.max_kw - car_must))
@@ -639,7 +668,7 @@ def make_plan(inp: Inputs) -> Plan:
     budget.update(auto_pflicht_kw=car_must, geraete_kw=_used(inp, devices), auto_rest_kw=topup,
                   frei_kw=surplus - car_must - target_b - _used(inp, devices, surplus_only=True) - topup)
     return Plan(target_b, b_mode, car_kw, car_must, False, car_reason, car_first, need_kwh, uncovered,
-                dep, devices, budget)
+                dep, devices, budget, block)
 
 
 def _lift_to_min(inp: Inputs, dep: Departure, need_kwh: float, surplus: float) -> bool:
@@ -665,8 +694,14 @@ def _used(inp: Inputs, decisions: dict[str, DeviceDecision], surplus_only: bool 
     return total
 
 
-def _devices(inp: Inputs, remaining: float) -> dict[str, DeviceDecision]:
+def _devices(inp: Inputs, remaining: float,
+             car_block: tuple[datetime, datetime] | None = None) -> dict[str, DeviceDecision]:
     out: dict[str, DeviceDecision] = {}
+    car_block = car_block or inp.car_block
+    # a car grid block starting within the minimum run takes the PV: a device
+    # started on PV now would be off again soon (10.10. live: miner and pump
+    # on at 10:43, car started 10:45, both off again by 11:13)
+    block_soon = car_block is not None and 0 <= _hours(inp, car_block[0]) < DEVICE_MIN_RUN_H
     planned: dict[str, bool] = {}
     day = is_daytime(inp)
     exporting = inp.export_kw is not None and inp.export_kw > EXPORT_GATE_KW
@@ -697,7 +732,7 @@ def _devices(inp: Inputs, remaining: float) -> dict[str, DeviceDecision]:
         short = False
         need = d.decision_kw + (-DEVICE_HYSTERESIS_KW if d.is_on else DEVICE_HYSTERESIS_KW)
         if remaining >= need:
-            if starting and pv_hours_left(inp) < DEVICE_MIN_RUN_H:
+            if starting and (pv_hours_left(inp) < DEVICE_MIN_RUN_H or block_soon):
                 short = True
             else:
                 out[d.id] = DeviceDecision(True, "ueberschuss", "ueberschuss")

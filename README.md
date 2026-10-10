@@ -38,6 +38,9 @@ and splits the surplus in this order:
    forecast surplus won't cover it, otherwise only in the last hours so a
    sunny afternoon still wins. A started block runs through (at least 1 h); a device already running with
    at most an hour left just keeps going until its minimum is reached.
+   Devices know the car's planned grid block: they don't start on PV within
+   the hour before it, and the minimum-runtime planning doesn't count PV in
+   the block's hours (the car takes it there).
 4. **Car top-up** — whatever is left, up to the car's charge limit. Between
    two car decisions a device may claim power the top-up is using; the car
    follows at its next decision.

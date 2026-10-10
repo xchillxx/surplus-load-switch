@@ -467,7 +467,8 @@ class PilotCoordinator(DataUpdateCoordinator):
                        and self.store.data["device_enabled"].get(x[CONF_DEV_ID], True))
         surplus_h = P.device_surplus_hours(
             self._forecast, now, end, base_kw, self._decision_kw(dev), soc,
-            float(self.cfg.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)), pv_end, other_kw)
+            float(self.cfg.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)), pv_end, other_kw,
+            self.car_plan.car_block if self.car_plan else None, self.car.max_kw if self.car else 0.0)
         start = P.min_runtime_start(now, need_h, end, self._prices, surplus_h)
         self._forced_plan[did] = {"start": start, "need_h": need_h, "surplus_h": surplus_h}
         if start is not None and start <= now:
@@ -649,6 +650,7 @@ class PilotCoordinator(DataUpdateCoordinator):
                 forecast=self._forecast, prices=self._prices, departures=deps, car=car_in, devices=dev_inputs,
                 allow_grid_for_car=bool(self.car_cfg.get(CONF_CAR_ALLOW_GRID, True)) if self.car_cfg else False,
                 battery_feeds_car=feeds_car,
+                car_block=self.car_plan.car_block if car_fixed is not None and self.car_plan else None,
                 grid_running=bool(self.car and ((self.car.decision is not None and self.car.decision.grid)
                                                  or car_kw >= 0.9 * self.car.max_kw)),
                 car_fixed_kw=car_fixed, price_profile=ps["profile"], price_now=ps["now"],
@@ -886,6 +888,9 @@ class PilotCoordinator(DataUpdateCoordinator):
                             f"(bis {self.store.data['cheap_target']:.0f} %)")
                 elif cp.car_grid:
                     txt += " — lädt aus dem Netz: günstigster Zeitraum bis zur Abfahrt"
+                if cp.car_block and not cp.car_grid and cp.car_block[1] > dt_util.now():
+                    a, b = (dt_util.as_local(x).strftime("%H:%M") for x in cp.car_block)
+                    txt += f" — Netz-Block geplant {a}–{b} (Geräte richten sich danach)"
                 lines.append(txt)
         if d.get("akku_soc") is not None:
             mode = {"abfahrt": "Abfahrt eingerechnet: nach der Abfahrt lädt PV den Akku allein",

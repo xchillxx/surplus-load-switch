@@ -398,3 +398,31 @@ def test_grid_charging_is_one_block_not_scattered_quarter_hours():
     # the two cheapest single slots (0.1) are apart: the block 0.1+0.12+0.12 wins
     blk = P._best_block([(now + i * P.SLOT, p) for i, p in enumerate([0.1, 0.4, 0.1, 0.12, 0.12, 0.12])], 3, False)
     assert blk[0] == now + 2 * P.SLOT and blk[1] == 3
+
+
+def test_devices_know_the_car_grid_block():
+    """10.10. live: miner and pump on at 10:43 on PV, the car started at
+    10:45 and took the PV - both off again by 11:13. With the car's cheap
+    block planned for 11:45 (price still above the threshold at 11:00), a
+    device doesn't start on PV within the hour before it, and its forecast
+    PV hours don't count the block."""
+    now = datetime(2026, 10, 10, 11, 0, tzinfo=TZ)
+    day0 = now.replace(hour=0)
+    prices = [P.PriceSlot(day0 + timedelta(minutes=15 * i), day0 + timedelta(minutes=15 * (i + 1)),
+                          0.1716 if 47 <= i < 66 else 0.20) for i in range(96)]   # 11:45-16:30 cheap
+    inp = _oct10(now, pv_kw=8.0, battery_soc=40.0, car_soc=55.0, prices=prices, price_now=0.20,
+                 threshold=0.189, cheap_target=80.0)
+    inp.battery_feeds_car = False
+    inp.devices = [miner()]
+    plan = P.make_plan(inp)
+    assert not plan.car_grid and plan.car_block[0] == now.replace(minute=45)
+    assert not plan.devices["miner"].on and plan.devices["miner"].reason == "zu_kurz"
+    inp.car_block = None   # without a block the miner would start
+    inp.cheap_target_soc = None
+    assert P.make_plan(inp).devices["miner"].on
+    # forecast PV hours for a 1.3 kW pump: the block (car 11 kW) takes them
+    fc = inp.forecast
+    free = P.device_surplus_hours(fc, now, now.replace(hour=17), 0.8, 1.3, 100.0, 13.8, now.replace(hour=17))
+    blocked = P.device_surplus_hours(fc, now, now.replace(hour=17), 0.8, 1.3, 100.0, 13.8, now.replace(hour=17),
+                                     car_block=(now.replace(minute=45), now.replace(hour=13, minute=45)), car_kw=11.04)
+    assert abs((free - blocked) - 2.0) < 0.01
