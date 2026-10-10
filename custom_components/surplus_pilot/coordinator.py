@@ -905,7 +905,8 @@ class PilotCoordinator(DataUpdateCoordinator):
                     txt += " — lädt aus dem Netz: günstigster Zeitraum bis zur Abfahrt"
                 if not cp.car_grid and getattr(self, "_cheap_pv_waits", False):
                     txt += (f" — Strom billig, aber mit PV erst ab Hausakku "
-                            f"{float(self.store.data['cheap_pv_battery_soc']):.0f} %"
+                            f"{float(self.store.data['cheap_pv_battery_soc']):.0f} % "
+                            f"oder wenn die Prognose ihn danach trotzdem füllt"
                             + (" (heute schon einmal abgebrochen)"
                                if self.store.data.get("cheap_pv_lock") == dt_util.now().date().isoformat() else ""))
                 if cp.car_block and not cp.car_grid and cp.car_block[1] > dt_util.now():

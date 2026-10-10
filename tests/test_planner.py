@@ -440,7 +440,7 @@ def test_cheap_topup_with_pv_needs_a_full_enough_home_battery():
     def inp_at(t, pv, battery, running=False, locked=False):
         inp = _oct10(t, pv_kw=pv, battery_soc=battery, car_soc=53.0, prices=prices,
                      price_now=next(p.price for p in prices if p.start <= t < p.end), threshold=0.1904,
-                     cheap_target=80.0)
+                     cheap_target=80.0, scale=0.5)   # dull afternoon: the forecast won't fill the battery
         inp.battery_feeds_car = False
         inp.cheap_pv_battery_soc = 50.0
         inp.grid_running, inp.cheap_pv_locked = running, locked
@@ -460,3 +460,32 @@ def test_cheap_topup_with_pv_needs_a_full_enough_home_battery():
     free = inp_at(now, 4.5, 34.0)
     free.cheap_pv_battery_soc = None
     assert P.make_plan(free).car_grid
+
+
+def test_cheap_topup_with_pv_below_the_battery_value_when_the_forecast_fills_it_anyway():
+    """User 10.10.: 'the battery gets nearly full by the forecast anyway'. Below
+    50 % cheap charging with PV is fine when the forecast x0.7 after the car's
+    block until the PV end fills the battery and carries the house meanwhile.
+    10.10. 13:03 (34 %, Forecast.Solar 18 kWh after the block, house ~2.2 kW)
+    that's not enough; on a sunny day it is."""
+    now = datetime(2026, 10, 10, 13, 0, tzinfo=TZ)
+    prices = [P.PriceSlot(now.replace(hour=0) + timedelta(minutes=15 * i),
+                          now.replace(hour=0) + timedelta(minutes=15 * (i + 1)), 0.1716) for i in range(96)]
+
+    def plan(scale, battery=34.0):
+        inp = _oct10(now, pv_kw=4.5, battery_soc=battery, car_soc=53.0, prices=prices, price_now=0.1716,
+                     threshold=0.1904, cheap_target=80.0, scale=scale)
+        inp.base_kw = 0.9
+        inp.devices = [P.DeviceInput(id="pump", name="Pumpe", priority=3, decision_kw=1.34, is_on=True)]
+        inp.battery_feeds_car = False
+        inp.cheap_pv_battery_soc = 50.0
+        inp.pv_end = now.replace(hour=17, minute=46)
+        return inp, P.make_plan(inp)
+
+    inp, p = plan(1.0)                      # 10.10.: ~9 kWh x0.7 after the block, ~19 kWh needed
+    assert not P.battery_fills_anyway(inp) and not p.car_grid
+    inp, p = plan(3.0)                      # sunny afternoon: PV slots open (the PV then brings the car anyway)
+    assert P.battery_fills_anyway(inp) and P.cheap_pv_battery_ok(inp)
+    inp, p = plan(3.0, battery=20.0)        # running block below 45 %: no stop while the forecast covers it
+    inp.grid_running = True
+    assert not P.cheap_pv_battery_stop(inp)

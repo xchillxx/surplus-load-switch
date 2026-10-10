@@ -561,23 +561,43 @@ def _cheap_topup_now(inp: Inputs, dep: Departure | None,
 
 
 def cheap_pv_battery_ok(inp: Inputs) -> bool:
-    """May cheap grid charging use slots with PV? Only with the home battery at
-    least `cheap_pv_battery_soc` full - a running block goes on down to
-    CHEAP_PV_SOC_HYSTERESIS below it, and once stopped for that it stays off
-    in PV for the day (no stop-and-go while PV refills the battery)."""
+    """May cheap grid charging use slots with PV? With the home battery at
+    least `cheap_pv_battery_soc` full, or below that if the cautious forecast
+    still fills it by the PV end anyway (`battery_fills_anyway`). A running
+    block goes on down to CHEAP_PV_SOC_HYSTERESIS below the value; once
+    stopped for the battery it stays off in PV for the day (no stop-and-go
+    while PV refills the battery)."""
     if inp.cheap_pv_battery_soc is None or inp.battery_soc is None:
         return True
     if inp.cheap_pv_locked:
         return False
     floor = inp.cheap_pv_battery_soc - (CHEAP_PV_SOC_HYSTERESIS if inp.grid_running else 0.0)
-    return inp.battery_soc >= floor
+    return inp.battery_soc >= floor or battery_fills_anyway(inp)
 
 
 def cheap_pv_battery_stop(inp: Inputs) -> bool:
     """A running cheap block with PV must stop for the battery (-> lock for today)."""
     return (inp.grid_running and inp.cheap_pv_battery_soc is not None and inp.battery_soc is not None
             and not inp.battery_feeds_car and inp.pv_kw > inp.base_kw + 0.3
-            and inp.battery_soc < inp.cheap_pv_battery_soc - CHEAP_PV_SOC_HYSTERESIS)
+            and inp.battery_soc < inp.cheap_pv_battery_soc - CHEAP_PV_SOC_HYSTERESIS
+            and not battery_fills_anyway(inp))
+
+
+def battery_fills_anyway(inp: Inputs) -> bool:
+    """Below the battery value cheap charging with PV is still fine when the
+    forecast (x0.7) after the car's block until the PV end fills the battery
+    and carries the house the whole time (during the block the inverter gives
+    the PV to the car and the battery carries the house)."""
+    car = inp.car
+    if (inp.battery_soc is None or car is None or car.soc is None or inp.cheap_target_soc is None
+            or inp.pv_end.date() != inp.now.date() or inp.pv_end <= inp.now):
+        return False
+    car_kwh = max(0.0, min(inp.cheap_target_soc, car.limit_soc) - car.soc) / 100.0 * car.capacity_kwh / car.efficiency
+    block_end = inp.now + timedelta(hours=car_kwh / max(car.max_kw, 0.1))
+    pv = forecast_kwh(inp.forecast, block_end, inp.pv_end) * FORECAST_SAFETY
+    house_kw = inp.base_kw + sum(d.decision_kw for d in inp.devices if d.is_on)
+    need = (100.0 - inp.battery_soc) / 100.0 * inp.battery_capacity_kwh + house_kw * _h(inp.now, inp.pv_end)
+    return pv >= need
 
 
 def _cheapest_free_slot_now(inp: Inputs, end: datetime, kwh: float,

@@ -72,7 +72,9 @@ it needs. With the option off (battery set not to discharge into the
 wallbox in the inverter app) every slot up to the departure counts, midday
 included, and the car charges PV plus grid there — slots with PV only while
 the home battery is at least *Cheap charging with PV from home battery* full
-(default 50 %, 0 = no limit). Many inverters (e.g. Huawei) give the PV to the
+(default 50 %, 0 = no limit) — or below it when the forecast (×0.7) after the
+car's block until the PV end still fills the battery and carries the house
+(measured base load + running devices) meanwhile. Many inverters (e.g. Huawei) give the PV to the
 wallbox first and let the battery carry the house, so a midday block still
 drains it; a running block goes on down to 5 % below that value, then stops
 and stays off in PV hours for the rest of the day. With a *home battery
